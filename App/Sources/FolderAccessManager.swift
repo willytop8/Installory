@@ -97,6 +97,9 @@ final class FolderAccessManager {
 
     var hasAnyGrant: Bool { !storedBookmarks.isEmpty }
 
+    /// All currently-granted directory paths.
+    var grantedPaths: [String] { Array(storedBookmarks.keys) }
+
     /// Returns a stored path that is equal to or a parent/child of `prefix`,
     /// or nil if no such grant exists.
     func grantedPath(forPrefix prefix: String) -> String? {

@@ -1,5 +1,162 @@
 > **Renamed Cruft → Backshelf on 2026-05-15.** The SPM package directory, library target, and all source/doc references have been updated. The git root directory rename is handled separately by William.
 
+---
+
+# Phase 5b Bug Fix: Sidebar Selection Not Filtering (2026-05-15)
+
+## What Was Wrong
+
+Clicking "Homebrew", "pip", "npm", or "All packages" in the sidebar produced no visible change in the package list.
+
+**Root cause — Hypothesis A (confirmed):** `SidebarView.directoryAccessSection` renders rows with no `.tag()` modifier and no `.selectionDisabled()` modifier. In macOS SwiftUI, a `List(selection:)` that mixes tagged (selectable) and untagged rows has undefined selection behavior — the untagged rows corrupt the hit-test model for the entire list, preventing tagged rows from updating the binding when clicked.
+
+**Hypothesis B (false):** `AppCoordinator.filteredPackages` was already correctly filtering on `sidebarSelection` at lines 47–54. No logic was missing.
+
+## What Was Fixed
+
+1. **`SidebarView.directoryAccessSection`** — added `.selectionDisabled()` to the "No directories granted" text and to each `VStack` row in the `ForEach(granted)` loop.
+
+2. **`SidebarSelection` moved to `BackshelfCore`** — the enum and its `userDefaultsKey`/`init?(userDefaultsKey:)` codec are now in `Backshelf/Sources/BackshelfCore/Models/SidebarSelection.swift` (public). This puts the type alongside `Package` and `PackageManager` where it belongs, and makes it testable via `swift test`.
+
+3. **`[Package].filtered(by:query:)` added to `BackshelfCore`** — the selection filter + search query logic is now a public extension on `[Package]` in the same file as `SidebarSelection`. `AppCoordinator.filteredPackages` delegates to it: `packages.filtered(by: sidebarSelection, query: searchQuery).sorted(by: sortOrder)`.
+
+4. **`App/Sources/Models/SidebarSelection.swift`** — cleared (stub comment only; the type now comes from `BackshelfCore`).
+
+## Tests Added
+
+`Backshelf/Tests/BackshelfCoreTests/PackageFilterTests.swift` — 8 tests covering all four sidebar selection cases against a synthetic `[Package]` array: `.all`, `.manager(.brew)`, `.manager(.pip)`, `.readOnly`, nil, query narrowing within a manager filter, case-insensitive query, and empty query. All 256 tests pass, zero warnings.
+
+---
+
+# Phase 5b Handoff
+
+## What Was Built
+
+Phase 5b replaces the placeholder `ContentView` with a full three-pane inventory UI built on `NavigationSplitView`. `swift build` and `swift test` still pass (248 tests, zero warnings, library unchanged). The app shell is App-layer only — no changes to `Sources/BackshelfCore/`.
+
+```
+App/Sources/
+├── AppCoordinator.swift        CHANGED: per-dir grant model, UI state, autoScan, refresh, filteredPackages
+├── BackshelfApp.swift          CHANGED: removed .windowResizability(.contentSize)
+├── ContentView.swift           CHANGED: thin typealias shim → RootView
+├── FolderAccessManager.swift   CHANGED: added grantedPaths: [String]
+├── Extensions/
+│   └── PackageManager+Display.swift   NEW: displayName, badgeLabel, badgeColor, sidebarSymbol
+├── Models/
+│   ├── CanonicalDirectory.swift   NEW: recommended dirs with manager list + arch detection
+│   ├── GrantedDirectory.swift     NEW: bookmarked dir with display helpers
+│   ├── SidebarSelection.swift     NEW: enum .all / .manager(m) / .readOnly + UserDefaults codec
+│   └── SortOrder.swift            NEW: PackageSortOrder enum + [Package].sorted(by:) extension
+└── Views/
+    ├── DirectoryGrantsView.swift  NEW: menu content for ugranted canonical dirs
+    ├── ManagerBadge.swift         NEW: colored capsule badge for each PackageManager
+    ├── PackageDetailView.swift    NEW: header + LabeledContent fields + raw JSON disclosure
+    ├── PackageListView.swift      NEW: search + sort + lazy list + empty states
+    ├── RootView.swift             NEW: NavigationSplitView shell + toolbar refresh button
+    └── SidebarView.swift          NEW: manager filters + directory list + grant buttons
+```
+
+---
+
+## Phase 5b Decisions
+
+### 1. `project.yml` was not modified
+
+`App/Sources` is a recursive source path in XcodeGen — adding explicit subdirectory paths would cause duplicate file errors. No YAML change is needed; XcodeGen already picks up all files under `App/Sources/**/*.swift`.
+
+### 2. Per-directory grant model: `GrantedDirectory` + `CanonicalDirectory`
+
+`FolderAccessManager` was already per-directory (bookmarks keyed by path). The Phase 5b refactor adds:
+- `GrantedDirectory` — wraps a path+bookmark and computes `managersUnlocked` label from path pattern
+- `CanonicalDirectory` — recommended dirs with manager lists; filtered to show only Apple Silicon or Intel brew root via compile-time `#if arch(arm64)` check
+- `AppCoordinator.grantedDirectories: [GrantedDirectory]` and `ungrantedCanonicalDirectories: [CanonicalDirectory]` as computed properties
+
+### 3. Sidebar selection via `SidebarSelection?` and `List(selection:)`
+
+`AppCoordinator.sidebarSelection: SidebarSelection?` (optional). `nil` and `.all` both mean "no filter" in `filteredPackages`. `List(selection: $coordinator.sidebarSelection)` tags each row with `.tag(SidebarSelection.all as SidebarSelection?)`. Default is `.some(.all)` so the "All packages" row starts selected.
+
+### 4. `selectedPackage` binding in `PackageListView`
+
+`List` selection is bound to `coordinator.selectedPackage?.id` (a `String?` mapping through `Package.id`). On set, the view looks up the package in `coordinator.packages` by ID. This avoids needing a separate `selectedPackageID` stored property on the coordinator.
+
+### 5. `autoScanIfNeeded` fires from `.task` on `RootView`
+
+On every fresh window appearance, `.task { await coordinator.autoScanIfNeeded() }` runs. The method no-ops if no directories are granted. This is idiomatic SwiftUI and avoids init-side-effect issues with `@Observable`.
+
+### 6. UI preferences persisted via explicit `persistUIPreferences()` calls
+
+`sortOrder` and `sidebarSelection` are persisted when they change (via `.onChange` in `PackageListView`) and also when a scan completes. Keys are prefixed `backshelf.ui.` to avoid collision with the bookmark keys (which use `app.backshelf.bookmarks`). Search query is intentionally not persisted.
+
+### 7. Manager badge colors
+
+- brew/brewCask: amber `(0.85, 0.55, 0.05)`
+- pip/pipx: blue `(0.20, 0.45, 0.90)`
+- npm: red `(0.85, 0.15, 0.15)`
+- cargo/gem/mas: distinct earth, magenta, purple
+
+### 8. `scanResults` renamed to `packages`
+
+`AppCoordinator.scanResults` is now `packages`. The old `ContentView.swift` (which read `scanResults`) is replaced by the `typealias ContentView = RootView` shim.
+
+### 9. `.windowResizability(.contentSize)` removed from `BackshelfApp`
+
+The fixed constraint fought `NavigationSplitView`'s own column sizing. Removed; `RootView` enforces a `.frame(minWidth: 900, minHeight: 580)` minimum instead.
+
+---
+
+## Phase 5b Known Limitations
+
+1. **No database persistence yet.** Scan results are in-memory only. App restart clears the list. Phase 5c adds `scan → persist packages → read on startup`.
+
+2. **No inline scan-status per manager in sidebar.** The `scanStatuses` dictionary exists but isn't shown. The `ui.md` spec calls for per-manager error rows ("Can't see your Homebrew folder…"); deferred to Phase 5c.
+
+3. **Auto-scan after grant not wired.** After granting a new directory, the user must manually press Cmd+R or click Refresh to pick up packages from it. A future pass could auto-trigger a scan after a successful grant.
+
+4. **Stale-bookmark UI still missing.** `FolderAccessManager.staleBookmarkPaths` is not surfaced anywhere in the new views. Phase 5c should add a "Re-grant" prompt in the sidebar directory list.
+
+5. **`installedAt` nil packages sort to bottom** in `recentlyInstalled` order (`.distantPast`). This is correct and intentional.
+
+6. **`ManagerBadge` in `PackageDetailView`** imports both `AppKit` (for `NSWorkspace`) and `BackshelfCore`. This is intentional for a macOS-only target.
+
+---
+
+## William's Manual Checklist (run after this phase)
+
+1. `./scripts/regenerate-xcode.sh` from repo root
+2. `open Backshelf.xcodeproj`
+3. Set Development Team under Signing & Capabilities if prompted
+4. ⌘R — app launches
+5. If directories were already granted in 5a's UserDefaults: auto-scan fires and the package list populates within ~2 s
+6. If no directories granted: "No Access Granted" empty state appears; grant `/opt/homebrew` (or `/usr/local` on Intel) → Cmd+R to scan
+7. Sidebar → click "Homebrew (N)" → list filters to brew + cask packages only
+8. Click "All packages (N)" → list returns to full set
+9. Type in the search field → list filters live
+10. Open the Sort menu → switch to "Name (A–Z)" → list re-sorts
+11. Click any package row → detail pane shows name, version, badge, install path, dependencies
+12. Click "Reveal in Finder" → Finder opens to the install path
+13. Click "Show raw record" disclosure → pretty-printed JSON appears, is text-selectable
+14. ⌘R → scan re-runs; Refresh button shows spinner while running
+15. "Grant Recommended ▾" menu in sidebar bottom bar → lists ugranted canonical dirs
+16. "Custom…" button → NSOpenPanel opens to pick any directory
+
+---
+
+## Questions for Phase 5c
+
+1. **Database persistence.** After each scan, write packages to the GRDB `Database`. On startup, load the last scan result from DB so the list is populated instantly without re-scanning. The `AppCoordinator.database` is already initialized and waiting.
+
+2. **Onboarding flow.** First-launch flow: brief explanation + NSOpenPanel grant for each manager dir. Replaces the "No Access Granted" ContentUnavailableView with a proper sheet or window.
+
+3. **Snapshot UI.** The sidebar needs a "Snapshots" section (visible in `ui.md`). Phase 5c adds the snapshot list view and the "Generate cleanup script" wizard.
+
+4. **Stale-bookmark inline UI.** `FolderAccessManager.staleBookmarkPaths` should surface a "Re-grant" row in the sidebar's Directory Access section.
+
+5. **Per-manager scan-status in sidebar.** After a scan, show per-manager rows with counts and any failure/skip reasons inline in the sidebar.
+
+6. **Scan persistence for ScanRun records.** `AppCoordinator.scan()` should write a `ScanRun` record to the database on completion, using the `.allFinished` event payload.
+
+---
+
 # Phase 5a Handoff
 
 ## What Was Built
