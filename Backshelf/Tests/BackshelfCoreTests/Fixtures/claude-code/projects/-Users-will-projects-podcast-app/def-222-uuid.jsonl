@@ -1,0 +1,2 @@
+{"sessionId":"def-222-uuid","timestamp":"2025-08-15T10:00:00.000Z","cwd":"/Users/will/projects/podcast-app","message":{"role":"user","content":[{"type":"text","text":"add ffmpeg audio processing support"}]}}
+{"sessionId":"def-222-uuid","timestamp":"2025-08-15T10:01:00.000Z","cwd":"/Users/will/projects/podcast-app","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool4","name":"Bash","input":{"command":"brew install ffmpeg","description":"Install ffmpeg"}}]}}

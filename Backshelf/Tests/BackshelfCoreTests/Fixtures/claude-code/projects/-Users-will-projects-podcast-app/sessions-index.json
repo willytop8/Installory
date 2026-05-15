@@ -1,0 +1,14 @@
+{
+  "sessions": [
+    {
+      "id": "abc-111-uuid",
+      "summary": "Built a podcast transcription script using Whisper",
+      "createdAt": "2025-08-14T15:18:00.000Z"
+    },
+    {
+      "id": "def-222-uuid",
+      "summary": "Added ffmpeg support for audio processing",
+      "createdAt": "2025-08-15T09:55:00.000Z"
+    }
+  ]
+}

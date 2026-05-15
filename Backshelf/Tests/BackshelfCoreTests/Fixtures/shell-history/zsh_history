@@ -1,0 +1,10 @@
+: 1715000000:0;brew install ffmpeg
+: 1715000001:0;cd ~/projects
+ls -la
+: 1715000002:0;pip3 install requests
+vim ~/.zshrc
+: 1715000003:0;npm install -g typescript
+: invalid:0;brew install wget
+: 1715000004:0;cargo install ripgrep
+gem install bundler
+: 1715000005:0;git commit -m "add feature"

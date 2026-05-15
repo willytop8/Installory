@@ -1,6 +1,6 @@
 # Provenance
 
-How Cruft figures out *when* a package was installed and *what the user was doing* at the time. This is the differentiating feature — and it's the most engineered part of the system.
+How Backshelf figures out *when* a package was installed and *what the user was doing* at the time. This is the differentiating feature — and it's the most engineered part of the system.
 
 ## The three signals
 
@@ -83,7 +83,7 @@ Edge cases:
 
 ### Privacy and consent
 
-Shell history is sensitive. On first launch, Cruft asks for permission to read history files. The Settings pane shows which files are being read and offers a per-file toggle. We never transmit shell history off the device.
+Shell history is sensitive. On first launch, Backshelf asks for permission to read history files. The Settings pane shows which files are being read and offers a per-file toggle. We never transmit shell history off the device.
 
 ## Signal C: Claude Code logs
 
@@ -162,7 +162,7 @@ When both shell-history and Claude-Code matches exist for the same package, pref
 
 ### Privacy
 
-`~/.claude` contains sensitive prompt history. Same consent flow as shell history — the user grants Cruft read access to `~/.claude` via NSOpenPanel and can revoke it any time in Settings → Permissions. The Settings pane shows the project directories we've read from and lets the user exclude any of them. We never transmit Claude Code logs off the device. In fact the app makes no network calls at all — narratives are rendered locally from structured evidence using Swift string templates, so even the derived evidence never leaves the device.
+`~/.claude` contains sensitive prompt history. Same consent flow as shell history — the user grants Backshelf read access to `~/.claude` via NSOpenPanel and can revoke it any time in Settings → Permissions. The Settings pane shows the project directories we've read from and lets the user exclude any of them. We never transmit Claude Code logs off the device. In fact the app makes no network calls at all — narratives are rendered locally from structured evidence using Swift string templates, so even the derived evidence never leaves the device.
 
 ## Composition into `ProvenanceEvidence`
 
@@ -212,7 +212,7 @@ The phrasing is intentionally plainer than what an LLM would produce. That trade
 
 ### What we lose, and why we're fine with it
 
-An LLM narrative would sometimes synthesize across signals in ways a template can't ("they're typically used together for audio processing"). We chose to give that up in exchange for the simplicity of zero network calls and full sandbox compatibility. If we ever ship the future non-sandboxed direct-download version (see `ROADMAP.md`), we may revisit. For App Store Cruft, templates are the entire pipeline.
+An LLM narrative would sometimes synthesize across signals in ways a template can't ("they're typically used together for audio processing"). We chose to give that up in exchange for the simplicity of zero network calls and full sandbox compatibility. If we ever ship the future non-sandboxed direct-download version (see `ROADMAP.md`), we may revisit. For App Store Backshelf, templates are the entire pipeline.
 
 ## Confidence calibration
 

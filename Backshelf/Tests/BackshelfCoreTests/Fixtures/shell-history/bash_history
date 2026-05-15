@@ -1,0 +1,9 @@
+brew install jq
+ls -la
+#1715000100
+npm install -g prettier
+#1715000101
+pip install flask
+cd ~/Documents
+gem install bundler
+#1715000102

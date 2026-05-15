@@ -1,0 +1,2 @@
+{"sessionId":"ghi-333-uuid","timestamp":"2025-09-01T09:00:00.000Z","cwd":"/Users/will/projects/my-app","message":{"role":"user","content":[{"type":"text","text":"set up typescript development"}]}}
+{"sessionId":"ghi-333-uuid","timestamp":"2025-09-01T09:01:00.000Z","cwd":"/Users/will/projects/my-app","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool5","name":"Bash","input":{"command":"npm install -g typescript","description":"Install TypeScript globally"}}]}}

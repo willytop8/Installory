@@ -98,7 +98,7 @@ struct ProvenanceEvidence: Codable {
 }
 
 struct InstallCommandRecord: Codable {
-    let timestamp: Date
+    let timestamp: Date?        // nil when shell does not record timestamps
     let command: String         // raw, e.g. "pip install openai-whisper"
     let shell: Shell            // .zsh | .bash | .fish
     let cwd: String?            // if recoverable
@@ -134,7 +134,7 @@ Descriptions are loaded read-only from the bundled SQLite corpus. There is no wr
 
 ### `Snapshot`
 
-> A snapshot is an **export manifest** (Brewfile-style): a record of every package installed at a moment in time. Cruft never restores a snapshot itself. Restoration is the user running the reinstall script Cruft generates from the snapshot.
+> A snapshot is an **export manifest** (Brewfile-style): a record of every package installed at a moment in time. Backshelf never restores a snapshot itself. Restoration is the user running the reinstall script Backshelf generates from the snapshot.
 
 ```swift
 struct Snapshot: Codable, Identifiable {

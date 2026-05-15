@@ -1,0 +1,5 @@
+{"sessionId":"abc-111-uuid","timestamp":"2025-08-14T15:20:00.000Z","cwd":"/Users/will/projects/podcast-app","message":{"role":"user","content":[{"type":"text","text":"help me build a podcast transcription script"}]}}
+THIS IS NOT VALID JSON — malformed line, should be skipped silently
+{"sessionId":"abc-111-uuid","timestamp":"2025-08-14T15:21:00.000Z","cwd":"/Users/will/projects/podcast-app","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool1","name":"Read","input":{"file_path":"requirements.txt"}}]}}
+{"sessionId":"abc-111-uuid","timestamp":"2025-08-14T15:22:00.000Z","cwd":"/Users/will/projects/podcast-app","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool2","name":"Bash","input":{"command":"ls -la","description":"List files"}}]}}
+{"sessionId":"abc-111-uuid","timestamp":"2025-08-14T15:23:00.000Z","cwd":"/Users/will/projects/podcast-app","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool3","name":"Bash","input":{"command":"pip install openai-whisper","description":"Install Whisper"}}]}}

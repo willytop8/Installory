@@ -32,19 +32,19 @@ Secondary: **the power user**. Engineers who want a faster way to audit their ow
 
 ## What we are
 
-Cruft is a **trustworthy guide to what's actually on your Mac and what's safe to remove.**
+Backshelf is a **trustworthy guide to what's actually on your Mac and what's safe to remove.**
 
 Three things in priority order:
 
 1. **A unified, comprehensible inventory.** Every package, every manager, in one searchable view, with plain-English descriptions of what each thing does.
 2. **Provenance.** When you installed it, what you were doing, what other related things you installed at the same time. Best evidence we have, with honest confidence labels.
-3. **Cleanup scripts.** When you decide to remove something, Cruft generates a shell script with the exact commands — annotated, ordered, and safe to read — that you run yourself in Terminal. Cruft never touches your packages directly. This is the safer design: you see every command before it executes, in the tool you already trust for irreversible work.
+3. **Cleanup scripts.** When you decide to remove something, Backshelf generates a shell script with the exact commands — annotated, ordered, and safe to read — that you run yourself in Terminal. Backshelf never touches your packages directly. This is the safer design: you see every command before it executes, in the tool you already trust for irreversible work.
 
 ## What we are not
 
-Cruft is **not**:
+Backshelf is **not**:
 
-- A package manager itself — we don't install, upgrade, **or uninstall**. Cleanup is generated as a script you run yourself; Cruft never modifies your packages directly.
+- A package manager itself — we don't install, upgrade, **or uninstall**. Cleanup is generated as a script you run yourself; Backshelf never modifies your packages directly.
 - A development environment manager. We don't create venvs, manage Node versions, or set up new machines. (Adjacent tools do this.)
 - A security scanner. We may surface advisories eventually, but vulnerability detection is not the wedge.
 - A monitoring tool. No background daemons, no constant scanning, no telemetry by default.
@@ -52,10 +52,10 @@ Cruft is **not**:
 
 ## Differentiators
 
-What makes Cruft different from the dozen existing package-management tools:
+What makes Backshelf different from the dozen existing package-management tools:
 
 1. **Plain-language descriptions of every package.** Sourced from upstream registry metadata (formulae.brew.sh, PyPI, npm, crates.io) and bundled into the app — free of jargon, available offline, no API calls. Every user should be able to read any row in the list and understand what that package is.
-2. **Provenance via Claude Code logs.** For the subset of users who code with Claude Code, we can reconstruct exactly when and why a package was installed by reading `~/.claude/projects/<...>.jsonl`. This is unique to Cruft and only became feasible in the last year.
+2. **Provenance via Claude Code logs.** For the subset of users who code with Claude Code, we can reconstruct exactly when and why a package was installed by reading `~/.claude/projects/<...>.jsonl`. This is unique to Backshelf and only became feasible in the last year.
 3. **Trust framing.** The UI surfaces what we know, what we're guessing at, and what we don't know — separately. We never present a guess as fact. This is the opposite of every "AI-powered" cleanup app, and it's the product.
 4. **Native, sandboxed, App Store distributed.** A sandboxed Mac App Store presence is a stronger trust signal than any side-loaded utility — Apple has reviewed it, the app cannot escape its sandbox, and the user has explicit control over which folders it can read.
 
@@ -75,7 +75,7 @@ Reject these even when they're tempting:
 These shape every UI and every code path:
 
 - **Honest about uncertainty.** Confidence labels are shown, not hidden.
-- **Reversible by default.** We never run destructive commands ourselves — you do, in your Terminal, with full visibility. Before any cleanup script is generated, Cruft captures a snapshot you can export as a reinstall script later.
+- **Reversible by default.** We never run destructive commands ourselves — you do, in your Terminal, with full visibility. Before any cleanup script is generated, Backshelf captures a snapshot you can export as a reinstall script later.
 - **Transparent.** Every command we suggest is right there in the generated script, fully readable. Nothing happens behind a button you can't audit.
 - **Local-first.** Zero network calls at runtime. All package metadata is bundled; all evidence comes from your machine.
 - **Slow is fine. Wrong is not.** Better to take an extra second and surface real evidence than to be fast and confidently incorrect.

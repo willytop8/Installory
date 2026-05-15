@@ -2,7 +2,7 @@
 
 The operational doc. Read when setting up a new dev machine, when shipping a release, or when something in the build pipeline goes wrong.
 
-Cruft is a **Mac App Store app**. Distribution is via App Store Connect. Signing is automatic via Xcode's App Store distribution flow. Updates are delivered by the App Store. There is no notarization step, no Sparkle, and no appcast — the App Store handles all of that.
+Backshelf is a **Mac App Store app**. Distribution is via App Store Connect. Signing is automatic via Xcode's App Store distribution flow. Updates are delivered by the App Store. There is no notarization step, no Sparkle, and no appcast — the App Store handles all of that.
 
 ## Dev machine setup
 
@@ -20,8 +20,8 @@ Optional:
 ## Xcode project layout
 
 ```
-Cruft.xcodeproj
-Cruft/                         # main app target
+Backshelf.xcodeproj
+Backshelf/                         # main app target
 ├── App/
 ├── Models/
 ├── Persistence/
@@ -33,9 +33,9 @@ Cruft/                         # main app target
 └── Resources/
     ├── descriptions.db        # bundled corpus, read-only
     └── Assets.xcassets
-Cruft.entitlements             # sandbox + file-access entitlements
-CruftTests/                    # unit tests
-CruftIntegrationTests/         # integration tests, opt-in
+Backshelf.entitlements             # sandbox + file-access entitlements
+BackshelfTests/                    # unit tests
+BackshelfIntegrationTests/         # integration tests, opt-in
 scripts/
 ├── generate-descriptions/     # the corpus generator (separate Swift package)
 └── release.sh
@@ -59,22 +59,22 @@ No others without updating `ARCHITECTURE.md`.
 
 Three ways:
 
-1. **Xcode**: open `Cruft.xcodeproj`, ⌘R. Use the `Debug` scheme for development.
+1. **Xcode**: open `Backshelf.xcodeproj`, ⌘R. Use the `Debug` scheme for development.
 2. **CLI**:
    ```bash
-   xcodebuild -scheme Cruft -configuration Debug build
+   xcodebuild -scheme Backshelf -configuration Debug build
    ```
 3. **SPM (for the corpus generator)**:
    ```bash
    cd scripts/generate-descriptions
-   swift run cruft-descriptions --output ../../Cruft/Resources/descriptions.db
+   swift run backshelf-descriptions --output ../../Backshelf/Resources/descriptions.db
    ```
 
 ## Sandboxing and entitlements
 
-Cruft is sandboxed. See `docs/sandboxing.md` for the full model; this section covers the entitlement file specifically.
+Backshelf is sandboxed. See `docs/sandboxing.md` for the full model; this section covers the entitlement file specifically.
 
-`Cruft.entitlements`:
+`Backshelf.entitlements`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -139,7 +139,7 @@ For Debug builds during development, Xcode uses "Sign to Run Locally". No certif
 The first time you push a build:
 
 1. Create the app record in App Store Connect with the matching bundle ID.
-2. Fill out the privacy nutrition label. Cruft's answers:
+2. Fill out the privacy nutrition label. Backshelf's answers:
    - **Data collected:** None.
    - **Data linked to user:** None.
    - **Data not linked to user:** None.
@@ -164,11 +164,11 @@ TestFlight builds are valid for 90 days. Update the build, and testers get the u
 
 ## App Store Review
 
-The hard part for Cruft is explaining the file-access entitlement. Apple's reviewers want to understand *why* an app needs to read directories outside its container.
+The hard part for Backshelf is explaining the file-access entitlement. Apple's reviewers want to understand *why* an app needs to read directories outside its container.
 
 Prepare a Review Notes block to attach to the submission:
 
-> Cruft is an inventory and cleanup tool for macOS package managers (Homebrew, pip, npm, etc.). To present a list of packages installed on the user's machine, Cruft reads on-disk metadata files in well-known locations: `/opt/homebrew/Cellar/.../INSTALL_RECEIPT.json`, `~/.local/share/pipx/venvs/`, `~/.cargo/.crates2.json`, and similar. These directories live outside the app's sandbox container, so Cruft uses `com.apple.security.files.user-selected.read-only` plus `NSOpenPanel`: at first launch, the user explicitly grants Cruft read access to each package manager directory. Access is persisted with security-scoped bookmarks (`com.apple.security.files.bookmarks.app-scope`). Cruft never writes to these directories, never invokes external binaries, and never makes any network call. When the user wants to remove a package, Cruft generates a shell script which the user reviews and runs themselves in Terminal — the app itself never modifies the user's packages.
+> Backshelf is an inventory and cleanup tool for macOS package managers (Homebrew, pip, npm, etc.). To present a list of packages installed on the user's machine, Backshelf reads on-disk metadata files in well-known locations: `/opt/homebrew/Cellar/.../INSTALL_RECEIPT.json`, `~/.local/share/pipx/venvs/`, `~/.cargo/.crates2.json`, and similar. These directories live outside the app's sandbox container, so Backshelf uses `com.apple.security.files.user-selected.read-only` plus `NSOpenPanel`: at first launch, the user explicitly grants Backshelf read access to each package manager directory. Access is persisted with security-scoped bookmarks (`com.apple.security.files.bookmarks.app-scope`). Backshelf never writes to these directories, never invokes external binaries, and never makes any network call. When the user wants to remove a package, Backshelf generates a shell script which the user reviews and runs themselves in Terminal — the app itself never modifies the user's packages.
 
 Be ready to repeat this in a phone-review call if the reviewer requests one. The first submission for a tool like this commonly gets a "we need more information" round; the rejection is rarely fatal.
 
@@ -187,14 +187,14 @@ agvtool new-marketing-version "$VERSION"
 agvtool next-version -all
 
 # 2. Archive for App Store distribution
-xcodebuild -scheme Cruft -configuration Release \
+xcodebuild -scheme Backshelf -configuration Release \
     -derivedDataPath build/ \
-    -archivePath build/Cruft.xcarchive \
+    -archivePath build/Backshelf.xcarchive \
     archive
 
 # 3. Export for App Store and upload
 xcodebuild -exportArchive \
-    -archivePath build/Cruft.xcarchive \
+    -archivePath build/Backshelf.xcarchive \
     -exportPath build/ \
     -exportOptionsPlist ExportOptions.plist
 #    ExportOptions.plist sets:
@@ -223,8 +223,8 @@ Run periodically (quarterly?) and commit the updated `descriptions.db` to the re
 
 ```bash
 cd scripts/generate-descriptions
-swift run cruft-descriptions \
-    --output ../../Cruft/Resources/descriptions.db \
+swift run backshelf-descriptions \
+    --output ../../Backshelf/Resources/descriptions.db \
     --checkpoint ./checkpoint.json
 ```
 
@@ -246,7 +246,7 @@ When we set it up, the minimum:
 - **Force a scanner timeout**: in Settings (advanced section, hidden behind a toggle), expose timeout overrides. Useful for testing the "scanner timed out" UI state.
 - **Force a permission denial**: a debug-build affordance that pretends a user-granted folder isn't accessible, so we can exercise the "Can't see your Homebrew folder" UI without actually revoking access.
 - **Use Console.app** to follow `os_log` output during scanning.
-- **Database inspector**: open `~/Library/Containers/<bundle-id>/Data/Library/Application Support/Cruft/cruft.db` with [DB Browser for SQLite](https://sqlitebrowser.org/) to verify schema and contents. Note the sandbox container path — the app no longer writes to `~/Library/Application Support/Cruft/` directly.
+- **Database inspector**: open `~/Library/Containers/<bundle-id>/Data/Library/Application Support/Backshelf/backshelf.db` with [DB Browser for SQLite](https://sqlitebrowser.org/) to verify schema and contents. Note the sandbox container path — the app no longer writes to `~/Library/Application Support/Backshelf/` directly.
 
 ## When things break
 

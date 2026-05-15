@@ -1,6 +1,6 @@
 # Scanners
 
-The scanner subsystem is the heart of Cruft. Everything else depends on accurate, fast, honest inventory.
+The scanner subsystem is the heart of Backshelf. Everything else depends on accurate, fast, honest inventory.
 
 ## Design goals
 
@@ -139,7 +139,7 @@ Known prefixes (checked in this order):
 ~/.local/share/pipx/venvs      # pipx venvs
 ```
 
-This list is in code as a single source of truth. When a new prefix is added, it's a one-line change. Each directory must be a folder the user has granted Cruft read access to via `NSOpenPanel`; otherwise the scanner reports a "permission denied" status to the UI rather than skipping silently.
+This list is in code as a single source of truth. When a new prefix is added, it's a one-line change. Each directory must be a folder the user has granted Backshelf read access to via `NSOpenPanel`; otherwise the scanner reports a "permission denied" status to the UI rather than skipping silently.
 
 ## Per-manager scanners
 
@@ -262,7 +262,7 @@ The `.gemspec` files are Ruby source files; we don't try to evaluate them. We ex
 
 The `mas` CLI is the only practical way to enumerate Mac App Store apps installed via the App Store, and we can't invoke it. Listing `/Applications` is too noisy (the user has many apps from other sources). For v1, the `mas` manager is reported as `.skipped(reason: "Not supported in sandboxed app — see Permissions")`.
 
-This is a known gap. If we ship the future "direct-download non-sandboxed version" (see `ROADMAP.md`), `mas list` parsing comes back. For App Store Cruft, MAS-installed apps are simply outside our scope.
+This is a known gap. If we ship the future "direct-download non-sandboxed version" (see `ROADMAP.md`), `mas list` parsing comes back. For App Store Backshelf, MAS-installed apps are simply outside our scope.
 
 ## Adding a new scanner
 
@@ -280,7 +280,7 @@ The workflow:
 
 ## Honest about gaps
 
-The first version of Cruft will not cover every package manager, and that's fine. The UI shows per-manager status. Users see:
+The first version of Backshelf will not cover every package manager, and that's fine. The UI shows per-manager status. Users see:
 
 ```
 brew         247 packages    ✓
