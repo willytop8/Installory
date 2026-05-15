@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode / SPM build output
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+
+# Swift Package Manager
+Package.resolved
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs and tmp files
+*.log
+*.tmp
+
+# Personal/project-tool artifacts
+.claude/settings.local.json

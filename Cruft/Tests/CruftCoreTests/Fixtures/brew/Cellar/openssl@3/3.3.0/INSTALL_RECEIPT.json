@@ -1,0 +1,22 @@
+{
+  "homebrew_version": "4.3.5",
+  "installed_as_dependency": true,
+  "installed_on_request": false,
+  "runtime_dependencies": [],
+  "source": {
+    "tap": "homebrew/core",
+    "tap_git_head": "abc123def456",
+    "spec": "stable",
+    "versions": {
+      "stable": "3.3.0",
+      "head": null
+    }
+  },
+  "time": 1699000000,
+  "arch": "arm64",
+  "built_on": {
+    "os": "Sequoia",
+    "os_version": "macOS 15.0",
+    "cpu_family": "dunno"
+  }
+}
