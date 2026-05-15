@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import CruftCore
+@testable import BackshelfCore
 
 @Suite("BrewScanner")
 struct BrewScannerTests {

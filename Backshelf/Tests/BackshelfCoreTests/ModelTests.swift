@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import CruftCore
+@testable import BackshelfCore
 
 // MARK: - PackageManager
 
@@ -234,6 +234,31 @@ struct ProvenanceEvidenceTests {
         let enc = try JSONEncoder().encode(ProvenanceEvidence.Shell.zsh)
         let str = String(data: enc, encoding: .utf8)
         #expect(str == "\"zsh\"")
+    }
+
+    @Test("InstallCommandRecord with nil timestamp serializes and deserializes correctly")
+    func nilTimestampCodableRoundTrip() throws {
+        let evidence = ProvenanceEvidence(
+            packageId: "brew::ffmpeg",
+            fsInstallTime: nil,
+            fsInstallTimeSource: nil,
+            installCommand: ProvenanceEvidence.InstallCommandRecord(
+                timestamp: nil,
+                command: "brew install ffmpeg",
+                shell: .zsh,
+                cwd: nil
+            ),
+            claudeCodeContext: nil,
+            nearbyProjects: [],
+            coInstalledWithin1h: [],
+            overallConfidence: .low,
+            collectedAt: Date(timeIntervalSince1970: 1_710_000_000)
+        )
+        let data = try Self.encoder.encode(evidence)
+        let decoded = try Self.decoder.decode(ProvenanceEvidence.self, from: data)
+        #expect(decoded.installCommand?.timestamp == nil)
+        #expect(decoded.installCommand?.command == "brew install ffmpeg")
+        #expect(decoded.installCommand?.shell == .zsh)
     }
 }
 

@@ -53,7 +53,10 @@ extension ProvenanceEvidence {
 
     /// A shell-history record of the command that installed a package.
     public struct InstallCommandRecord: Codable, Sendable {
-        public let timestamp: Date
+        /// When the install command was executed, if recoverable from history.
+        /// nil when the shell does not record timestamps (bash without HISTTIMEFORMAT,
+        /// fish entries without `when`, or malformed zsh extended-format lines).
+        public let timestamp: Date?
         /// The raw shell command, e.g. `"pip install openai-whisper"`.
         public let command: String
         public let shell: Shell
@@ -62,7 +65,7 @@ extension ProvenanceEvidence {
     }
 
     /// Context extracted from a Claude Code session log that triggered the install.
-    public struct ClaudeCodeContext: Codable, Sendable {
+    public struct ClaudeCodeContext: Codable, Sendable, Equatable {
         public let sessionId: String
         public let projectPath: String
         /// Summary line from `sessions-index.json`, if present.
@@ -71,7 +74,9 @@ extension ProvenanceEvidence {
         public let firstUserMessage: String?
         /// The exact `Bash` tool_use invocation that installed the package.
         public let bashInvocation: String
-        public let timestamp: Date
+        /// When the Bash invocation ran. `nil` when the JSONL timestamp field is
+        /// absent or malformed — emitting nil is preferred over the epoch fallback.
+        public let timestamp: Date?
     }
 
     /// A nearby project that was being actively modified around the install time.

@@ -2,6 +2,8 @@
 
 The operational doc. Read when setting up a new dev machine, when shipping a release, or when something in the build pipeline goes wrong.
 
+> **Note (Phase 5a, 2026-05-15):** The Xcode project is now generated from `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen). `Backshelf.xcodeproj` is gitignored. To regenerate: `brew install xcodegen && ./scripts/regenerate-xcode.sh`. The manual setup steps below are historical reference and no longer the current workflow.
+
 Backshelf is a **Mac App Store app**. Distribution is via App Store Connect. Signing is automatic via Xcode's App Store distribution flow. Updates are delivered by the App Store. There is no notarization step, no Sparkle, and no appcast — the App Store handles all of that.
 
 ## Dev machine setup

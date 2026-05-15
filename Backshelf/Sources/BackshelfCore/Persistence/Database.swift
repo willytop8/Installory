@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// The Cruft writable SQLite database.
+/// The Backshelf writable SQLite database.
 ///
 /// Wraps a GRDB `DatabasePool` and runs migrations on initialization.
 /// Consumers interact with the database through `pool` directly using
@@ -16,14 +16,14 @@ public final class Database: Sendable {
     /// The underlying connection pool. Use for all reads and writes.
     public let pool: DatabasePool
 
-    /// Opens (or creates) `cruft.db` inside `directory` and applies migrations.
+    /// Opens (or creates) `backshelf.db` inside `directory` and applies migrations.
     ///
-    /// - Parameter directory: The directory that will contain `cruft.db`.
+    /// - Parameter directory: The directory that will contain `backshelf.db`.
     ///   The directory must already exist; this initializer does not create it.
     /// - Throws: A GRDB `DatabaseError` if the pool cannot be opened, or a
     ///   migration error if the schema cannot be applied.
     public init(directory: URL) throws {
-        let dbURL = directory.appendingPathComponent("cruft.db")
+        let dbURL = directory.appendingPathComponent("backshelf.db")
         pool = try DatabasePool(path: dbURL.path)
         try Migrations.run(pool)
     }

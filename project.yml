@@ -1,0 +1,42 @@
+name: Backshelf
+
+options:
+  bundleIdPrefix: app.backshelf
+  deploymentTarget:
+    macOS: "14.0"
+
+# Local SPM package. The Backshelf/ subdirectory at repo root is the
+# Swift package (contains Package.swift). project.yml lives at repo root.
+packages:
+  Backshelf:
+    path: ./Backshelf
+
+targets:
+  Backshelf:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    bundleId: app.backshelf.mac
+    info:
+      path: App/Info.plist
+    entitlements:
+      path: App/Backshelf.entitlements
+    sources:
+      - App/Sources
+      - App/Resources
+    dependencies:
+      - package: Backshelf
+        product: BackshelfCore
+    settings:
+      base:
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        SWIFT_VERSION: "6.0"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Release:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""

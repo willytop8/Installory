@@ -11,6 +11,10 @@ DerivedData/
 *.xcworkspace/xcuserdata/
 xcuserdata/
 
+# Generated Xcode project (source of truth is project.yml)
+Backshelf.xcodeproj/
+*.xcuserstate
+
 # Swift Package Manager
 Package.resolved
 

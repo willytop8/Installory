@@ -1,5 +1,120 @@
 > **Renamed Cruft → Backshelf on 2026-05-15.** The SPM package directory, library target, and all source/doc references have been updated. The git root directory rename is handled separately by William.
 
+# Phase 5a Handoff
+
+## What Was Built
+
+Phase 5a wraps the complete `BackshelfCore` library in a sandboxed macOS app shell. `swift build` and `swift test` still pass (248 tests, zero warnings, library unchanged). The Xcode project is generated from `project.yml` via XcodeGen and is not committed.
+
+```
+project.yml                              NEW: XcodeGen source of truth
+scripts/
+└── regenerate-xcode.sh                  NEW: runs xcodegen generate
+App/
+├── Backshelf.entitlements               NEW: sandbox + read-only + bookmarks
+├── Info.plist                           NEW: bundle ID, version, category
+├── Sources/
+│   ├── BackshelfApp.swift               NEW: @main App entry point
+│   ├── AppCoordinator.swift             NEW: @Observable @MainActor owner of DB + scan
+│   ├── FolderAccessManager.swift        NEW: NSOpenPanel + security-scoped bookmarks
+│   └── ContentView.swift               NEW: three-manager grant UI + scan results
+└── Resources/
+    └── Assets.xcassets/
+        └── AppIcon.appiconset/          NEW: solid-color placeholder (indigo, 10 sizes)
+README.md                                NEW: repo entry point + building instructions
+.gitignore                               UPDATED: added Backshelf.xcodeproj/, *.xcuserstate
+files/build-and-release.md              UPDATED: XcodeGen-as-source-of-truth note prepended
+HANDOFF.md                               this file
+```
+
+---
+
+## Phase 5a Decisions
+
+### 1. XcodeGen as source of truth
+
+`Backshelf.xcodeproj` is generated from `project.yml` and gitignored. This keeps the repo free of Xcode's volatile XML and makes structural changes (new file groups, build settings, SPM dependency pins) reviewable as readable YAML diffs. A note has been prepended to `files/build-and-release.md` marking the manual Xcode setup steps as historical reference.
+
+### 2. Local SPM dependency path: `./Backshelf`
+
+`project.yml` references the library as a local package at `./Backshelf` (relative to the repo root, where `project.yml` lives). The SPM package's `Package.swift` is at `Backshelf/Package.swift`. XcodeGen resolves this as an `XCLocalSwiftPackageReference`.
+
+### 3. Deployment target: macOS 14.0 (Sonoma) for the app; library stays at 13.0
+
+The app uses `@Observable` (macOS 14+) and `URL.bookmarkData(options: .withSecurityScope)` (available since macOS 10.15, but the whole sandbox model is iOS/macOS 14-friendly). The library's `Package.swift` targets `.macOS(.v13)` so it can ship standalone if needed without raising its own floor.
+
+### 4. FolderAccessManager API — Phase 5a simplified form
+
+The design doc (`files/sandboxing.md`) specifies a richer `enum GrantedDirectory` / `withAccess(to:)` API intended for when the inventory UI needs to enumerate managers and their access states. For Phase 5a (no inventory list), the simpler path-keyed bookmark dictionary is sufficient: `grantedBookmarks()` returns `[(path: String, bookmark: Data)]` keyed by the absolute path the user granted.
+
+**Phase 5b:** revisit `FolderAccessManager` API when the inventory sidebar needs to enumerate granted folders per manager and surface per-manager "permission needed" states. The `GrantedDirectory` enum approach from `sandboxing.md` is the right direction at that point.
+
+### 5. Security-scoped resource lifetime around scans
+
+`SystemDirectoryAccessProvider` (used by all three scanners) reads through `FileManager.default`. Inside the sandbox, `FileManager` only reaches directories outside the container after `startAccessingSecurityScopedResource()` is called. `AppCoordinator.scan()` starts all granted bookmarks before constructing the scanners and stops them in a `defer` block after the `AsyncStream` is exhausted. This ensures the access window exactly spans the scan.
+
+### 6. Scanner construction: zero-arg defaults
+
+All three scanners compile with their zero-argument initializers (`BrewScanner()`, `PipScanner()`, `NpmScanner()`), which default to `SystemDirectoryAccessProvider()` and real `PathDiscovery`/`PythonInterpreterDiscovery`. No factory layer is needed for Phase 5a. A scanner registry (Phase 3 question #1) can be added in Phase 5b alongside the inventory list.
+
+### 7. AppCoordinator builds a new ScanCoordinator per scan
+
+`ScanCoordinator` is created fresh in `AppCoordinator.scan()` each call rather than cached. This avoids any residual actor state between scans and is correct for Phase 5a where scans are user-triggered one at a time. Caching is an optimization for a future phase if startup latency matters.
+
+### 8. No code signing identity in project.yml
+
+`DEVELOPMENT_TEAM = ""` in `project.yml`. William sets his team in Xcode under Signing & Capabilities on first open. This is intentional — a team ID in the YAML would be personal and would break anyone else cloning the repo.
+
+### 9. AppIcon: solid indigo placeholder (10 PNGs, Python-generated)
+
+All ten required macOS icon sizes (16–1024 px) are committed as solid-color PNG files generated with a Python script inline. Real icon design is Phase 5d (App Store polish).
+
+---
+
+## Phase 5a Known Limitations
+
+1. **No folder-access suggestions for Intel Macs (pip/npm).** The ContentView suggests `/opt/homebrew` for Homebrew (Apple Silicon prefix). On Intel Macs `/usr/local` is the Homebrew prefix; `ManagerRow` checks both prefixes for the "granted" status display, but the NSOpenPanel is pre-navigated to `/opt/homebrew`. Phase 5b should auto-detect the correct prefix via `PathDiscovery` and pass it as `suggestedURL`.
+
+2. **Single bookmark per manager is a simplification.** pip packages live across multiple interpreter directories (`~/.pyenv/versions/`, `/opt/homebrew/opt/python@*/`, etc.). Granting one path (e.g., `~/.pyenv`) will miss Homebrew-managed Python interpreters. Users will see partial pip counts unless they grant the full home directory. A per-interpreter grant flow is Phase 5b work.
+
+3. **Stale bookmarks are silently dropped on launch.** `loadPersistedBookmarks()` records stale paths in `staleBookmarkPaths` but no UI prompts the user to re-grant. The ContentView currently ignores `staleBookmarkPaths`. Phase 5b should surface "grant expired — re-grant" inline in the ManagerRow.
+
+4. **No error surfacing in ContentView.** If `requestAccess` returns nil (user cancels or bookmark creation fails), nothing is shown. Phase 5b adds inline feedback.
+
+5. **`NSOpenPanel.runModal()` blocks the main thread.** This is the traditional AppKit pattern and works correctly (runs a nested event loop), but it means the app is unresponsive while the panel is open. Acceptable for Phase 5a; migrating to `panel.begin(completionHandler:)` with a `CheckedContinuation` is a clean follow-up.
+
+6. **Database is opened but not used.** `AppCoordinator` holds a `Database?` and initializes it in the Application Support directory, but scan results are not persisted. Persistence (writing packages to SQLite after each scan) is Phase 5b.
+
+---
+
+## William's Manual Checklist (run after this phase)
+
+1. `brew install xcodegen` if not already installed
+2. `./scripts/regenerate-xcode.sh` from the repo root
+3. `open Backshelf.xcodeproj`
+4. Select the `Backshelf` target → Signing & Capabilities → set Development Team
+5. Press ⌘R — the app should launch, show the three manager rows, and allow granting access + running a scan
+6. Verify the scan button is disabled until at least one "Grant Access" has been approved
+7. Verify package counts appear after the scan completes
+
+---
+
+## Questions for Phase 5b
+
+1. **Per-manager access semantics.** Revisit `FolderAccessManager` with the `GrantedDirectory` enum from `sandboxing.md`. Each case maps to a specific on-disk directory; the inventory sidebar needs to show "granted / not granted / permission expired" per manager.
+
+2. **Multi-interpreter pip access.** Granting a single path won't cover all Python interpreter directories. Phase 5b needs a flow that prompts for each discovered interpreter root separately, or prompts for the home directory with a clear explanation of what Backshelf will read.
+
+3. **Persistence.** After each scan, write packages to the GRDB `Database` and read from it on startup so the last scan result survives app restarts.
+
+4. **Inventory list view.** Phase 5b scope: table of packages with name, version, manager badge, installed date. Filter by manager. Search box. This is the bulk of the Phase 1 roadmap deliverables that have been deferred.
+
+5. **ScanRun record.** `AppCoordinator.scan()` should construct and write a `ScanRun` record from the `.allFinished` event payload for diagnostics.
+
+6. **ProvenceCollector integration.** After packages are persisted, run `ProvenanceCollector` in a background task and upsert `ProvenanceEvidence` rows. The sequencing constraint from Phase 4c handoff (packages row must exist before evidence upsert) is satisfied if this runs after the package write step.
+
+---
+
 # Phase 4c Handoff
 
 ## What Was Built

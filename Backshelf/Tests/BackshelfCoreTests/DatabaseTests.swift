@@ -1,18 +1,18 @@
 import Testing
 import Foundation
 import GRDB
-@testable import CruftCore
+@testable import BackshelfCore
 
 @Suite("Database")
 struct DatabaseTests {
 
     // MARK: - Helpers
 
-    private func makeTempDatabase() throws -> (CruftCore.Database, URL) {
+    private func makeTempDatabase() throws -> (BackshelfCore.Database, URL) {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CruftTests-\(UUID().uuidString)")
+            .appendingPathComponent("BackshelfTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let db = try CruftCore.Database(directory: dir)
+        let db = try BackshelfCore.Database(directory: dir)
         return (db, dir)
     }
 

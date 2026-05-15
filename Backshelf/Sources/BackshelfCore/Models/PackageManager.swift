@@ -1,4 +1,4 @@
-/// The package managers Cruft can inventory.
+/// The package managers Backshelf can inventory.
 public enum PackageManager: String, Codable, CaseIterable, Sendable {
     case brew
     case brewCask

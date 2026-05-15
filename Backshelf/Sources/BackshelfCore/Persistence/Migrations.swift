@@ -1,6 +1,6 @@
 import GRDB
 
-/// Append-only migration definitions for the Cruft SQLite database.
+/// Append-only migration definitions for the Backshelf SQLite database.
 ///
 /// **Never modify a registered migration after it has been shipped.**
 /// Add a new `registerMigration` call for every schema change.

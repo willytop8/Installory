@@ -1,5 +1,5 @@
 import Foundation
-@testable import CruftCore
+@testable import BackshelfCore
 
 /// An in-memory `DirectoryAccessProvider` for use in unit tests.
 ///
@@ -29,6 +29,12 @@ struct InMemoryDirectoryAccessProvider: DirectoryAccessProvider, Sendable {
         }
         return bytes
     }
+
+    func fileExists(at url: URL) -> Bool {
+        contents[url.path] != nil || fileData[url.path] != nil
+    }
+
+    func modificationDate(at url: URL) -> Date? { nil }
 
     static func make(_ populate: (inout Builder) -> Void) -> InMemoryDirectoryAccessProvider {
         var builder = Builder()

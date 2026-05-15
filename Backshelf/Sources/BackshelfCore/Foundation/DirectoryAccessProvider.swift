@@ -14,6 +14,12 @@ public protocol DirectoryAccessProvider: Sendable {
     ///
     /// Throws if the file does not exist or cannot be read.
     func data(contentsOf url: URL) throws -> Data
+
+    /// Returns true when a regular file or directory exists at `url`.
+    func fileExists(at url: URL) -> Bool
+
+    /// Returns the modification date of the item at `url`, or nil if unavailable.
+    func modificationDate(at url: URL) -> Date?
 }
 
 /// A `DirectoryAccessProvider` backed by the real filesystem.
@@ -29,5 +35,14 @@ public struct SystemDirectoryAccessProvider: DirectoryAccessProvider, Sendable {
 
     public func data(contentsOf url: URL) throws -> Data {
         try Data(contentsOf: url)
+    }
+
+    public func fileExists(at url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
+    }
+
+    public func modificationDate(at url: URL) -> Date? {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return attrs?[.modificationDate] as? Date
     }
 }

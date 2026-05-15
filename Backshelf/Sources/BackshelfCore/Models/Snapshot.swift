@@ -3,7 +3,7 @@ import GRDB
 
 /// A point-in-time export manifest of all installed packages.
 ///
-/// A snapshot is a record, not an executable state. Cruft never restores
+/// A snapshot is a record, not an executable state. Backshelf never restores
 /// a snapshot itself — it generates a reinstall shell script from the
 /// snapshot that the user runs in Terminal.
 public struct Snapshot: Identifiable, Codable, Sendable {
