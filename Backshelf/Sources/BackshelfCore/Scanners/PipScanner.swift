@@ -33,7 +33,10 @@ public struct PipScanner: PackageScanner, Sendable {
     }
 
     public func scan() async throws -> [Package] {
-        discovery.discover().flatMap { packagesFor(interpreter: $0) }
+        var seen: Set<String> = []
+        return discovery.discover()
+            .flatMap { packagesFor(interpreter: $0) }
+            .filter { seen.insert($0.id).inserted }
     }
 
     // MARK: - Private

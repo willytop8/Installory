@@ -22,19 +22,22 @@ struct SidebarView: View {
 
     private var packageManagerSection: some View {
         Section("Package Managers") {
-            Label("All packages (\(coordinator.packages.count))", systemImage: "tray.full")
-                .tag(SidebarSelection.all as SidebarSelection?)
+            NavigationLink(value: SidebarSelection.all) {
+                Label("All packages (\(coordinator.packages.count))", systemImage: "tray.full")
+            }
 
             ForEach(visibleManagers, id: \.self) { manager in
                 let count = coordinator.packages.filter { $0.manager == manager }.count
-                Label("\(manager.displayName) (\(count))", systemImage: manager.sidebarSymbol)
-                    .tag(SidebarSelection.manager(manager) as SidebarSelection?)
+                NavigationLink(value: SidebarSelection.manager(manager)) {
+                    Label("\(manager.displayName) (\(count))", systemImage: manager.sidebarSymbol)
+                }
             }
 
             let readOnlyCount = coordinator.packages.filter(\.isReadOnly).count
             if readOnlyCount > 0 {
-                Label("Read-only (\(readOnlyCount))", systemImage: "lock")
-                    .tag(SidebarSelection.readOnly as SidebarSelection?)
+                NavigationLink(value: SidebarSelection.readOnly) {
+                    Label("Read-only (\(readOnlyCount))", systemImage: "lock")
+                }
             }
         }
     }

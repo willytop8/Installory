@@ -62,28 +62,59 @@ public struct BrewScanner: PackageScanner, Sendable {
                 continue
             }
 
+            // Collect all valid (versionDir, receipt) pairs, then pick the latest.
+            // Multiple version directories arise when Homebrew retains old keg links;
+            // emitting one Package per name prevents duplicate SwiftUI List IDs.
+            var candidates: [(versionDir: URL, receipt: InstallReceipt)] = []
             for versionDir in versionDirs {
                 let version = versionDir.lastPathComponent
                 guard !version.hasPrefix(".") else { continue }
-
                 let receiptURL = versionDir.appendingPathComponent("INSTALL_RECEIPT.json")
-                guard let receiptData = try? directoryAccess.data(contentsOf: receiptURL) else {
+                guard let receiptData = try? directoryAccess.data(contentsOf: receiptURL),
+                      let receipt = try? receiptDecoder.decode(InstallReceipt.self, from: receiptData) else {
                     continue
                 }
-                guard let receipt = try? receiptDecoder.decode(InstallReceipt.self, from: receiptData) else {
-                    continue
-                }
-
-                packages.append(makePackage(
-                    name: pkgName,
-                    version: version,
-                    installPath: versionDir,
-                    receipt: receipt,
-                    manager: manager
-                ))
+                candidates.append((versionDir: versionDir, receipt: receipt))
             }
+
+            guard let best = pickLatest(candidates) else { continue }
+            packages.append(makePackage(
+                name: pkgName,
+                version: best.versionDir.lastPathComponent,
+                installPath: best.versionDir,
+                receipt: best.receipt,
+                manager: manager
+            ))
         }
         return packages
+    }
+
+    /// Returns the candidate with the highest version string, falling back to
+    /// newest INSTALL_RECEIPT.json mtime when version strings cannot be compared
+    /// numerically (e.g. `1.0.0-alpha` vs `1.0.0-beta`).
+    private func pickLatest(
+        _ candidates: [(versionDir: URL, receipt: InstallReceipt)]
+    ) -> (versionDir: URL, receipt: InstallReceipt)? {
+        guard !candidates.isEmpty else { return nil }
+        return candidates.dropFirst().reduce(candidates[0]) { best, candidate in
+            let bestVer = best.versionDir.lastPathComponent
+            let candVer = candidate.versionDir.lastPathComponent
+            switch compareVersionStrings(bestVer, candVer) {
+            case .orderedAscending:
+                return candidate
+            case .orderedDescending, .orderedSame:
+                return best
+            case nil:
+                // Non-numeric components differ — fall back to mtime.
+                let bestMtime = directoryAccess.modificationDate(
+                    at: best.versionDir.appendingPathComponent("INSTALL_RECEIPT.json")
+                ) ?? .distantPast
+                let candMtime = directoryAccess.modificationDate(
+                    at: candidate.versionDir.appendingPathComponent("INSTALL_RECEIPT.json")
+                ) ?? .distantPast
+                return candMtime > bestMtime ? candidate : best
+            }
+        }
     }
 
     private func makePackage(
@@ -116,6 +147,24 @@ public struct BrewScanner: PackageScanner, Sendable {
             lastSeen: Date()
         )
     }
+}
+
+// MARK: - Version comparison
+
+/// Compares two version strings by splitting on "." and comparing each
+/// component numerically. Returns nil when a differing component is
+/// non-numeric on either side — the caller should fall back to mtime.
+private func compareVersionStrings(_ a: String, _ b: String) -> ComparisonResult? {
+    let ac = a.components(separatedBy: ".")
+    let bc = b.components(separatedBy: ".")
+    for i in 0..<max(ac.count, bc.count) {
+        let as_ = i < ac.count ? ac[i] : "0"
+        let bs_ = i < bc.count ? bc[i] : "0"
+        guard as_ != bs_ else { continue }
+        guard let an = Int(as_), let bn = Int(bs_) else { return nil }
+        return an < bn ? .orderedAscending : .orderedDescending
+    }
+    return .orderedSame
 }
 
 // MARK: - Receipt format

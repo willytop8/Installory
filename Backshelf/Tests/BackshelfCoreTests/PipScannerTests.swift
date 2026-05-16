@@ -217,6 +217,34 @@ struct PipScannerTests {
         #expect(packages.isEmpty)
     }
 
+    @Test("symlinked interpreter emits each package ID exactly once")
+    func symlinkedInterpreterEmitsUniqueIds() async throws {
+        // /opt/homebrew/opt/python@3.13/bin/python3.13 (symlink) and
+        // /opt/homebrew/Cellar/python@3.13/3.13.2/bin/python3.13 (canonical) both appear
+        // as discovery candidates. After Layer 1 dedup (resolved path), only one interpreter
+        // is returned. Layer 2 in PipScanner catches any that slip through. Verify no
+        // duplicate Package IDs reach the caller.
+        let canonical = URL(fileURLWithPath: "/opt/homebrew/Cellar/python@3.13/3.13.2/bin/python3.13")
+        let symlink = URL(fileURLWithPath: "/opt/homebrew/opt/python@3.13/bin/python3.13")
+        let sitePackages = URL(fileURLWithPath: "/opt/homebrew/opt/python@3.13/lib/python3.13/site-packages")
+        let distInfo = sitePackages.appendingPathComponent("pip-24.0.dist-info")
+        let metadata = "Metadata-Version: 2.1\nName: pip\nVersion: 24.0\n"
+
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: canonical, data: Data())
+            builder.addSymlink(at: symlink, target: canonical)
+            builder.addFile(at: distInfo.appendingPathComponent("METADATA"), data: Data(metadata.utf8))
+            builder.addFile(at: distInfo.appendingPathComponent("RECORD"), data: Data())
+        }
+
+        let packages = try await makeScanner(provider: provider).scan()
+
+        let ids = packages.map(\.id)
+        #expect(Set(ids).count == ids.count, "Package IDs must be unique; got duplicates: \(ids)")
+        #expect(packages.count == 1)
+        #expect(packages.first?.name == "pip")
+    }
+
     @Test("interpreter with no site-packages does not crash and returns no packages")
     func missingSitePackagesDoesNotCrash() async throws {
         let provider = try buildProvider()

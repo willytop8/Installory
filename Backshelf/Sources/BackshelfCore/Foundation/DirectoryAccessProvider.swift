@@ -20,6 +20,15 @@ public protocol DirectoryAccessProvider: Sendable {
 
     /// Returns the modification date of the item at `url`, or nil if unavailable.
     func modificationDate(at url: URL) -> Date?
+
+    /// Returns `url` with any symlinks in its path resolved to their targets.
+    func resolvingSymlinks(at url: URL) -> URL
+}
+
+extension DirectoryAccessProvider {
+    public func resolvingSymlinks(at url: URL) -> URL {
+        url.resolvingSymlinksInPath()
+    }
 }
 
 /// A `DirectoryAccessProvider` backed by the real filesystem.

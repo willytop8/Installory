@@ -140,4 +140,28 @@ struct PythonInterpreterDiscoveryTests {
 
         #expect(discovery.discover().isEmpty)
     }
+
+    @Test("opt symlink and Cellar target deduplicate to a single interpreter")
+    func deduplicatesSymlinkedInterpreters() {
+        // /opt/homebrew/opt/python@3.13/bin/python3.13 is a symlink to the Cellar binary.
+        // Both paths appear as candidates from homebrewOptCandidates and homebrewCellarCandidates.
+        // discover() must resolve symlinks before inserting into the seen set and return only one entry.
+        let canonical = URL(fileURLWithPath: "/opt/homebrew/Cellar/python@3.13/3.13.2/bin/python3.13")
+        let symlink = URL(fileURLWithPath: "/opt/homebrew/opt/python@3.13/bin/python3.13")
+
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: canonical, data: Data())
+            builder.addSymlink(at: symlink, target: canonical)
+        }
+
+        let discovery = PythonInterpreterDiscovery(
+            directoryAccess: provider,
+            homeDirectory: URL(fileURLWithPath: "/")
+        )
+
+        let interpreters = discovery.discover()
+        #expect(interpreters.count == 1)
+        // The opt candidate is processed first (homebrewOptCandidates before homebrewCellarCandidates).
+        #expect(interpreters.first?.executable == symlink)
+    }
 }

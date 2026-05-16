@@ -8,10 +8,19 @@ import Foundation
 struct InMemoryDirectoryAccessProvider: DirectoryAccessProvider, Sendable {
     private let contents: [String: [URL]]
     private let fileData: [String: Data]
+    private let modificationDates: [String: Date]
+    private let symlinks: [String: String]
 
-    private init(contents: [String: [URL]], fileData: [String: Data]) {
+    private init(
+        contents: [String: [URL]],
+        fileData: [String: Data],
+        modificationDates: [String: Date],
+        symlinks: [String: String]
+    ) {
         self.contents = contents
         self.fileData = fileData
+        self.modificationDates = modificationDates
+        self.symlinks = symlinks
     }
 
     func contentsOfDirectory(at url: URL) throws -> [URL] {
@@ -31,10 +40,20 @@ struct InMemoryDirectoryAccessProvider: DirectoryAccessProvider, Sendable {
     }
 
     func fileExists(at url: URL) -> Bool {
-        contents[url.path] != nil || fileData[url.path] != nil
+        let resolved = resolvingSymlinks(at: url)
+        return contents[resolved.path] != nil || fileData[resolved.path] != nil
     }
 
-    func modificationDate(at url: URL) -> Date? { nil }
+    func modificationDate(at url: URL) -> Date? { modificationDates[url.path] }
+
+    func resolvingSymlinks(at url: URL) -> URL {
+        var resolved = url
+        var visited: Set<String> = []
+        while let target = symlinks[resolved.path], visited.insert(resolved.path).inserted {
+            resolved = URL(fileURLWithPath: target)
+        }
+        return resolved
+    }
 
     static func make(_ populate: (inout Builder) -> Void) -> InMemoryDirectoryAccessProvider {
         var builder = Builder()
@@ -53,9 +72,18 @@ extension InMemoryDirectoryAccessProvider {
     struct Builder {
         private var contents: [String: [URL]] = [:]
         private var fileData: [String: Data] = [:]
+        private var modificationDates: [String: Date] = [:]
+        private var symlinks: [String: String] = [:]
 
-        mutating func addFile(at url: URL, data: Data) {
+        mutating func addFile(at url: URL, data: Data, modificationDate: Date? = nil) {
             fileData[url.path] = data
+            if let date = modificationDate { modificationDates[url.path] = date }
+            addToContents(child: url, parent: url.deletingLastPathComponent())
+        }
+
+        /// Registers a symlink so that `resolvingSymlinks(at:)` and `fileExists(at:)` follow it.
+        mutating func addSymlink(at url: URL, target: URL) {
+            symlinks[url.path] = target.path
             addToContents(child: url, parent: url.deletingLastPathComponent())
         }
 
@@ -74,7 +102,12 @@ extension InMemoryDirectoryAccessProvider {
         }
 
         func build() -> InMemoryDirectoryAccessProvider {
-            InMemoryDirectoryAccessProvider(contents: contents, fileData: fileData)
+            InMemoryDirectoryAccessProvider(
+                contents: contents,
+                fileData: fileData,
+                modificationDates: modificationDates,
+                symlinks: symlinks
+            )
         }
     }
 }

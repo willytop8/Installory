@@ -122,7 +122,8 @@ public struct PythonInterpreterDiscovery: Sendable {
         var seen: Set<String> = []
         return candidates.compactMap { candidate in
             guard directoryAccess.fileExists(at: candidate.executable) else { return nil }
-            guard seen.insert(candidate.executable.path).inserted else { return nil }
+            let resolved = directoryAccess.resolvingSymlinks(at: candidate.executable).path
+            guard seen.insert(resolved).inserted else { return nil }
             return makeInterpreter(from: candidate)
         }
         .sorted { $0.executable.path < $1.executable.path }

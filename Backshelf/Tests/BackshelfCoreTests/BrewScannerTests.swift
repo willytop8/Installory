@@ -176,8 +176,9 @@ struct BrewScannerTests {
         let vscode = packages.first { $0.name == "visual-studio-code" }
         let v = try #require(vscode, "expected to find brewCask::visual-studio-code")
         #expect(v.id == "brewCask::visual-studio-code")
-        #expect(v.version == "1.90.2")
-        #expect(v.installedAt == Date(timeIntervalSince1970: 1_715_000_000))
+        // Fixture now has 1.90.2 and 1.91.0; deduplication picks 1.91.0.
+        #expect(v.version == "1.91.0")
+        #expect(v.installedAt == Date(timeIntervalSince1970: 1_720_000_000))
         #expect(v.isExplicit == true)
     }
 
@@ -246,5 +247,83 @@ struct BrewScannerTests {
         for pkg in packages {
             #expect(pkg.isReadOnly == false)
         }
+    }
+
+    // MARK: - Version deduplication
+
+    private func minimalReceiptData() -> Data {
+        Data(#"{"installed_on_request":true,"time":1700000000}"#.utf8)
+    }
+
+    @Test("two versions of a formula emit one Package with the higher version")
+    func twoVersionsFormulaPicksLatest() async throws {
+        let receipt = minimalReceiptData()
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: fakePrefix.appendingPathComponent("Cellar/test-formula/1.0.0/INSTALL_RECEIPT.json"), data: receipt)
+            builder.addFile(at: fakePrefix.appendingPathComponent("Cellar/test-formula/1.0.1/INSTALL_RECEIPT.json"), data: receipt)
+        }
+        let discovery = PathDiscovery(checkExists: { $0 == "/opt/homebrew" })
+        let scanner = BrewScanner(pathDiscovery: discovery, directoryAccess: provider)
+        let packages = try await scanner.scan()
+        #expect(packages.count == 1)
+        let pkg = try #require(packages.first)
+        #expect(pkg.version == "1.0.1")
+    }
+
+    @Test("three versions of a formula emit one Package with the highest version")
+    func threeVersionsFormulaPicksHighest() async throws {
+        let receipt = minimalReceiptData()
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: fakePrefix.appendingPathComponent("Cellar/test-formula/2.0.0/INSTALL_RECEIPT.json"), data: receipt)
+            builder.addFile(at: fakePrefix.appendingPathComponent("Cellar/test-formula/2.1.0/INSTALL_RECEIPT.json"), data: receipt)
+            builder.addFile(at: fakePrefix.appendingPathComponent("Cellar/test-formula/2.0.9/INSTALL_RECEIPT.json"), data: receipt)
+        }
+        let discovery = PathDiscovery(checkExists: { $0 == "/opt/homebrew" })
+        let scanner = BrewScanner(pathDiscovery: discovery, directoryAccess: provider)
+        let packages = try await scanner.scan()
+        #expect(packages.count == 1)
+        let pkg = try #require(packages.first)
+        #expect(pkg.version == "2.1.0")
+    }
+
+    @Test("ambiguous version comparison falls back to newer INSTALL_RECEIPT.json mtime")
+    func ambiguousVersionFallsBackToMtime() async throws {
+        let receipt = minimalReceiptData()
+        let olderDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let newerDate = Date(timeIntervalSince1970: 1_720_000_000)
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: fakePrefix.appendingPathComponent("Cellar/test-formula/1.0.0-alpha/INSTALL_RECEIPT.json"),
+                data: receipt,
+                modificationDate: olderDate
+            )
+            builder.addFile(
+                at: fakePrefix.appendingPathComponent("Cellar/test-formula/1.0.0-beta/INSTALL_RECEIPT.json"),
+                data: receipt,
+                modificationDate: newerDate
+            )
+        }
+        let discovery = PathDiscovery(checkExists: { $0 == "/opt/homebrew" })
+        let scanner = BrewScanner(pathDiscovery: discovery, directoryAccess: provider)
+        let packages = try await scanner.scan()
+        #expect(packages.count == 1)
+        let pkg = try #require(packages.first)
+        #expect(pkg.version == "1.0.0-beta")
+    }
+
+    @Test("cask with two versions emits one Package with the higher version")
+    func caskTwoVersionsPicksLatest() async throws {
+        let receipt = minimalReceiptData()
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: fakePrefix.appendingPathComponent("Caskroom/my-cask/1.0.0/INSTALL_RECEIPT.json"), data: receipt)
+            builder.addFile(at: fakePrefix.appendingPathComponent("Caskroom/my-cask/1.1.0/INSTALL_RECEIPT.json"), data: receipt)
+        }
+        let discovery = PathDiscovery(checkExists: { $0 == "/opt/homebrew" })
+        let scanner = BrewScanner(pathDiscovery: discovery, directoryAccess: provider)
+        let packages = try await scanner.scan()
+        #expect(packages.count == 1)
+        let pkg = try #require(packages.first)
+        #expect(pkg.version == "1.1.0")
+        #expect(pkg.manager == .brewCask)
     }
 }
