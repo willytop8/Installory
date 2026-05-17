@@ -1,0 +1,3 @@
+# Per-package API response cache. Excluded from git — the cache is
+# local-only and can be rebuilt on any dev machine by re-running generate.py.
+.cache/

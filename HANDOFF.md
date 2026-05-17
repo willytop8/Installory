@@ -1,6 +1,577 @@
-> **👉 Resuming work? Read `NEXT-SESSION.md` first.** It contains the one-screen "do this now" checklist. This file (HANDOFF.md) is the long-form historical record.
->
-> **State correction (2026-05-15 evening pause):** the "implementation-complete and verified working on hardware" line below is slightly ahead of reality. Accurate state is: Phase 5b inventory UI is built; sidebar filtering **was verified working on hardware** by William (he clicked Homebrew → list filtered, screenshot captured); brew dedup fix is in code with tests; pip dedup fix is in code with tests but **the post-fix console-warning verification by William is still pending**; the debug overlay is still in `PackageListView.swift`; final commit + tag are pending. See `NEXT-SESSION.md` for the four-step checklist to close 5b cleanly.
+> **👉 Resuming work? Read `NEXT-SESSION.md` first.** This file is the long-form historical record.
+
+---
+
+# Phase 5d-1: Package Descriptions Corpus (2026-05-17)
+
+## Status
+
+Implementation-complete. `swift test` passes (336 tests, zero warnings — 21 new
+`DescriptionStoreTests` plus 315 prior). William must verify on hardware using
+the checklist below. The corpus covers Homebrew (complete) and PyPI (top 4000).
+See "Completing the corpus" below for npm seed expansion.
+
+## Why Bundled, Not Fetched
+
+Backshelf's App Store privacy story is "zero network calls, zero data collection."
+Runtime description fetching would break that guarantee for marginally fresher
+text about what tools do — and what a tool does barely changes. The corpus is
+generated at BUILD TIME on the developer's machine and bundled into the app.
+Coverage of brand-new packages improves by regenerating and shipping an update,
+never by runtime networking. No network entitlement is added.
+
+## Corpus Format Decision: JSON, Not SQLite
+
+The corpus is a flat key→string map: `"{manager}:{normalizedName}" → "description"`.
+A JSON file loaded into `[String: String]` at startup is 30 lines of code, zero
+additional infrastructure, and loads instantly (~1 MB). SQLite would add a
+read-only `DatabasePool`, GRDB conformances on `Description`, and query overhead
+— none of which is needed for a single-key lookup. JSON is the right tool here.
+
+## Description Model Decision
+
+`Description.swift` (Phase 0) has been updated: the misleading SQLite/GRDB comment
+is replaced with an accurate note, and a public `init(manager:name:text:)` is added
+so the struct is usable as a domain model if needed. `DescriptionStore` uses a plain
+`[String: String]` dictionary internally and does not depend on the `Description` struct.
+The struct is retained as a domain concept (the shape of a description entry) but
+has no GRDB conformances and is not used by the store.
+
+## Corpus Coverage Generated
+
+| Registry | Count | How |
+|---|---|---|
+| Homebrew formulae | 8,354 | Bulk API (`formulae.brew.sh/api/formula.json`) |
+| Homebrew casks | 4,986 | Bulk API (`formulae.brew.sh/api/cask.json`) |
+| PyPI | 1,092 (top 1100 by downloads) | `hugovk.github.io/top-pypi-packages/` seed + per-package PyPI JSON API |
+| npm | 260 | Committed seed list in `seeds/npm-seed-list.json` |
+| **Total** | **14,692** | |
+
+The top-1100 PyPI slice covers the packages most users encounter (boto3, requests,
+numpy, pandas, pytest, etc.). Run with `--limit 4000` or no limit to get fuller
+coverage — the cache makes subsequent runs nearly instant.
+
+## Seed Files
+
+Both seed files are committed in `scripts/generate-descriptions/seeds/`:
+
+- `pypi-seed-list.json` — 15,000 package names from hugovk/top-pypi-packages.
+  The script fetched 4,000 of these (top by rank). Remove the file and re-run
+  to refresh the list from upstream.
+- `npm-seed-list.json` — 263 well-known packages (curated, committed as fallback).
+  Expands automatically via the npm registry search API when < 1,000 entries.
+
+## How to Regenerate the Full Corpus
+
+```bash
+# Full run (all registries, all packages — ~15 min on first run)
+python3 scripts/generate-descriptions/generate.py
+
+# Then commit the updated corpus:
+git add App/Resources/descriptions.json scripts/generate-descriptions/seeds/
+git commit -m "chore: refresh descriptions corpus"
+```
+
+The `.cache/` directory (gitignored) holds previously-fetched per-package JSON
+responses. Re-runs are near-instant for cached packages. To force a full refresh:
+
+```bash
+rm -rf scripts/generate-descriptions/.cache/
+python3 scripts/generate-descriptions/generate.py
+```
+
+## Completing the npm Coverage
+
+The committed npm seed list covers ~260 packages. To expand to ~5,000 (top npm
+packages by popularity), delete `seeds/npm-seed-list.json` and re-run — the
+script will page through the npm registry search API and save the expanded list:
+
+```bash
+rm scripts/generate-descriptions/seeds/npm-seed-list.json
+python3 scripts/generate-descriptions/generate.py
+git add scripts/generate-descriptions/seeds/npm-seed-list.json App/Resources/descriptions.json
+git commit -m "chore: expand npm descriptions corpus"
+```
+
+## New Library API
+
+- `DescriptionStore` — `Sendable` struct in `BackshelfCore/Descriptions/DescriptionStore.swift`
+  - `init(contentsOf: URL) throws` — loads the bundled JSON corpus
+  - `init()` — empty store (every lookup returns nil; graceful fallback)
+  - `init(raw: [String: String])` — internal, for tests
+  - `description(for manager: PackageManager, name: String) -> String?` — the lookup
+
+## New App API
+
+- `AppCoordinator.descriptionStore: DescriptionStore` (private-set)
+  - Loaded synchronously in `init()` via `Bundle.main.url(forResource: "descriptions", withExtension: "json")`
+  - Falls back silently to empty store if the file is absent or malformed
+
+## Key Normalization (non-negotiable; tested)
+
+The corpus keys and the lookup normalize identically:
+- **pip/pipx:** PEP 503 — lowercase, runs of `[-_.]` → single `-`. So `Requests`, `requests_oauthlib`, and `requests-oauthlib` all resolve to the same key.
+- **npm:** `lowercased()` only. Scoped names (`@types/node`) are preserved exactly, just lowercased.
+- **brew/brewCask/cargo/gem/mas:** exact match, no normalization.
+
+21 tests in `DescriptionStoreTests.swift` cover all normalization paths explicitly.
+
+## William's Manual Verification Checklist
+
+Run after `./scripts/regenerate-xcode.sh` + clean build + launch:
+
+1. Select `ffmpeg` (or any common Homebrew package) in the package list.
+   - Detail pane header should show a description line below the version, in regular (non-monospaced) font.
+   - Example: "Play, record, convert, and stream audio and video".
+2. Select `requests` (pip package, any interpreter).
+   - Should show the pip description. Verify it appears even if the installed name is lowercase `requests`.
+3. Select an obscure or newly-installed package that was unlikely to be in the corpus
+   (e.g. a one-off pip package from a specific project).
+   - Should show "No description available" in tertiary (gray) color. This is the expected graceful fallback, not an error.
+4. Confirm the description text wraps normally (it's prose, not monospaced). It should look readable, not like a code block.
+5. Confirm re-running the scan does not reset or reload the description store (it's loaded once at startup).
+
+---
+
+# Snapshot-Based Recovery: Diff + Reinstall (2026-05-17)
+
+## Status
+
+Implementation-complete. `swift build` + `swift test` must be verified on hardware.
+William must run the manual checklist below before starting the next goal.
+
+## Design: Why Diff, Not Whole-Snapshot Reinstall
+
+A snapshot taken before a cleanup operation can hold 200+ packages, the vast majority of which are still installed. A "reinstall everything in this snapshot" script would:
+- Re-install packages the user deliberately removed since the snapshot for unrelated reasons
+- Be hundreds of lines of noise for a typical "I removed ffmpeg by accident" recovery
+- Confuse the user about what was actually affected
+
+The feature is therefore a **diff**: `snapshotDiff(snapshot:livePackages:)` returns only the packages that were in the snapshot but are no longer in the live inventory. The checklist UI shows that diff with all items pre-checked. The user unchecks what they don't want, then generates a reinstall script for the remainder.
+
+## Task 2 Return Type Decision
+
+`GeneratedReinstallScript` is a new type with just `scriptText: String` and a `public init(scriptText:)`. It does **not** reuse `GeneratedScript` because `GeneratedScript.skippedReadOnly` and `GeneratedScript.warnedDenylisted` are uninstall-specific fields with no meaning in a reinstall context. The reinstall path has no denylist filtering (reinstalling a common essential is harmless) and no concept of skipped packages (the checklist lets the user exclude items before calling the generator).
+
+## Shell-Escaping Helpers
+
+`shellDoubleQuoteEscape` and `shellEchoLine` were private methods on `ScriptGenerator`. They are now `internal` free functions in `Cleanup/ShellScriptHelpers.swift`, called by both `ScriptGenerator` and `ReinstallScriptGenerator`. No behavior change to the uninstall path.
+
+## Known Limitation: isExplicit for pip and npm
+
+`isExplicit` is always `true` for pip and npm packages (neither manager has an `installed_on_request` equivalent). The diff therefore cannot distinguish user-installed pip/npm packages from transitive dependencies — the restore checklist may offer dependency packages alongside user-installed ones. This is acceptable: reinstalling a dependency explicitly is harmless, and the checklist lets the user skip it. Do NOT attempt to infer explicitness for pip/npm.
+
+## safety.md Updated
+
+The old "Exporting a snapshot as a reinstall script" section described whole-snapshot export — the approach we explicitly rejected. It has been replaced with an accurate description of the diff-based "Restore Missing Packages" flow. A safety doc that describes a superseded feature is a trap for future decisions.
+
+## New Library API Surface
+
+- `MissingPackage` — `Sendable, Identifiable`. Public memberwise `init(manager:package:)`. Computed `id: String` mirrors the `(manager, qualifier, name)` match key.
+- `snapshotDiff(snapshot:livePackages:) -> [MissingPackage]` — free function, pure, testable. Matches on `(manager, qualifier, name)`, not version.
+- `GeneratedReinstallScript` — `Sendable`. Public `init(scriptText:)`.
+- `ReinstallScriptGenerator` — `Sendable`. `generate(missing:) -> GeneratedReinstallScript`.
+
+## New App API Surface
+
+- `ScriptSheetView<Warning: View>` — generic sheet used by both cleanup and reinstall flows. `CleanupScriptSheetView` is now a thin wrapper.
+- `RestoreChecklistSheet` — private, embedded in `SnapshotContentView.swift`. Two-step: checklist → script. Dismissing from either step closes the sheet.
+
+## William's Manual Verification Checklist
+
+Run after `./scripts/regenerate-xcode.sh` + clean build + launch:
+
+### Restore Missing Packages flow
+1. Open a **pre-cleanup snapshot** (one captured before a cleanup run where you removed ≥1 package).
+2. Confirm "Restore Missing Packages…" button is visible in the metadata header, next to "Exit Snapshot".
+3. Click "Restore Missing Packages…" — checklist sheet should appear showing only packages that are no longer installed. Verify the header shows the snapshot reason AND capture date (e.g., "Pre-cleanup snapshot · Captured May 17, 2026 at 3:42 PM").
+4. Confirm all items are pre-checked (blue checkmarks).
+5. Uncheck one item — confirm the count in "Generate Reinstall Script (N)" decrements.
+6. Click "Generate Reinstall Script (N)" — the sheet surface switches to the script view. Verify the script contains `brew install`, `pip install ==version`, etc. for the checked packages.
+7. "Copy to Clipboard" — paste into a text editor and confirm the script is valid bash.
+8. "Save as .sh…" — NSSavePanel opens defaulting to `backshelf-reinstall.sh`.
+9. Click "Done" — the entire sheet closes (back to snapshot content view).
+
+### Nothing missing case
+10. Open the snapshot you just took **right now** (a fresh manual snapshot before anything was removed).
+11. Click "Restore Missing Packages…" — an alert should appear: "Everything in this snapshot is still installed." No checklist, no sheet.
+12. Click "OK" — alert dismisses.
+
+### Existing cleanup flow (confirm no regression)
+13. In normal mode, select ≥1 package for cleanup.
+14. Click "Generate Cleanup Script (N)" — cleanup sheet appears with "Cleanup Script Ready" title and green "Snapshot captured before generation" badge. Script text, Copy, Save, Done all work identically to before.
+
+### Uninstall script header (Task 5)
+15. Open the generated cleanup script in a text editor. The header should say `use "Restore Missing Packages"` (not `use 'Export as reinstall script'`).
+
+---
+
+# Product-Correction: Per-Package Removal as Primary Flow (2026-05-16)
+
+## Rationale
+
+The founding vision for Backshelf was per-package removal with full context — see a package, understand it, remove it. After 5c, the only removal path was batch cleanup mode: "Select for Cleanup" hidden in a toolbar that collapses on narrow windows, requiring the user to select packages before they could do anything. Per-package removal was never surfaced.
+
+This correction makes individual removal a first-class flow without removing the batch path.
+
+## What Shipped
+
+### `ScriptGenerator.removalCommand(for:) -> String?` (library, public)
+
+New public API on `ScriptGenerator`. Returns the single shell command to remove a package, or `nil` for:
+- `isReadOnly == true` — system packages
+- `.mas` — Mac App Store apps (no CLI uninstall exists)
+
+Kept intentionally separate from the private `renderCommand` (script-line renderer). This method owns the nil cases cleanly; `renderCommand` stays script-oriented and private.
+
+12 new library tests in `ScriptGeneratorTests.swift` covering all managers, nil cases, pip qualifier fallback, special characters in paths.
+
+### `AppCoordinator.generateAndShowCleanupScript(packages:)` (refactored)
+
+Signature changed from `generateAndShowCleanupScript()` (read `selectedForCleanup` internally) to `generateAndShowCleanupScript(packages: [Package])` (explicit package list). Both callers pass their selection explicitly:
+- Batch: `coordinator.packages.filter { coordinator.selectedForCleanup.contains($0.id) }`
+- Single: `[package]`
+
+Both paths go through the identical snapshot-then-generate-then-sheet flow. The `.preCleanup` snapshot is captured regardless of how many packages are being removed. One-package removals are exactly where someone nukes `openssl` and needs the undo.
+
+### `PackageDetailView` — removal section
+
+Added below `fieldsSection`, above `rawRecordSection`. Three branches:
+- `isReadOnly`: lock icon + "This is a system package and cannot be removed."
+- `.mas`: info icon + "Mac App Store apps are removed by dragging them from /Applications to the Trash — mas has no uninstall command."
+- Everything else: monospaced selectable command, optional orange denylist warning, "Copy command" button, "Paste into Terminal to run" hint, red "Remove this package…" button (triggers the full sheet with snapshot capture).
+
+View now has `@Environment(AppCoordinator.self)`. `#Preview` updated to inject `.environment(AppCoordinator())`.
+
+### `PackageListView` — context menu + bottom bar (Task 3)
+
+**Context menu:** `PackageRowView` gains an `onRemove: (() -> Void)?` parameter. When non-nil, right-clicking a row shows "Remove…". The closure captures `pkg` (the ForEach iteration value — a struct, captured by value), not `coordinator.selectedPackage`. Read-only and `.mas` packages pass `nil` for `onRemove`, so the menu item is suppressed — the shortcut cannot bypass the rule the primary path enforces.
+
+**Bottom bar (toolbar discoverability fix):** "Select for Cleanup" was in `ToolbarItem(placement: .automatic)`, which collapses into the overflow chevron on narrow windows. Replaced with `.safeAreaInset(edge: .bottom, spacing: 0)`:
+- Normal mode: "Select for Cleanup" right-aligned, `background(.bar)`, separator above.
+- Cleanup mode: "Generate Cleanup Script (N)" left + "Done" right in the same bar.
+- Bar is hidden when `coordinator.packages.isEmpty` (no packages = nothing to clean up).
+
+Sort picker stays in the toolbar (compact, never collapses alone). Batch cleanup is the secondary flow; per-package removal from the detail pane is primary.
+
+## Row Context Menu vs. Button Decision
+
+**Primary:** "Remove this package…" button in `PackageDetailView` — always visible when the package is selected, prominent, red, shows the command before committing.
+
+**Secondary shortcut:** `.contextMenu` on `PackageRowView` — right-click any row → "Remove…". Power-user shortcut that skips opening the detail pane first. Acts on the clicked row's package, not on `coordinator.selectedPackage`.
+
+This pairing matches macOS convention (action in inspector + right-click shortcut) without crowding the row with buttons.
+
+## Safety Invariants Upheld
+
+- `ScriptGenerator.generate` still filters `isReadOnly` packages into `skippedReadOnly` — the generator is the guarantee; UI suppression is the convenience.
+- `.preCleanup` snapshot is captured on every call to `generateAndShowCleanupScript(packages:)`, including single-package calls.
+- No "execute" button was added anywhere. The sheet shows, copies, and saves. The user runs it.
+
+## William's Manual Checklist
+
+Run after `./scripts/regenerate-xcode.sh` + clean build + launch:
+
+### Removal section in detail pane
+1. Click any non-system package (e.g. `ffmpeg`) → detail pane → "Remove" section appears below the fields section.
+2. Monospaced command is shown and text-selectable.
+3. "Copy command" copies just the command (no preamble).
+4. Red "Remove this package…" button triggers the cleanup sheet. Confirm the sheet header shows "Snapshot captured before generation ✓".
+5. Dismiss the sheet → confirm a "Pre-cleanup" snapshot entry appeared in the Snapshots sidebar.
+6. Click a system package (e.g. a pip package under `/usr/bin/python3`) → "Remove" section shows the lock icon + "cannot be removed" message. No command, no button.
+7. If you have a `.mas` package: detail pane shows the drag-to-Trash message. No command, no button.
+8. Click a denylisted package (e.g. `git`, `openssl`) → orange warning banner appears above the command.
+
+### Context menu
+9. Right-click a non-system package row → "Remove…" appears in the context menu.
+10. Click "Remove…" → sheet appears (snapshot captured, same path as the button).
+11. Right-click a read-only package row → no "Remove…" item (context menu may be empty; on macOS an empty `.contextMenu` produces no menu).
+12. Right-click while package B is selected in the list, but right-click package A's row → the sheet should be for package A (closure captures the row's package, not the selection).
+
+### Bottom bar (cleanup discoverability)
+13. With packages loaded, confirm "Select for Cleanup" is visible at the bottom of the package list pane at all window sizes, including narrow (< 500 px wide).
+14. Click it → bottom bar switches to "Generate Cleanup Script (0)" (disabled) + "Done".
+15. Select packages → count updates in the button label.
+16. Click "Generate Cleanup Script (N)" → sheet appears.
+17. Click "Done" → bar returns to "Select for Cleanup" mode, selections cleared.
+18. Sort picker remains in the toolbar and works normally in both modes.
+
+---
+
+# Phase 5c-2 Handoff (2026-05-16)
+
+## Status
+
+Phase 5c-2 is **implementation-complete**. `swift build` passes (zero errors, zero warnings). All 272 library tests pass. **William must verify on hardware** using the checklist below before starting Phase 5d.
+
+Tasks C (Snapshots UI), D (Cleanup Wizard), and E (Onboarding) are complete.
+
+## What Was Built
+
+### Task C — Snapshots UI
+
+**`Backshelf/Sources/BackshelfCore/Models/Snapshot.swift`** — Added `case preCleanup` to `SnapshotReason`. (The model previously had `.manual`, `.preUninstall`, `.autoFirstScan`; `.preCleanup` is used by the cleanup wizard's auto-capture, as required by `files/safety.md` Rule 1.)
+
+**`Backshelf/Sources/BackshelfCore/Models/SidebarSelection.swift`** — Added `case snapshot(UUID)`. The `.snapshot` case:
+- Returns `""` from `userDefaultsKey` and is guarded against in `persistUIPreferences()` (so it's never written to UserDefaults).
+- `init?(userDefaultsKey:)` produces `nil` for any unknown key — restoring a deleted snapshot ID correctly falls through to the default `.all`.
+- `[Package].filtered(by:query:)` returns `[]` for `.snapshot(_)` — snapshot content is rendered by `SnapshotContentView`, not this filter.
+
+**`App/Sources/AppCoordinator.swift`** — Added:
+- `snapshots: [Snapshot]` (private-set, loaded asynchronously) and `snapshotManager: SnapshotManager?`
+- `refreshSnapshots()` — async, awaits `snapshotManager.list()`; called by `autoScanIfNeeded()` and `refresh()`
+- `captureManualSnapshot()` — captures `.manual` snapshot, refreshes list
+- `generateAndShowCleanupScript()` — (1) captures `.preCleanup` snapshot, (2) calls `ScriptGenerator`, (3) stores result in `cleanupSheetScript`
+- `persistUIPreferences()` updated to guard against `.snapshot` case before calling `userDefaultsKey`
+
+**`App/Sources/Views/SidebarView.swift`** — Added `snapshotsSection` as a third section below "Directory Access". Each row is a `NavigationLink(value: SidebarSelection.snapshot(id))` showing the reason label and relative timestamp. Empty state: "No snapshots yet".
+
+**`App/Sources/Views/RootView.swift`** — Routing updated:
+- `content:` pane: switches to `SnapshotContentView(snapshotID:)` when `sidebarSelection == .snapshot(id)`, otherwise `PackageListView`
+- `detail:` pane: shows a `ContentUnavailableView` in snapshot mode (no package detail while browsing snapshots)
+- Added "Snapshot Now" (`camera.viewfinder`) toolbar button next to Refresh — disabled when packages are empty or scan is running
+- Two sheets added: cleanup script sheet (presented when `cleanupSheetScript != nil`) and onboarding sheet (presented when `!onboardingCompleted`)
+
+**`App/Sources/Views/SnapshotContentView.swift`** (NEW) — Lightweight snapshot browser:
+- Metadata header: reason label, formatted capture date, total package count
+- "Exit Snapshot" button (top right) sets `coordinator.sidebarSelection = .all`
+- Per-manager `Section` groups (sorted alphabetically by rawValue), each containing `SnapshotPackageRowView` items
+- `.searchable` filters by name within the snapshot
+- Uses `SnapshotPackage` directly — does NOT synthesize ghost `Package` objects
+- `SnapshotPackageRowView`: name (bold), `ManagerBadge`, version (monospaced), "dependency" label when `isExplicit == false`, interpreter's `lastPathComponent` when qualifier is present
+
+### Task D — Cleanup Wizard
+
+**`App/Sources/AppCoordinator.swift`** — Added:
+- `selectedForCleanup: Set<String>` — Package IDs selected for cleanup (independent of `selectedPackage` / detail pane)
+- `isCleanupMode: Bool` — toggled; default false
+- `cleanupSheetScript: GeneratedScript?` — non-nil triggers the cleanup sheet
+
+**Cleanup mode visibility decision: Toggled (not always-on).** Rationale: always-on checkboxes add a persistent leading column to every row, cluttering the default browsing experience. A toggled mode (via "Select for Cleanup" toolbar button) activates checkboxes only when the user has cleanup intent, matching macOS Mail.app's Edit mode pattern. This is the deliberate choice; it is noted here as required by the task brief.
+
+**`App/Sources/Views/PackageListView.swift`** — Cleanup mode controls:
+- When `isCleanupMode == false`: Sort picker + "Select for Cleanup" (`checkmark.circle`) button in toolbar
+- When `isCleanupMode == true`: "Generate Cleanup Script (N)" button (disabled when 0 selected) + "Done" button; sort picker is hidden
+- `PackageRowView` updated: when `isCleanupMode == true`, shows a leading checkbox (for non-readOnly packages) or a lock icon (for readOnly packages, unselectable per `safety.md` Rule 4). Checkbox tap toggles `selectedForCleanup` independently of `selectedPackage`. Row click still drives `selectedPackage` / detail pane.
+
+**`App/Sources/Views/CleanupScriptSheetView.swift`** (NEW):
+- Header: "Cleanup Script Ready" + "Snapshot captured before generation ✓" (green)
+- Denylist warning banner (orange): appears when `script.warnedDenylisted` is non-empty; lists affected package names
+- Script view: scrollable (vertical + horizontal), monospaced, text-selectable
+- Safety reminder: "Backshelf does not run it for you" — always visible
+- "Copy to Clipboard": writes `scriptText` to `NSPasteboard`
+- "Save as .sh…": `NSSavePanel` defaulting to `backshelf-cleanup.sh`; uses `UTType(filenameExtension: "sh")` (safer than `UTType.shellScript` for macOS 13 compat)
+- "Done": dismisses sheet, sets `cleanupSheetScript = nil`
+
+**Safety invariant upheld:** `generateAndShowCleanupScript()` always captures a snapshot BEFORE calling `ScriptGenerator`. No "execute" button exists anywhere. Script is generated, previewed, copied, or saved only.
+
+### Task E — Onboarding
+
+**`App/Sources/AppCoordinator.swift`** — Added:
+- `onboardingCompleted: Bool` (stored var, initialized from `UserDefaults` at launch)
+- `completeOnboarding()` — sets `onboardingCompleted = true` and writes `backshelf.onboarding.completed` to UserDefaults
+
+**`App/Sources/Views/OnboardingView.swift`** (NEW) — Three-panel sheet:
+- Panel 0 ("Meet Backshelf"): what the app does
+- Panel 1 ("We never delete anything"): the safety / trust message
+- Panel 2 ("Grant access to get started"): "Grant Access to /opt/homebrew" (or `/usr/local` on Intel via `#if arch(arm64)`) + "Skip for Now"
+- Page dots (3 circles, accent-colored for current page)
+- "Skip" button always visible (top-right corner) — sets flag and dismisses
+- "Next" button (pages 0–1, `keyboardShortcut(.defaultAction)`) → "Get Started" controls on page 2
+- Flag is set on completion OR skip (per spec)
+
+**`App/Sources/Views/RootView.swift`** — Sheet presented when `!coordinator.onboardingCompleted`. The sheet's `set:` binding is a no-op (`{ _ in }`) because dismissal is always driven by the `complete()` / Skip actions that write UserDefaults, not by swipe-to-dismiss.
+
+## Decisions
+
+1. **Toggled cleanup mode.** See Task D above.
+
+2. **Snapshots load asynchronously.** `SnapshotManager` is an `actor`; its methods cannot be called synchronously from `AppCoordinator.init()`. Snapshots are loaded in `autoScanIfNeeded()` (and after any capture or refresh), so the sidebar section starts empty and populates quickly. This matches how packages already behave on cold launch.
+
+3. **`.snapshot` excluded from UserDefaults persistence.** `persistUIPreferences()` returns early when `sidebarSelection` is `.snapshot(_)`. On next launch, the selection falls through to the `.all` default. A snapshot UUID from a deleted snapshot must not be persisted and re-presented.
+
+4. **`SnapshotReason.preCleanup` added to library.** The existing `.preUninstall` did not match `safety.md`'s requirement. Adding `.preCleanup` keeps the enum honest and is backward-compatible (new `rawValue = "preCleanup"`; old snapshots decode without issue).
+
+5. **`UTType(filenameExtension: "sh")` instead of `UTType.shellScript`.** `UTType.shellScript` is not guaranteed on macOS 13. The dynamic initializer returns `nil` gracefully (panel shows without content type restriction) vs. a crash.
+
+6. **`SnapshotContentView` uses `SnapshotPackage` directly.** Per the task spec: no ghost `Package` objects synthesized. The view has its own `SnapshotPackageRowView` that reuses `ManagerBadge` but renders from `SnapshotPackage` fields only.
+
+## Limitations
+
+- No "Export as reinstall script" from snapshot view (Phase 5d scope per `safety.md`).
+- No snapshot deletion UI (Phase 5d scope).
+- Snapshot `note` field is unused in the UI (no manual note entry).
+- Cleanup mode exits automatically when "Done" is tapped; it does NOT exit automatically when the sidebar selection changes to a snapshot. The coordinator could add an observer for this, but it's harmless: cleanup mode toolbar items simply don't appear in `SnapshotContentView`.
+- `safetyReminder` in `CleanupScriptSheetView` uses markdown bold syntax (`**...**`) in a `Text` view — requires iOS 15+ / macOS 12+, which is met by the macOS 14.0 deployment target.
+
+## William's Manual Verification Checklist
+
+Run these after `./scripts/regenerate-xcode.sh` + clean build + launch:
+
+### Onboarding (Task E)
+1. **Fresh install simulation:** delete `backshelf.onboarding.completed` from UserDefaults (`defaults delete com.wricchiuti.Backshelf backshelf.onboarding.completed`), then relaunch. The onboarding sheet should appear immediately.
+2. Verify all three panels display and the page dots update.
+3. "Skip" (top right) dismisses and sets the flag — sheet should NOT reappear on next launch.
+4. Repeat step 1, navigate to page 3, tap "Grant Access to /opt/homebrew" — NSOpenPanel opens. Dismiss it. Flag should be set, sheet gone.
+5. Repeat step 1, tap "Skip for Now" on page 3 — same result as step 3.
+
+### Snapshots UI (Task C)
+6. In a fresh-launch state (no prior snapshots): sidebar "Snapshots" section shows "No snapshots yet".
+7. Click "Snapshot Now" (camera icon in toolbar) — button should be disabled until packages are loaded. Once enabled, click it. A new entry should appear in the Snapshots section immediately.
+8. The snapshot row should show "Manual snapshot" and a relative timestamp ("just now" or "0 seconds ago").
+9. Click the snapshot row — middle pane switches to `SnapshotContentView`. Confirm: reason label, capture date, package count are shown at the top; packages grouped by manager; "Exit Snapshot" button visible.
+10. Confirm search filters the snapshot list live.
+11. Click "Exit Snapshot" — returns to `PackageListView` / "All packages" mode.
+12. Generate a cleanup script (Task D, below). Verify a second snapshot row appears labelled "Pre-cleanup".
+
+### Cleanup Wizard (Task D)
+13. In normal mode (no cleanup mode), confirm no checkboxes are visible on package rows.
+14. Click "Select for Cleanup" (checkmark.circle) in the toolbar. Confirm checkboxes appear on non-readOnly rows; lock icons appear on readOnly rows.
+15. Click a few checkboxes — they should turn blue (`checkmark.circle.fill`). Confirm `selectedPackage` and the detail pane are NOT affected by clicking checkboxes.
+16. Click a package row (not the checkbox) — detail pane updates normally. Checkbox state is independent.
+17. Confirm "Generate Cleanup Script (N)" is disabled when 0 selected.
+18. Select ≥1 package, click "Generate Cleanup Script (N)".
+19. Cleanup sheet appears:
+    - Header says "Cleanup Script Ready" with green "Snapshot captured" badge
+    - Script text is visible, monospaced, selectable
+    - Safety reminder "Backshelf does not run it for you" is visible
+    - "Copy to Clipboard" writes script to clipboard
+    - "Save as .sh…" opens NSSavePanel; saving produces a valid `.sh` file
+    - "Done" dismisses the sheet
+20. After dismissing the sheet, confirm a "Pre-cleanup" snapshot appeared in the Snapshots sidebar section.
+21. Select a denylisted package (e.g. `git`, `openssl`, `node`) for cleanup. The sheet should show the orange denylist warning banner.
+22. Click "Done" in cleanup mode toolbar — checkboxes disappear, selection is cleared.
+
+---
+
+# Phase 5c-1 Handoff (2026-05-16)
+
+## Status
+
+Phase 5c-1 is implementation-complete. **William must verify on hardware before starting 5c-2.**
+
+Tasks A, B, G, F are built and all 272 library tests pass with zero warnings. Tasks C, D, E (snapshots UI, cleanup wizard, onboarding) are in Phase 5c-2, pending hardware verification of this batch.
+
+## What Was Built
+
+### Task A — NpmScanner symlink dedup
+
+**`Backshelf/Sources/BackshelfCore/Scanners/NpmScanner.swift`**
+
+Three-layer fix matching the pip/BrewScanner dedup pattern:
+
+1. **`nodeModulesDirs()` version directory sort** — nvm and Volta version dirs are now sorted by path (`$0.path < $1.path`) before being appended. This guarantees deterministic candidate ordering across runs, so the first candidate's pre-resolution URL is stable (important for snapshot diff stability).
+
+2. **`deduplicatedNodeModulesDirs()`** — new private method wrapping `nodeModulesDirs()`. Resolves each candidate dir's symlinks via `DirectoryAccessProvider.resolvingSymlinks(at:)` and skips any whose resolved path has already been seen. First candidate's pre-resolution URL is preserved as the Package qualifier (stable IDs).
+
+3. **`packagesIn()` entry dedup** — for each entry (and scoped-package child) inside a node_modules directory, resolves symlinks and tracks resolved paths in a `Set<String>`. Skips entries that resolve to the same physical directory as a previously-seen entry.
+
+4. **`scan()` defensive dedup** — final `[Package]` is filtered through a `seen: Set<String>` on `Package.id` to catch any residual duplicates not caught by layers 1–3.
+
+**Tests added to `NpmScannerTests.swift`:** `symlinkedNodeModulesDirDeduplicatesPackages`, `symlinkedEntryWithinNodeModulesIsDeduped`, `nvmVersionDirsAreSorted`.
+
+**`InMemoryDirectoryAccessProvider.swift` updated:** `resolvingSymlinks(at:)` now does component-by-component symlink resolution, matching real `FileManager` behaviour. `contentsOfDirectory`, `data(contentsOf:)`, and `modificationDate(at:)` all call `resolvingSymlinks` first so intermediate directory symlinks are followed correctly. All 272 existing tests pass; no regressions.
+
+### Task B — Database persistence via ScanRun + PackageDAO
+
+**New: `Backshelf/Sources/BackshelfCore/Persistence/PackageDAO.swift`**
+
+`public struct PackageDAO: Sendable` — thin wrapper over `Package`'s existing `FetchableRecord`/`PersistableRecord` conformances. Two methods:
+- `loadAll() throws -> [Package]` — reads the full `packages` table
+- `replaceAll(with:) throws` — deletes all rows then inserts the new set in one transaction. `ON DELETE CASCADE` also clears `provenance_evidence`; acceptable in 5c since provenance is not collected at scan time.
+
+No new migration needed — the `packages` table (v1_initial) is complete and `Package` already had full GRDB conformances.
+
+**New: `Backshelf/Sources/BackshelfCore/Persistence/ScanRunDAO.swift`**
+
+`public struct ScanRunDAO: Sendable` — thin wrapper over `ScanRun`'s existing GRDB conformances. Two methods:
+- `save(_ scanRun: ScanRun) throws` — inserts a new row (diagnostic log; rows are not pruned)
+- `mostRecentCompletedAt() throws -> Date?` — raw SQL query, returns the `completed_at` of the most recent `scan_runs` row ordered by `started_at DESC`
+
+**`AppCoordinator.swift` updated:**
+- Holds `private var packageDAO: PackageDAO?` and `private var scanRunDAO: ScanRunDAO?`, both non-nil when `database != nil`
+- `init()` loads cached packages synchronously from `packageDAO.loadAll()` and `lastScanCompletedAt` from `scanRunDAO.mostRecentCompletedAt()` — UI populates instantly before the background re-scan completes
+- `scan()` records `scanStartedAt = Date()` at entry, then after the scan loop: calls `packageDAO.replaceAll(with: packages)` and saves a `ScanRun` record. Both calls use `try?` — errors are swallowed; the worst case is no persistence (next launch is an empty list, auto-scan recovers)
+- New `lastScanSummary: String?` computed property uses `RelativeDateTimeFormatter` ("Last scanned 2 hours ago"); nil when no scan has completed
+
+**Tests added to `PackageDAOTests.swift`:** `loadAllEmpty`, `replaceAllAndLoadAll`, `replaceAllClearsPreviousPackages`, `replaceAllWithEmptyListClearsTable`, `mostRecentCompletedAtEmpty`, `saveThenMostRecent`, `mostRecentAmongMultiple`.
+
+### Task G — Stale-bookmark prompt UI
+
+**`App/Sources/Views/SidebarView.swift`**
+
+In `directoryAccessSection`, stale paths from `coordinator.folderAccess.staleBookmarkPaths` are now rendered above the active grants. Each stale row shows:
+- The directory's `lastPathComponent`
+- Orange caption "Access lost — directory moved or revoked"
+- A "Re-grant" button that calls `coordinator.grantDirectory(suggestedPath: path)`
+
+All stale rows are `.selectionDisabled()`. The empty-state text ("No directories granted") is now suppressed if there are stale entries to show.
+
+### Task F — Inline scan status per manager in sidebar
+
+**`App/Sources/Views/SidebarView.swift`**
+
+**Visibility fix (critical):** A `.failed` or `.timedOut` scanner status no longer hides the manager row even when N=0. Previously, a failed npm scan would yield 0 packages AND a hidden row — the user would never see the failure. Now:
+- Row shown when N > 0 (normal case)
+- Row shown when status is `.failed` or `.timedOut` (error surfacing, regardless of N)
+- Row hidden when `.succeeded(count: 0)` or `.skipped` or status is nil with 0 packages
+
+**Status badge:** A `managerStatusBadge(manager:)` helper returns an orange `exclamationmark.triangle.fill` icon with a `.help()` tooltip showing the failure reason or "Scan timed out". The badge appears trailing inside the label's text slot (using `Label { HStack } icon: { Image }` pattern). Clean states show nothing.
+
+**Limitation:** Per-manager in-progress spinners are not implemented. The global toolbar spinner covers "scan in progress." Adding per-manager spinners requires keeping rows visible during the rescan (which requires not clearing `packages` at scan start, a larger refactor). This is noted for 5c-2 or later.
+
+**Bottom bar update:** `lastScanSummary` (from AppCoordinator) is shown as a tertiary caption below `statusSummary` when a scan has completed.
+
+## Decisions
+
+1. **ScanRun as the persistence medium for last-scan timestamp.** Not UserDefaults. `scan_runs` table was built for this (Phase 2d) and has been sitting unused. `ScanRunDAO.mostRecentCompletedAt()` uses direct SQL to avoid exposing GRDB types to the app layer.
+
+2. **Struct DAOs, not actors.** `PackageDAO` and `ScanRunDAO` are `struct: Sendable` (not actors). `DatabasePool` is already thread-safe internally; the DAOs have no mutable state. `init()` can call them synchronously without an async hop.
+
+3. **`InMemoryDirectoryAccessProvider` component-by-component symlink resolution.** Required to correctly simulate intermediate directory symlinks. Updated `contentsOfDirectory`, `data(contentsOf:)`, and `modificationDate(at:)` all call `resolvingSymlinks` first. Zero test regressions.
+
+4. **Package ID uses pre-resolution path as qualifier.** `deduplicatedNodeModulesDirs()` keeps the first (pre-resolution) URL when it deduplicates. This means IDs are stable across runs even if underlying symlink targets change.
+
+5. **`visibleManagers` visibility rule.** `.failed`/`.timedOut` → visible. `.succeeded(count: 0)` → hidden. `.skipped` → hidden. Nil status with 0 packages → hidden (never scanned, or not a known manager for the current scanners).
+
+## Limitations
+
+- Per-manager in-progress spinners not implemented (global toolbar spinner covers this).
+- `packageDAO.replaceAll` cascades to `provenance_evidence` — all provenance is cleared on each scan. Acceptable in 5c; provenance collection is not wired in the app layer yet (Phase 5d).
+- `scan_runs` rows accumulate and are not pruned. Disk impact negligible; worth pruning in 5d if desired.
+- No optimistic UI during rescan: the package list goes empty then refills as managers complete. A future improvement would keep stale packages visible during rescan.
+
+## William's Manual Verification Checklist
+
+Run these after `./scripts/regenerate-xcode.sh` + clean build + launch:
+
+### Persistence (Task B)
+1. Grant `/opt/homebrew`, let auto-scan complete. Quit the app.
+2. Relaunch: the package list should **populate immediately** (from DB) before any scan runs. Confirm count matches the previous scan.
+3. The bottom of the sidebar should show "Last scanned X ago" (relative time).
+4. Wait for the background re-scan to complete. Confirm the count updates and "Last scanned" resets to "just now".
+
+### NpmScanner dedup (Task A)
+5. Check the Xcode console for `ForEach<...> the ID npm:... occurs multiple times` warnings. There should be **none**.
+6. Click "npm (N)" in the sidebar — the list should filter to npm packages only, no duplicates visible.
+
+### Stale bookmarks (Task G)
+7. In a new terminal: `mv /opt/homebrew /opt/homebrew-bak` (or pick a non-critical granted path). Quit and relaunch Backshelf.
+8. The Directory Access section should show the stale path in orange with a "Re-grant" button.
+9. Clicking "Re-grant" should open NSOpenPanel pre-navigated to that path.
+10. (Restore: `mv /opt/homebrew-bak /opt/homebrew`)
+
+### Scan failure surfacing (Task F)
+11. With `/opt/homebrew` granted, also grant a path no scanner uses (e.g. `~/Documents`).
+12. To simulate a failure: not easily doable without mocking, but after a normal scan, failed/timedOut rows should show an orange warning icon. (Verify in a future session by introducing a timeout.)
+13. Confirm that manager rows with 0 packages but `.succeeded` status are hidden (npm shows if it found packages; hides if N=0 + no failure).
+
+### Bottom bar
+14. Confirm the sidebar bottom bar shows both the package/manager count summary and the "Last scanned" timestamp.
+
+---
+
+> **Next:** Phase 5c-2 (Tasks C, D, E — Snapshots UI, Cleanup Wizard, Onboarding). Start with a fresh `/goal` after hardware verification of this batch.
 
 ---
 

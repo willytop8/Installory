@@ -1,15 +1,19 @@
-/// A plain-English description of a package, loaded read-only from the
-/// bundled descriptions corpus (`descriptions.db`).
+/// A plain-English description of a package.
 ///
-/// The bundled SQLite file is separate from the app's writable database.
-/// There is no writable description table — if a `(manager, name)` pair
-/// is absent from the corpus, the UI shows "No description available".
-///
-/// GRDB conformances are deferred to the `DescriptionStore` implementation
-/// in Phase 1, when the bundled DB path and read-only pool are wired up.
+/// Descriptions are served at runtime by `DescriptionStore`, which loads the
+/// bundled JSON corpus (`descriptions.json`) and answers lookups by
+/// `(manager, name)`. This struct is the domain model for a description entry;
+/// the store uses a plain `[String: String]` dictionary internally for
+/// efficiency and does not persist `Description` values to SQLite.
 public struct Description: Codable, Sendable {
     public let manager: PackageManager
     public let name: String
     /// One to two plain-English sentences suitable for non-technical readers.
     public let text: String
+
+    public init(manager: PackageManager, name: String, text: String) {
+        self.manager = manager
+        self.name = name
+        self.text = text
+    }
 }

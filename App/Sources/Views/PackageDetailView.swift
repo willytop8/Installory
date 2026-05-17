@@ -5,6 +5,7 @@ import SwiftUI
 
 struct PackageDetailView: View {
     let package: Package
+    @Environment(AppCoordinator.self) private var coordinator
     @State private var showRawRecord = false
 
     var body: some View {
@@ -13,6 +14,8 @@ struct PackageDetailView: View {
                 headerSection
                 Divider()
                 fieldsSection
+                Divider()
+                removalSection
                 Divider()
                 rawRecordSection
             }
@@ -32,9 +35,19 @@ struct PackageDetailView: View {
                 Text(package.version)
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.secondary)
-                Text("No description available")
-                    .foregroundStyle(.tertiary)
-                    .font(.callout)
+                if let desc = coordinator.descriptionStore.description(
+                    for: package.manager,
+                    name: package.name
+                ) {
+                    Text(desc)
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("No description available")
+                        .foregroundStyle(.tertiary)
+                        .font(.callout)
+                }
             }
             Spacer(minLength: 0)
             ManagerBadge(manager: package.manager)
@@ -83,6 +96,74 @@ struct PackageDetailView: View {
                         .background(Color.secondary.opacity(0.12))
                         .foregroundStyle(.secondary)
                         .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            }
+        }
+    }
+
+    private var removalSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Remove")
+                .font(.headline)
+
+            if package.isReadOnly {
+                HStack(spacing: 6) {
+                    Image(systemName: "lock.fill")
+                        .foregroundStyle(.secondary)
+                    Text("This is a system package and cannot be removed.")
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                }
+            } else if package.manager == .mas {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                    Text("Mac App Store apps are removed by dragging them from /Applications to the Trash — mas has no uninstall command.")
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                }
+            } else if let cmd = ScriptGenerator().removalCommand(for: package) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if Denylist.default.isDenylisted(package) {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text("Other software commonly depends on this package. Review carefully before removing.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(8)
+                        .background(Color.orange.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+
+                    Text(cmd)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.secondary.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                    HStack(spacing: 8) {
+                        Button("Copy command") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(cmd, forType: .string)
+                        }
+                        .buttonStyle(.borderless)
+                        Spacer(minLength: 0)
+                        Text("Paste into Terminal to run")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    Button {
+                        Task { await coordinator.generateAndShowCleanupScript(packages: [package]) }
+                    } label: {
+                        Label("Remove this package…", systemImage: "trash")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
                 }
             }
         }
@@ -150,5 +231,6 @@ struct PackageDetailView: View {
             lastSeen: Date()
         )
     )
+    .environment(AppCoordinator())
     .frame(width: 400, height: 600)
 }
