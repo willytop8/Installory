@@ -1,32 +1,32 @@
-name: Backshelf
+name: Installory
 
 options:
-  bundleIdPrefix: app.backshelf
+  bundleIdPrefix: app.installory
   deploymentTarget:
     macOS: "14.0"
 
-# Local SPM package. The Backshelf/ subdirectory at repo root is the
+# Local SPM package. The Installory/ subdirectory at repo root is the
 # Swift package (contains Package.swift). project.yml lives at repo root.
 packages:
-  Backshelf:
-    path: ./Backshelf
+  Installory:
+    path: ./Installory
 
 targets:
-  Backshelf:
+  Installory:
     type: application
     platform: macOS
     deploymentTarget: "14.0"
-    bundleId: app.backshelf.mac
+    bundleId: app.installory.mac
     info:
       path: App/Info.plist
     entitlements:
-      path: App/Backshelf.entitlements
+      path: App/Installory.entitlements
     sources:
       - App/Sources
       - App/Resources
     dependencies:
-      - package: Backshelf
-        product: BackshelfCore
+      - package: Installory
+        product: InstalloryCore
     settings:
       base:
         MACOSX_DEPLOYMENT_TARGET: "14.0"

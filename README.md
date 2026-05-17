@@ -1,4 +1,4 @@
-# Backshelf
+# Installory
 
 A native macOS app that inventories your installed packages across Homebrew, pip, and npm — and helps you understand when you installed them and why. For the full product story, see [files/PRODUCT.md](files/PRODUCT.md).
 
@@ -11,20 +11,20 @@ A native macOS app that inventories your installed packages across Homebrew, pip
 
 **Steps:**
 ```bash
-./scripts/regenerate-xcode.sh   # generates Backshelf.xcodeproj from project.yml
-open Backshelf.xcodeproj         # open in Xcode
+./scripts/regenerate-xcode.sh   # generates Installory.xcodeproj from project.yml
+open Installory.xcodeproj         # open in Xcode
 ```
 
-In Xcode, go to the Backshelf target → Signing & Capabilities → set your Development Team, then press ⌘R.
+In Xcode, go to the Installory target → Signing & Capabilities → set your Development Team, then press ⌘R.
 
-> The `Backshelf.xcodeproj` file is gitignored intentionally. `project.yml` is the source of truth; regenerate the project any time you pull changes that touch it.
+> The `Installory.xcodeproj` file is gitignored intentionally. `project.yml` is the source of truth; regenerate the project any time you pull changes that touch it.
 
 ## Library tests
 
-The `BackshelfCore` library has its own test suite (248 tests). Run without Xcode:
+The `InstalloryCore` library has its own test suite (248 tests). Run without Xcode:
 
 ```bash
-cd Backshelf
+cd Installory
 swift test
 ```
 
@@ -32,11 +32,11 @@ swift test
 
 ```
 project.yml          XcodeGen source of truth for the Xcode project
-Backshelf/           Swift Package containing BackshelfCore library
+Installory/           Swift Package containing InstalloryCore library
 App/
 ├── Sources/         App-layer Swift sources
 ├── Resources/       Assets.xcassets (app icon, etc.)
-├── Backshelf.entitlements
+├── Installory.entitlements
 └── Info.plist
 scripts/
 └── regenerate-xcode.sh

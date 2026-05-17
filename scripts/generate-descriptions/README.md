@@ -1,4 +1,4 @@
-# Backshelf Description Corpus Generator
+# Installory Description Corpus Generator
 
 Build-time tool that fetches one-line package descriptions from Homebrew, PyPI,
 and npm registries and produces `App/Resources/descriptions.json`. The JSON file

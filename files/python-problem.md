@@ -2,7 +2,7 @@
 
 Python deserves its own document because it's the messiest manager to scan and the riskiest to modify. Read before touching anything pip-related.
 
-> **A note on sandboxing.** Backshelf is a sandboxed Mac App Store app. We never invoke any python binary — we only read files. But "only read files" still requires the user to grant Backshelf access to the directories where Python interpreters live: `~/.pyenv`, `~/.local/share/uv/python`, `~/.local/share/pipx`, `~/miniforge3`, `~/anaconda3`, and any project venv roots they want included. The first-launch onboarding asks for access to the ones we can detect. The Settings → Permissions tab lets the user add more later. When access to a directory is denied, the affected interpreters show up in the UI as "permission denied" rather than silently disappearing.
+> **A note on sandboxing.** Installory is a sandboxed Mac App Store app. We never invoke any python binary — we only read files. But "only read files" still requires the user to grant Installory access to the directories where Python interpreters live: `~/.pyenv`, `~/.local/share/uv/python`, `~/.local/share/pipx`, `~/miniforge3`, `~/anaconda3`, and any project venv roots they want included. The first-launch onboarding asks for access to the ones we can detect. The Settings → Permissions tab lets the user add more later. When access to a directory is denied, the affected interpreters show up in the UI as "permission denied" rather than silently disappearing.
 
 ## The problem
 
@@ -177,7 +177,7 @@ The UI groups packages by interpreter under the "Python" manager label, showing 
 
 ## What cleanup-script generation means for pip
 
-Backshelf never removes anything directly. The cleanup script we generate (see `docs/safety.md`) emits the right command for each kind of interpreter; the user runs it in Terminal.
+Installory never removes anything directly. The cleanup script we generate (see `docs/safety.md`) emits the right command for each kind of interpreter; the user runs it in Terminal.
 
 - **System Python:** filtered out entirely. Cannot appear in a generated script. UI greys these out with the explanation: "These packages are part of macOS or Xcode Command Line Tools and removing them can break system functionality."
 - **Homebrew Python:** emit `<interpreter> -m pip uninstall -y <pkg>` with a `# WARNING:` comment noting that some Homebrew formulae depend on Python packages.

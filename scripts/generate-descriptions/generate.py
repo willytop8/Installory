@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Backshelf descriptions corpus generator.
+Installory descriptions corpus generator.
 
 Fetches one-line package descriptions from:
   - Homebrew formulae and casks  (bulk API — two requests total)
@@ -135,7 +135,7 @@ def normalize_npm(name: str) -> str:
 # HTTP helpers
 # ---------------------------------------------------------------------------
 
-_UA = "Backshelf-description-generator/1.0 (https://github.com/wricchiuti/Backshelf)"
+_UA = "Installory-description-generator/1.0 (https://github.com/wricchiuti/Installory)"
 
 
 def _get(url: str, retries: int = 3) -> bytes:
@@ -451,7 +451,7 @@ def fetch_npm(limit: int | None) -> dict[str, str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate Backshelf package descriptions corpus."
+        description="Generate Installory package descriptions corpus."
     )
     parser.add_argument(
         "--limit",

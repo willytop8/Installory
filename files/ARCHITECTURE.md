@@ -1,6 +1,6 @@
 # ARCHITECTURE.md
 
-How Backshelf is organized as code. Read this before making structural changes.
+How Installory is organized as code. Read this before making structural changes.
 
 ## Stack choices and reasoning
 
@@ -60,7 +60,7 @@ How Backshelf is organized as code. Read this before making structural changes.
 ### Foundation
 
 - **`PathDiscovery`** — locates package manager *directories* (`/opt/homebrew`, `~/.cargo`, `~/.pyenv/versions/*`, etc.) by checking known prefixes. Returns `URL?`s. We read files at these locations; we never invoke binaries.
-- **`FolderAccessManager`** — wraps `NSOpenPanel` + security-scoped bookmarks. The user grants Backshelf access to specific directories on first launch (or when a scanner reports it can't see its target); we persist those bookmarks so access survives launches.
+- **`FolderAccessManager`** — wraps `NSOpenPanel` + security-scoped bookmarks. The user grants Installory access to specific directories on first launch (or when a scanner reports it can't see its target); we persist those bookmarks so access survives launches.
 - **`Database`** — GRDB DatabasePool, schema migrations, low-level DAO helpers.
 
 ### Scanners
@@ -88,8 +88,8 @@ See [`docs/provenance.md`](docs/provenance.md).
 
 ### Safety
 
-- **`SnapshotManager`** — creates and lists snapshots. A snapshot is an export manifest (Brewfile-style) of the user's current inventory. Backshelf never restores a snapshot itself; it exports the snapshot as a reinstall shell script the user runs in Terminal.
-- **`ScriptGenerator`** — given a selection of packages to remove, builds a dependency-aware shell script (with `set -e`, verbose echoes, and commented-out denylist lines). The script is what the user copies or saves; Backshelf never executes it.
+- **`SnapshotManager`** — creates and lists snapshots. A snapshot is an export manifest (Brewfile-style) of the user's current inventory. Installory never restores a snapshot itself; it exports the snapshot as a reinstall shell script the user runs in Terminal.
+- **`ScriptGenerator`** — given a selection of packages to remove, builds a dependency-aware shell script (with `set -e`, verbose echoes, and commented-out denylist lines). The script is what the user copies or saves; Installory never executes it.
 
 ## Concurrency model
 
@@ -101,7 +101,7 @@ See [`docs/provenance.md`](docs/provenance.md).
 
 ## Persistence
 
-A single SQLite database at `~/Library/Application Support/Backshelf/backshelf.db`.
+A single SQLite database at `~/Library/Application Support/Installory/installory.db`.
 
 Conceptual schema (see [`docs/data-model.md`](docs/data-model.md) for the full DDL):
 
@@ -136,7 +136,7 @@ When adding a new scanner, the workflow is:
 These are deliberately not in scope. If you find yourself reaching for them, stop and check with the maintainer:
 
 - Plugin system for third-party scanners
-- IPC between Backshelf and a CLI tool
+- IPC between Installory and a CLI tool
 - Daemon / background process
 - iCloud sync
 - Custom shell, terminal emulator, or REPL

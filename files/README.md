@@ -1,4 +1,4 @@
-# Backshelf
+# Installory
 
 A native macOS app that helps you understand and clean up the packages cluttering your machine across every package manager you've used — Homebrew, pip, npm, and more.
 
@@ -6,11 +6,11 @@ A native macOS app that helps you understand and clean up the packages clutterin
 
 ## What it does
 
-If you've spent the last year coding with AI assistants, you've probably run `brew install` and `pip install` and `npm install -g` dozens of times based on whatever Claude or Cursor told you to. Backshelf scans every package manager on your Mac, explains each package in plain English, traces when and why you installed it, and helps you safely remove the stuff you don't need anymore.
+If you've spent the last year coding with AI assistants, you've probably run `brew install` and `pip install` and `npm install -g` dozens of times based on whatever Claude or Cursor told you to. Installory scans every package manager on your Mac, explains each package in plain English, traces when and why you installed it, and helps you safely remove the stuff you don't need anymore.
 
 ## Why it exists
 
-The existing tools — Homebrew's CLI, `pip list`, GUI wrappers like Taphouse, multi-manager dashboards like GlazePKG — all assume you already know what `libpng` is and why it's on your machine. They show lists. They don't explain. They don't tell you what you were doing the day you installed something. Backshelf is for everyone who let an AI install software on their behalf and now can't remember which projects depended on what.
+The existing tools — Homebrew's CLI, `pip list`, GUI wrappers like Taphouse, multi-manager dashboards like GlazePKG — all assume you already know what `libpng` is and why it's on your machine. They show lists. They don't explain. They don't tell you what you were doing the day you installed something. Installory is for everyone who let an AI install software on their behalf and now can't remember which projects depended on what.
 
 ## Tech stack
 

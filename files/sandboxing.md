@@ -1,15 +1,15 @@
 # Sandboxing
 
-How Backshelf works as a sandboxed Mac App Store app. Read before touching anything related to file access, entitlements, or first-launch onboarding.
+How Installory works as a sandboxed Mac App Store app. Read before touching anything related to file access, entitlements, or first-launch onboarding.
 
 ## The model
 
-Backshelf is sandboxed. That has two big consequences:
+Installory is sandboxed. That has two big consequences:
 
 1. **We cannot invoke external binaries.** No `Process`, no `posix_spawn`, no shelling out to `brew`, `pip`, `npm`, or anything else. Every scanner works by reading files directly.
 2. **We cannot read user files outside our container by default.** To read `/opt/homebrew/Cellar/`, `~/.cargo/.crates2.json`, `~/.pyenv/versions/`, etc., the user has to grant us access explicitly through `NSOpenPanel`. Once granted, we persist the grant as a *security-scoped bookmark* so it survives launches.
 
-The trade-off: we ship through the App Store, the user gets automatic updates, Apple has reviewed the app, and the user has explicit control over which folders Backshelf can see. We give up the ability to run anything; we gain a much stronger trust posture.
+The trade-off: we ship through the App Store, the user gets automatic updates, Apple has reviewed the app, and the user has explicit control over which folders Installory can see. We give up the ability to run anything; we gain a much stronger trust posture.
 
 ## Entitlements
 
@@ -31,7 +31,7 @@ The whole sandbox dance hinges on `NSOpenPanel` + security-scoped bookmarks.
 
 ### How the grant works
 
-1. We show an `NSOpenPanel` with `canChooseFiles = false`, `canChooseDirectories = true`, the dialog message tailored to the directory we're asking for ("Grant Backshelf read access to your Homebrew folder"), and `directoryURL` set as a hint.
+1. We show an `NSOpenPanel` with `canChooseFiles = false`, `canChooseDirectories = true`, the dialog message tailored to the directory we're asking for ("Grant Installory read access to your Homebrew folder"), and `directoryURL` set as a hint.
 2. The user picks a folder.
 3. We receive a `URL` for which the sandbox has granted *transient* access.
 4. We immediately create a security-scoped bookmark from that URL and persist it (in our own UserDefaults under our container).
@@ -74,12 +74,12 @@ Scanners always go through `withAccess` so they can't forget to call `startAcces
 
 ### First-launch onboarding
 
-On first launch, Backshelf asks for access to the package manager directories we can detect on the user's machine. The flow:
+On first launch, Installory asks for access to the package manager directories we can detect on the user's machine. The flow:
 
-1. Welcome card explaining what Backshelf does and that it needs read access to a few directories.
+1. Welcome card explaining what Installory does and that it needs read access to a few directories.
 2. For each detected manager directory (Homebrew prefix, ~/.cargo, ~/.pyenv/versions if it exists, ~/.local/share/pipx/venvs if it exists, etc.), show a row with:
    - The directory path
-   - A one-line explanation ("Reading this lets Backshelf see your Homebrew formulae")
+   - A one-line explanation ("Reading this lets Installory see your Homebrew formulae")
    - A "Grant access" button
 3. The user can grant any subset they're comfortable with. Skipping is fine; that manager will simply show "permission denied" status in the inventory.
 4. Provenance signals (`~/.zsh_history`, `~/.bash_history`, `~/.claude`) are asked for separately, with extra explanation because they contain sensitive content. The default is "Skip for now"; the user can grant later in Settings → Permissions.
@@ -101,7 +101,7 @@ Clicking "Grant access" opens the Permissions tab with the relevant row pre-focu
 ```
 We can't see your Homebrew folder.
 
-Backshelf needs read access to /opt/homebrew (or /usr/local on Intel Macs)
+Installory needs read access to /opt/homebrew (or /usr/local on Intel Macs)
 to list your installed formulae.
 
 [ Grant access in Settings ]
@@ -115,9 +115,9 @@ If the user revokes access later (deletes the bookmark, moves the directory, or 
 
 These are real product gaps the user should expect, and they should be documented in the Permissions tab and in the FAQ:
 
-- **No execution of any command.** Backshelf generates a cleanup script; the user runs it. This is by design and we'd keep it even without the sandbox, but the sandbox makes it a hard constraint, not a choice.
+- **No execution of any command.** Installory generates a cleanup script; the user runs it. This is by design and we'd keep it even without the sandbox, but the sandbox makes it a hard constraint, not a choice.
 - **Mac App Store apps (the `mas` manager) cannot be enumerated.** Listing `/Applications` is too noisy to be useful, and the `mas` CLI is the only practical inventory source. We report this as a known gap (see `docs/scanners.md`).
-- **No system-wide hooks.** No background daemon, no LaunchAgent. Backshelf is a foreground app only.
+- **No system-wide hooks.** No background daemon, no LaunchAgent. Installory is a foreground app only.
 - **No automatic interactive directory walks beyond the granted root.** If the user grants `/opt/homebrew`, we can walk inside that subtree freely. But if a package's metadata points to `/Users/will/something-else`, we can't follow that link unless that path is also granted.
 - **No invocation of the user's shell to read environment.** We can't ask `zsh` for the user's `$PATH`. We have hardcoded prefix discovery in `PathDiscovery` instead.
 
@@ -141,4 +141,4 @@ The two failure modes — "user never granted" and "user previously granted but 
 
 ## Future: the non-sandboxed direct-download build
 
-`ROADMAP.md` notes the possibility of a non-sandboxed Developer-ID-signed build for users who want Backshelf to perform the uninstall itself. If we ship that, this document needs a companion section explaining the symmetric set of behaviors: that build would *not* go through NSOpenPanel for every directory (it'd just read), would *not* need security-scoped bookmarks, but *would* still treat the cleanup script as the source of truth — running it via the user's preferred shell rather than asking the user to copy-paste. The two builds would share 95%+ of their code; the differences live entirely in `FolderAccessManager` and the cleanup wizard's final action.
+`ROADMAP.md` notes the possibility of a non-sandboxed Developer-ID-signed build for users who want Installory to perform the uninstall itself. If we ship that, this document needs a companion section explaining the symmetric set of behaviors: that build would *not* go through NSOpenPanel for every directory (it'd just read), would *not* need security-scoped bookmarks, but *would* still treat the cleanup script as the source of truth — running it via the user's preferred shell rather than asking the user to copy-paste. The two builds would share 95%+ of their code; the differences live entirely in `FolderAccessManager` and the cleanup wizard's final action.

@@ -2,4 +2,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 xcodegen generate
-echo "✓ Backshelf.xcodeproj regenerated"
+echo "✓ Installory.xcodeproj regenerated"

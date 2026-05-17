@@ -1,6 +1,6 @@
 # Description Sources and Attribution
 
-The `descriptions.json` corpus bundled with Backshelf contains short
+The `descriptions.json` corpus bundled with Installory contains short
 one-line package summaries sourced from the following public APIs:
 
 ## Homebrew
@@ -28,7 +28,7 @@ one-line package summaries sourced from the following public APIs:
 
 ---
 
-Backshelf uses only the short summary/description field from each registry —
+Installory uses only the short summary/description field from each registry —
 no README content, no source code. All descriptions are one-line factual
 summaries of what a package does. This use is consistent with the public
 nature of package registries, whose purpose is precisely to make package

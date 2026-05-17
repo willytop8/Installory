@@ -1,1 +1,1 @@
-// SidebarSelection is defined in BackshelfCore.
+// SidebarSelection is defined in InstalloryCore.

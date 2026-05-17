@@ -1,4 +1,4 @@
-import BackshelfCore
+import InstalloryCore
 import Foundation
 
 struct CanonicalDirectory: Identifiable, Sendable {

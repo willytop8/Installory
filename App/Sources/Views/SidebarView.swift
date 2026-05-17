@@ -1,4 +1,4 @@
-import BackshelfCore
+import InstalloryCore
 import SwiftUI
 
 struct SidebarView: View {
@@ -10,15 +10,16 @@ struct SidebarView: View {
         List(selection: $coordinator.sidebarSelection) {
             packageManagerSection
             directoryAccessSection
+            snapshotsSection
         }
         .listStyle(.sidebar)
-        .navigationTitle("Backshelf")
+        .navigationTitle("Installory")
         .safeAreaInset(edge: .bottom) {
             bottomBar
         }
     }
 
-    // MARK: - Sections
+    // MARK: - Package Managers section (Task F)
 
     private var packageManagerSection: some View {
         Section("Package Managers") {
@@ -29,7 +30,15 @@ struct SidebarView: View {
             ForEach(visibleManagers, id: \.self) { manager in
                 let count = coordinator.packages.filter { $0.manager == manager }.count
                 NavigationLink(value: SidebarSelection.manager(manager)) {
-                    Label("\(manager.displayName) (\(count))", systemImage: manager.sidebarSymbol)
+                    Label {
+                        HStack(spacing: 4) {
+                            Text("\(manager.displayName) (\(count))")
+                            Spacer(minLength: 0)
+                            managerStatusBadge(manager: manager)
+                        }
+                    } icon: {
+                        Image(systemName: manager.sidebarSymbol)
+                    }
                 }
             }
 
@@ -42,11 +51,36 @@ struct SidebarView: View {
         }
     }
 
+    // MARK: - Directory Access section (Tasks F + G)
+
     @ViewBuilder
     private var directoryAccessSection: some View {
         Section("Directory Access") {
+            // Task G: stale bookmarks with Re-grant affordance
+            let stalePaths = coordinator.folderAccess.staleBookmarkPaths.sorted()
+            ForEach(stalePaths, id: \.self) { path in
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(URL(fileURLWithPath: path).lastPathComponent)
+                            .lineLimit(1)
+                        Text("Access lost — directory moved or revoked")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    Spacer(minLength: 0)
+                    Button("Re-grant") {
+                        Task { await coordinator.grantDirectory(suggestedPath: path) }
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .help("Re-open the access panel for \(path)")
+                }
+                .selectionDisabled()
+            }
+
+            // Active grants
             let granted = coordinator.grantedDirectories
-            if granted.isEmpty {
+            if granted.isEmpty && stalePaths.isEmpty {
                 Text("No directories granted")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -67,6 +101,48 @@ struct SidebarView: View {
         }
     }
 
+    // MARK: - Snapshots section
+
+    @ViewBuilder
+    private var snapshotsSection: some View {
+        Section("Snapshots") {
+            if coordinator.snapshots.isEmpty {
+                Text("No snapshots yet")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .selectionDisabled()
+            } else {
+                ForEach(coordinator.snapshots) { snapshot in
+                    NavigationLink(value: SidebarSelection.snapshot(snapshot.id)) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(snapshotReasonLabel(snapshot.reason))
+                                .fontWeight(.medium)
+                                .lineLimit(1)
+                            Text(relativeDate(snapshot.createdAt))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func snapshotReasonLabel(_ reason: SnapshotReason) -> String {
+        switch reason {
+        case .manual: return "Manual snapshot"
+        case .preCleanup: return "Pre-cleanup"
+        case .preUninstall: return "Pre-uninstall"
+        case .autoFirstScan: return "First scan"
+        }
+    }
+
+    private func relativeDate(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
     // MARK: - Bottom bar
 
     private var bottomBar: some View {
@@ -75,6 +151,13 @@ struct SidebarView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let summary = coordinator.lastScanSummary {
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             HStack(spacing: 6) {
                 Menu {
@@ -104,11 +187,45 @@ struct SidebarView: View {
         .background(.bar)
     }
 
-    // MARK: - Helpers
+    // MARK: - Helpers (Task F)
 
+    /// Managers to show in the sidebar.
+    ///
+    /// Rule: show if the manager has ≥1 package from the current scan, OR its status
+    /// is `.failed`/`.timedOut` (surfacing errors even when N=0). Managers with
+    /// `.succeeded(count: 0)` or `.skipped` stay hidden — clean noise reduction.
     private var visibleManagers: [PackageManager] {
-        let seen = Set(coordinator.packages.map(\.manager))
-        return PackageManager.allCases.filter { seen.contains($0) }
+        let hasPackages = Set(coordinator.packages.map(\.manager))
+        return PackageManager.allCases.filter { manager in
+            if hasPackages.contains(manager) { return true }
+            if let status = coordinator.scanStatuses[manager] {
+                switch status {
+                case .failed, .timedOut: return true
+                default: return false
+                }
+            }
+            return false
+        }
+    }
+
+    /// Returns a non-nil warning message when the manager's last scan failed or timed out.
+    private func scanWarning(for manager: PackageManager) -> String? {
+        guard let status = coordinator.scanStatuses[manager] else { return nil }
+        switch status {
+        case .failed(let reason, _): return reason
+        case .timedOut: return "Scan timed out"
+        default: return nil
+        }
+    }
+
+    @ViewBuilder
+    private func managerStatusBadge(manager: PackageManager) -> some View {
+        if let warning = scanWarning(for: manager) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .imageScale(.small)
+                .help(warning)
+        }
     }
 }
 

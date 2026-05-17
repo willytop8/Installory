@@ -21,7 +21,7 @@ When you come back, read this file first. Total time to resume: ~10 minutes.
 ### 1. Check what's actually committed
 
 ```bash
-cd /Users/willy/Desktop/Projects/Backshelf
+cd /Users/willy/Desktop/Projects/Installory
 git log --oneline -10
 git status
 ```
@@ -37,7 +37,7 @@ If any are missing from `git log`, they're uncommitted. `git status` will show w
 
 ```bash
 ./scripts/regenerate-xcode.sh
-open Backshelf.xcodeproj
+open Installory.xcodeproj
 ```
 
 In Xcode: **Cmd+Shift+K** (Clean Build Folder), then **Cmd+R**.
@@ -107,10 +107,10 @@ The `/goal` prompt skeleton is in HANDOFF.md. Scope is meaty (~100-120 turns). C
 ## Key context
 
 - **Test count: 262** (44 → 65 → 82 → 99 → 107 → 122 → 157 → 205 → 221 → 248 → 256 → 260 → 262)
-- **Bundle ID locked: `app.backshelf.mac`**
-- **Domain: `backshelf.app` (registered or to-register on Cloudflare/Namecheap)**
+- **Bundle ID locked: `app.installory.mac`**
+- **Domain: `installory.app` (registered or to-register on Cloudflare/Namecheap)**
 - **Deployment target: macOS 14.0 (Sonoma) for app; library at 13.0**
-- **XcodeGen as source of truth; `Backshelf.xcodeproj/` gitignored.** Always regenerate after pulling changes that touch project structure.
+- **XcodeGen as source of truth; `Installory.xcodeproj/` gitignored.** Always regenerate after pulling changes that touch project structure.
 - **All scanners use `DirectoryAccessProvider` protocol — never `FileManager.default` directly.** This is what lets the library run in-memory tests and in the sandboxed app with security-scoped bookmarks.
 
 ---

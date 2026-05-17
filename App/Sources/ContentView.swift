@@ -1,4 +1,4 @@
 import SwiftUI
 
-// Thin shim so BackshelfApp.swift needs no changes.
+// Thin shim so InstalloryApp.swift needs no changes.
 typealias ContentView = RootView

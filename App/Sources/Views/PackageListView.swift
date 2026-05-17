@@ -1,4 +1,4 @@
-import BackshelfCore
+import InstalloryCore
 import SwiftUI
 
 struct PackageListView: View {
@@ -10,23 +10,28 @@ struct PackageListView: View {
         Group {
             if coordinator.packages.isEmpty {
                 emptyState
-            } else if coordinator.filteredPackages.isEmpty {
+            } else if coordinator.filteredPackages.isEmpty && !coordinator.isCleanupMode {
                 noMatchState
             } else {
                 packageList
             }
         }
         .searchable(text: $coordinator.searchQuery, placement: .toolbar, prompt: "Filter packages")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            cleanupBottomBar
+        }
         .toolbar {
             ToolbarItem(placement: .automatic) {
-                Picker("Sort", selection: $coordinator.sortOrder) {
-                    ForEach(PackageSortOrder.allCases, id: \.self) { order in
-                        Text(order.displayName).tag(order)
+                if !coordinator.isCleanupMode {
+                    Picker("Sort", selection: $coordinator.sortOrder) {
+                        ForEach(PackageSortOrder.allCases, id: \.self) { order in
+                            Text(order.displayName).tag(order)
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .help("Sort order")
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .help("Sort order")
             }
         }
         .navigationTitle("Packages")
@@ -59,13 +64,68 @@ struct PackageListView: View {
             ContentUnavailableView {
                 Label("No Packages Found", systemImage: "shippingbox")
             } description: {
-                Text("Backshelf didn't find any packages in the granted directories.")
+                Text("Installory didn't find any packages in the granted directories.")
             }
         }
     }
 
     private var noMatchState: some View {
         ContentUnavailableView.search(text: coordinator.searchQuery)
+    }
+
+    // MARK: - Cleanup bottom bar
+
+    @ViewBuilder
+    private var cleanupBottomBar: some View {
+        if !coordinator.packages.isEmpty {
+            VStack(spacing: 0) {
+                Divider()
+                if coordinator.isCleanupMode {
+                    cleanupModeBar
+                } else {
+                    selectForCleanupBar
+                }
+            }
+        }
+    }
+
+    private var cleanupModeBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                let selected = coordinator.packages.filter { coordinator.selectedForCleanup.contains($0.id) }
+                Task { await coordinator.generateAndShowCleanupScript(packages: selected, captureSnapshot: true) }
+            } label: {
+                Label(
+                    "Generate Cleanup Script (\(coordinator.selectedForCleanup.count))",
+                    systemImage: "doc.text"
+                )
+            }
+            .disabled(coordinator.selectedForCleanup.isEmpty)
+            Spacer()
+            Button("Done") {
+                coordinator.isCleanupMode = false
+                coordinator.selectedForCleanup = []
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    private var selectForCleanupBar: some View {
+        HStack {
+            Spacer()
+            Button {
+                coordinator.isCleanupMode = true
+            } label: {
+                Label("Select for Cleanup", systemImage: "checkmark.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("Select packages to generate a cleanup script")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
     }
 
     // MARK: - Package list
@@ -82,7 +142,21 @@ struct PackageListView: View {
                 }
             )
         ) { pkg in
-            PackageRowView(package: pkg)
+            PackageRowView(
+                package: pkg,
+                isCleanupMode: coordinator.isCleanupMode,
+                isSelectedForCleanup: coordinator.selectedForCleanup.contains(pkg.id),
+                onToggleCleanup: {
+                    if coordinator.selectedForCleanup.contains(pkg.id) {
+                        coordinator.selectedForCleanup.remove(pkg.id)
+                    } else if !pkg.isReadOnly {
+                        coordinator.selectedForCleanup.insert(pkg.id)
+                    }
+                },
+                onRemove: (!pkg.isReadOnly && pkg.manager != .mas) ? {
+                    Task { await coordinator.requestRemoval([pkg]) }
+                } : nil
+            )
         }
         .listStyle(.inset)
     }
@@ -92,9 +166,29 @@ struct PackageListView: View {
 
 private struct PackageRowView: View {
     let package: Package
+    var isCleanupMode: Bool = false
+    var isSelectedForCleanup: Bool = false
+    var onToggleCleanup: (() -> Void)? = nil
+    var onRemove: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
+            if isCleanupMode {
+                if package.isReadOnly {
+                    Image(systemName: "lock")
+                        .foregroundStyle(.tertiary)
+                        .imageScale(.small)
+                        .help("Read-only system package — cannot be removed")
+                } else {
+                    Button {
+                        onToggleCleanup?()
+                    } label: {
+                        Image(systemName: isSelectedForCleanup ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(isSelectedForCleanup ? Color.accentColor : Color.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(package.name)
@@ -115,6 +209,13 @@ private struct PackageRowView: View {
             }
         }
         .padding(.vertical, 2)
+        .contextMenu {
+            if let onRemove {
+                Button("Remove…", systemImage: "trash") {
+                    onRemove()
+                }
+            }
+        }
     }
 
     private func installDateText(_ date: Date) -> String {

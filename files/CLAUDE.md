@@ -1,10 +1,10 @@
 # CLAUDE.md
 
-Project-specific guidance for Claude Code working in the Backshelf repo.
+Project-specific guidance for Claude Code working in the Installory repo.
 
 ## What this project is
 
-Backshelf is a native macOS app that helps non-technical "vibe coders" understand and clean up the packages they've installed across multiple package managers (Homebrew, pip, npm, and more). It scans, explains each package in plain language, traces provenance ("when did I install this and what was I doing?"), and offers safe cleanup with mandatory snapshots.
+Installory is a native macOS app that helps non-technical "vibe coders" understand and clean up the packages they've installed across multiple package managers (Homebrew, pip, npm, and more). It scans, explains each package in plain language, traces provenance ("when did I install this and what was I doing?"), and offers safe cleanup with mandatory snapshots.
 
 The target user is someone who started coding with Claude Code or Cursor in the last 18 months, followed AI-given install instructions, and now has a Mac full of packages they couldn't name on a quiz. Every design decision should be evaluated against: **does this make that user feel safer and more in control, or less?**
 
@@ -46,7 +46,7 @@ Then, when working on a specific subsystem, also read its doc in `docs/`:
 ### File organization
 
 ```
-Backshelf/
+Installory/
 ├── App/                    # @main entry, scene setup, top-level coordinators
 ├── Models/                 # Plain value types (Package, Snapshot, etc.)
 ├── Persistence/            # GRDB setup, migrations, DAOs
@@ -94,7 +94,7 @@ To be filled in as the project develops. Expected entries:
 
 - `swift build` — build the package
 - `swift test` — run tests
-- `xcodebuild -scheme Backshelf -configuration Debug build` — Xcode build
+- `xcodebuild -scheme Installory -configuration Debug build` — Xcode build
 - `./scripts/generate-descriptions.sh` — regenerate the bundled descriptions corpus from upstream registries (maintainer-only, build-time)
 
 ## Notes for the agent
@@ -102,5 +102,5 @@ To be filled in as the project develops. Expected entries:
 - This is a private repo. Treat it as a real product, not a sketch.
 - The app **IS sandboxed** (Mac App Store target). We never invoke external binaries; the entire inventory comes from reading filesystem locations (INSTALL_RECEIPT.json, dist-info/, .crates2.json, etc.) via user-granted directory access. Distribution and updates are handled by the App Store; no Sparkle, no notarization.
 - There is **no network integration in v1**. Descriptions are bundled (generated at build time by a maintainer script that pulls from upstream registries — formulae.brew.sh, PyPI, npm registry, crates.io); provenance narratives are template-rendered Swift strings. The app makes zero network calls at runtime.
-- Backshelf is **read-only**: we don't uninstall, install, or upgrade anything. The "cleanup" feature generates a shell script the user runs themselves in Terminal.
+- Installory is **read-only**: we don't uninstall, install, or upgrade anything. The "cleanup" feature generates a shell script the user runs themselves in Terminal.
 - When in doubt about UX, err on the side of *honest about what we can't determine*, not *confident-sounding guess*. The trust we're building with non-technical users is the product.

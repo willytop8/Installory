@@ -2,6 +2,222 @@
 
 ---
 
+# Renamed Backshelf → Installory (2026-05-17)
+
+## What changed
+
+- **SPM package dir**: `Backshelf/` → `Installory/` (via `git mv`; blame preserved)
+- **Library target**: `BackshelfCore` → `InstalloryCore`; source dir `Sources/BackshelfCore/` → `Sources/InstalloryCore/`; test dir `Tests/BackshelfCoreTests/` → `Tests/InstalloryCoreTests/`
+- **App entry point**: `BackshelfApp.swift` → `InstalloryApp.swift`; `struct BackshelfApp` → `struct InstalloryApp`
+- **Bundle ID**: `app.backshelf.mac` → `app.installory.mac` in `project.yml`
+- **Entitlements file**: `App/Backshelf.entitlements` → `App/Installory.entitlements`
+- **Database filename**: `backshelf.db` → `installory.db` (Application Support; container resets anyway — see below)
+- **Application Support subdir**: `~/…/Application Support/Backshelf/` → `…/Installory/`
+- **All source identifiers, comments, doc-comments, and UI strings**: `Backshelf` → `Installory`, `backshelf` → `installory`
+- **All docs** under `files/`, root `README.md`, `NEXT-SESSION.md`, scripts
+
+## UserDefaults keys — intentionally kept as "backshelf.*"
+
+The six UserDefaults keys (`backshelf.ui.*`, `backshelf.settings.*`, `backshelf.onboarding.completed`) were **not renamed**. Renaming them would silently drop every existing user's settings, sort preference, onboarding flag, and snapshot preference on first launch after the update — no migration, no fallback, just a silent reset. Pre-release the install base is small, but the precedent is wrong. An explanatory comment marks these keys in `AppCoordinator.swift`.
+
+## Bundle ID change — container reset
+
+Because the bundle ID changed from `app.backshelf.mac` to `app.installory.mac`, macOS moves the app's sandbox container from:
+
+```
+~/Library/Containers/app.backshelf.mac/
+```
+to a new, empty container at:
+```
+~/Library/Containers/app.installory.mac/
+```
+
+**Consequence**: the local SQLite database and any snapshots stored in the old container are not accessible to the new build. This is expected and acceptable pre-release — a clean local slate.
+
+## William's manual follow-up checklist
+
+- [ ] Rename the git root directory: `mv ../Backshelf ../Installory` (or Finder rename)
+- [ ] Regenerate the Xcode project: `./scripts/regenerate-xcode.sh`
+- [ ] Clean DerivedData for the old scheme (Xcode → Product → Clean Build Folder, or delete `~/Library/Developer/Xcode/DerivedData/Backshelf-*`)
+- [ ] Verify the new sandbox container `~/Library/Containers/app.installory.mac/` is created on first launch
+
+---
+
+# Phase 5d-2: Provenance UI + Settings (2026-05-17)
+
+## Status
+
+Implementation-complete. `swift build` + `swift test` pass (315 tests, zero warnings — library
+unchanged). **William must verify on hardware** using the checklist below before shipping.
+
+## Architecture decisions
+
+### Provenance wiring (Task 1)
+
+`ProvenanceCollector` and `ProvenanceDAO` were fully built in Phase 4 but had no call site.
+Task 1 wires them into `AppCoordinator.scan()` after every successful scan:
+
+1. `packageDAO.replaceAll(with:)` persists the fresh package list (FK prerequisite).
+   The `ON DELETE CASCADE` on `provenance_evidence` wipes stale evidence automatically.
+2. `ProvenanceCollector().collect(packages:)` runs inside `Task.detached(priority: .utility)`
+   because it performs real filesystem I/O (shell history + `~/.claude/projects/*.jsonl` walks).
+   `ProvenanceCollector` and `[Package]` are both `Sendable`; the detached task is safe.
+3. Evidence rows are upserted one-at-a-time via `await provenanceDAO.upsert(e)`.
+   Each call hops to the DAO actor (off main thread for the SQLite write), then returns.
+   200 packages ≈ 200 hops ≈ negligible overhead; main thread is never blocked.
+4. `AppCoordinator.provenanceByPackageId` is updated in one atomic assignment after all
+   upserts complete. The detail pane never sees a partially-filled dict.
+5. The entire step is skipped when `provenanceCollection == false` (Task 3 setting).
+
+### Detail pane layout (Task 2)
+
+Section order: **description (header) → fields → provenance → remove → raw record.**
+Provenance is context, not action; it lives between fields (what is it?) and removal (what do I
+do with it?) without competing for the user's attention. The section is omitted entirely when
+`coordinator.provenanceCollection == false` — no empty section, no placeholder.
+
+`PackageDetailView` reads `coordinator.provenanceByPackageId[package.id]` directly. No async
+fetch, no `@State` for evidence — the coordinator dict is `@Observable` so changes (from a
+background rescan's provenance re-collection) re-render the view automatically. During the brief
+window between a scan clearing the DB and provenance being re-collected, the old dict entry stays
+in memory, so the user sees the previous evidence without any flicker.
+
+Three states the section can show:
+- **Evidence found**: narrative sentence from `NarrativeRenderer` + optional confidence badge
+  (medium/low/unknown). High confidence shows no badge — it doesn't need the disclaimer.
+- **No evidence** (`nil` in dict after a scan): quiet "Install origin unknown." in tertiary color.
+  This is the expected state for old packages without shell history or Claude Code logs.
+  It is NOT presented as an error.
+- **Disabled** (setting off): section is not rendered at all.
+
+### Settings window (Task 3)
+
+`BackshelfApp` now has a `Settings` scene alongside `WindowGroup`. The same `coordinator`
+instance is injected into both scenes, so `SettingsView` binds directly to coordinator
+properties — one source of truth, live reactivity.
+
+Three preferences, all under the `backshelf.settings.` UserDefaults prefix:
+
+| Preference | Key | Type | Default |
+|---|---|---|---|
+| Snapshot before per-package removal | `snapshotBeforeRemoval` | `SnapshotPreference` | `.ask` |
+| Scan on launch | `scanOnLaunch` | `Bool` | `true` |
+| Provenance collection | `provenanceCollection` | `Bool` | `true` |
+
+The `SnapshotPreference` enum lives in the App module (not `BackshelfCore`). Nothing in the
+library needs to know about snapshot preference — it's purely a UI/coordinator concern.
+
+Bool defaults are `true`. `restoreSettings()` uses `UserDefaults.object(forKey:) != nil` to
+distinguish "never written" (keep `true` default) from "explicitly written `false`".
+
+### Removal flow (Task 4)
+
+All per-package removal routes through `AppCoordinator.requestRemoval(_ packages: [Package])`:
+- **Always** → `generateAndShowCleanupScript(packages:captureSnapshot: true)`
+- **Never** → `generateAndShowCleanupScript(packages:captureSnapshot: false)`
+- **Ask** → sets `coordinator.pendingRemovalPackages`, raising the snapshot-choice dialog
+
+**One dialog, one code path.** Both the detail-pane button and the row context menu call
+`coordinator.requestRemoval([package])`. `RootView` presents `SnapshotChoiceSheet` when
+`pendingRemovalPackages != nil`. The sheet calls `coordinator.confirmRemoval(packages:takeSnapshot:remember:)`
+or `coordinator.cancelRemoval()`. No per-view dialog duplication.
+
+`generateAndShowCleanupScript` now takes an explicit `captureSnapshot: Bool` parameter.
+Batch cleanup in `PackageListView` always passes `captureSnapshot: true` — the setting does not
+affect batch mode.
+
+The detail pane's "Remove this package…" button label is now setting-aware through
+`guidedRemovalCaption`, which explains what will happen (snapshot / no snapshot / you'll be
+asked) without the user needing to open Settings first.
+
+## Files added / modified
+
+| File | Change |
+|---|---|
+| `App/Sources/Models/SnapshotPreference.swift` | NEW — 3-state enum for snapshot preference |
+| `App/Sources/AppCoordinator.swift` | Major additions — settings, provenance, removal flow |
+| `App/Sources/BackshelfApp.swift` | Added `Settings` scene with coordinator injection |
+| `App/Sources/Views/SettingsView.swift` | NEW — grouped Form bound to coordinator |
+| `App/Sources/Views/SnapshotChoiceSheet.swift` | NEW — coordinator-driven "Ask" dialog |
+| `App/Sources/Views/RootView.swift` | Added snapshot-choice sheet |
+| `App/Sources/Views/PackageDetailView.swift` | Provenance section + updated removal button |
+| `App/Sources/Views/PackageListView.swift` | Context menu + batch cleanup updated |
+
+## Known limitations (documented, not solved)
+
+- **Provenance coverage is uneven.** Old packages without shell history or Claude Code
+  sessions will show "Install origin unknown." This is expected and by design — the app is
+  honest about what it doesn't know.
+- **pip `(manager, name)` qualifier collision** in provenance matching (Phase 4c known issue):
+  multiple pip packages with the same name but different interpreter qualifiers share one bucket.
+  First match wins. Not addressed in this phase.
+- **`nearbyProjects` is always `[]`**: the git-walk signal was deferred in Phase 4 and remains
+  unimplemented.
+
+## William's manual verification checklist
+
+Run after `./scripts/regenerate-xcode.sh` + clean build + launch.
+
+### Settings (Task 3)
+
+1. Open **Backshelf › Settings…** (or press ⌘,). The Settings window should open with three
+   sections: Snapshots, Scanning, Provenance.
+2. Verify "Snapshot before removing a package" has three options (Always / Ask each time / Never)
+   with Ask selected by default on a fresh install.
+3. Toggle "Scan on launch" off → quit and relaunch. The app should NOT auto-scan on launch;
+   the package list should populate from the cached DB only (no scan spinner).
+4. Toggle it back on → relaunch → auto-scan fires normally.
+5. Toggle "Collect provenance" off → navigate to any package detail pane. The provenance
+   section should be absent (no empty section, no "Install origin unknown", nothing).
+6. Toggle it back on.
+
+### Provenance in detail pane (Task 2)
+
+7. Run a full scan (⌘R). After the scan completes, navigate to a Homebrew package installed
+   within the last few months.
+8. If provenance evidence was found: a sentence appears between the fields section and the
+   Remove section. Should read naturally ("Installed about 3 weeks ago via `brew install ffmpeg`
+   in your terminal."). NOT bold, NOT in a callout box.
+9. If provenance evidence was not found (old package, no matching history): quiet
+   "Install origin unknown." appears in gray tertiary color. This should NOT look like an error.
+10. Select a package that was installed via Claude Code (if any). The narrative should reference
+    the project path and session context.
+11. For a medium or low confidence package, a small "Medium confidence" / "Low confidence" badge
+    appears below the narrative. It should be subtle (muted color, small text).
+12. Section order in the detail pane: description header → fields → provenance → Remove →
+    Show raw record. Verify this ordering is correct.
+
+### Snapshot preference in the removal flow (Task 4)
+
+13. With setting = **Ask** (default): click "Remove this package…" on any non-system package.
+    A sheet should appear asking "Take a snapshot before removing [name]?" with a
+    "Remember my choice" toggle and two buttons: "Skip Snapshot" and "Take Snapshot".
+14. Tap "Take Snapshot" — sheet dismisses, cleanup script sheet opens with the green
+    "Snapshot captured" badge.
+15. Tap "Skip Snapshot" instead — cleanup script sheet opens WITHOUT the snapshot badge.
+16. Repeat step 13 but check "Remember my choice" before tapping "Take Snapshot". Setting
+    should flip to "Always" (verify in Settings window). Re-triggering removal should now
+    proceed without the dialog.
+17. Reset preference to "Ask" in Settings. Check "Remember my choice" + "Skip Snapshot" →
+    preference should flip to "Never". Removal now proceeds directly without snapshot.
+18. Set preference to **Always** directly in Settings → click "Remove this package…" →
+    no dialog, goes directly to cleanup script sheet with snapshot badge.
+19. Set preference to **Never** → click "Remove this package…" → no dialog, cleanup script
+    sheet with NO snapshot badge.
+20. Right-click a package row → "Remove…" (context menu) → same behavior as the button;
+    the dialog or direct-proceed depends on the current preference.
+21. **Batch cleanup is unaffected**: enter cleanup mode, select packages, "Generate Cleanup
+    Script (N)" always takes a snapshot regardless of preference.
+
+### Caption accuracy
+
+22. With setting = "Always": the caption below "Remove this package…" reads "Takes a snapshot
+    first so you can undo, then generates a removal script."
+23. With setting = "Never": caption reads "Generates a removal script without taking a snapshot."
+24. With setting = "Ask": caption reads "You'll be asked whether to take a snapshot first."
+
+---
+
 # Phase 5d-1: Package Descriptions Corpus (2026-05-17)
 
 ## Status

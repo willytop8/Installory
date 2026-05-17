@@ -134,7 +134,7 @@ Descriptions are loaded read-only from the bundled SQLite corpus. There is no wr
 
 ### `Snapshot`
 
-> A snapshot is an **export manifest** (Brewfile-style): a record of every package installed at a moment in time. Backshelf never restores a snapshot itself. Restoration is the user running the reinstall script Backshelf generates from the snapshot.
+> A snapshot is an **export manifest** (Brewfile-style): a record of every package installed at a moment in time. Installory never restores a snapshot itself. Restoration is the user running the reinstall script Installory generates from the snapshot.
 
 ```swift
 struct Snapshot: Codable, Identifiable {

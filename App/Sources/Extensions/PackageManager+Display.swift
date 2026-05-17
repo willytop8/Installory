@@ -1,4 +1,4 @@
-import BackshelfCore
+import InstalloryCore
 import SwiftUI
 
 extension PackageManager {

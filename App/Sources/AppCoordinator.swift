@@ -1,5 +1,15 @@
-import BackshelfCore
+import InstalloryCore
 import Foundation
+
+/// The result of a cleanup-script generation, carrying both the script and
+/// whether a snapshot was actually captured. The sheet uses `snapshotTaken`
+/// to decide whether to show the snapshot-captured confirmation — it must not
+/// claim a snapshot exists when the user chose to skip it.
+struct CleanupResult: Identifiable {
+    let id = UUID()
+    let script: GeneratedScript
+    let snapshotTaken: Bool
+}
 
 @Observable
 @MainActor
@@ -27,11 +37,34 @@ final class AppCoordinator {
 
     var selectedForCleanup: Set<String> = []
     var isCleanupMode: Bool = false
-    var cleanupSheetScript: GeneratedScript? = nil
+    var cleanupResult: CleanupResult? = nil
 
     // MARK: - Onboarding
 
+    // UserDefaults keys retain the "backshelf." prefix from a prior product name.
+    // Kept deliberately — renaming them would orphan existing users' settings. Not worth a migration.
     var onboardingCompleted: Bool = UserDefaults.standard.bool(forKey: "backshelf.onboarding.completed")
+
+    // MARK: - Settings
+
+    var snapshotBeforeRemoval: SnapshotPreference = .ask
+    var scanOnLaunch: Bool = true
+    var provenanceCollection: Bool = true
+
+    // MARK: - Removal flow (coordinator-driven "Ask" dialog)
+
+    /// Non-nil when the user triggered a per-package removal and the snapshot
+    /// preference is `.ask`. RootView presents the snapshot-choice sheet while
+    /// this is set; the sheet clears it on confirm or cancel.
+    var pendingRemovalPackages: [Package]? = nil
+
+    // MARK: - Provenance
+
+    /// In-memory provenance evidence keyed by package id, populated after each scan.
+    /// Updated atomically at the end of provenance collection; never partially filled.
+    /// Stale entries for removed packages are harmless — they're never selected.
+    private(set) var provenanceByPackageId: [String: ProvenanceEvidence] = [:]
+    private var provenanceDAO: ProvenanceDAO?
 
     // MARK: - Description corpus
 
@@ -51,16 +84,14 @@ final class AppCoordinator {
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first {
-            let dir = appSupport.appendingPathComponent("Backshelf", isDirectory: true)
+            let dir = appSupport.appendingPathComponent("Installory", isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             if let db = try? Database(directory: dir) {
                 database = db
                 packageDAO = PackageDAO(database: db)
                 scanRunDAO = ScanRunDAO(database: db)
                 snapshotManager = SnapshotManager(database: db)
-                // Load the last persisted scan synchronously so the UI populates before the
-                // first background re-scan completes. Errors are swallowed — the fallback
-                // is an empty list, which auto-scan corrects shortly after launch.
+                provenanceDAO = ProvenanceDAO(database: db)
                 packages = (try? packageDAO!.loadAll()) ?? []
                 lastScanCompletedAt = try? scanRunDAO!.mostRecentCompletedAt()
             }
@@ -68,6 +99,7 @@ final class AppCoordinator {
 
         folderAccess.loadPersistedBookmarks()
         restoreUIPreferences()
+        restoreSettings()
         loadDescriptionStore()
     }
 
@@ -116,7 +148,7 @@ final class AppCoordinator {
     // MARK: - Actions
 
     func autoScanIfNeeded() async {
-        guard folderAccess.hasAnyGrant else { return }
+        guard folderAccess.hasAnyGrant, scanOnLaunch else { return }
         await refreshSnapshots()
         await scan()
     }
@@ -144,6 +176,15 @@ final class AppCoordinator {
         }
     }
 
+    func persistSettings() {
+        UserDefaults.standard.set(
+            snapshotBeforeRemoval.rawValue,
+            forKey: "backshelf.settings.snapshotBeforeRemoval"
+        )
+        UserDefaults.standard.set(scanOnLaunch, forKey: "backshelf.settings.scanOnLaunch")
+        UserDefaults.standard.set(provenanceCollection, forKey: "backshelf.settings.provenanceCollection")
+    }
+
     func completeOnboarding() {
         onboardingCompleted = true
         UserDefaults.standard.set(true, forKey: "backshelf.onboarding.completed")
@@ -160,19 +201,79 @@ final class AppCoordinator {
         await refreshSnapshots()
     }
 
-    func generateAndShowCleanupScript(packages packagesToRemove: [Package]) async {
+    // MARK: - Removal flow
+
+    /// Entry point for all per-package removal. Checks the snapshot preference
+    /// and either proceeds immediately or raises pending-removal state so RootView
+    /// can present the snapshot-choice sheet. Both the detail pane and the row
+    /// context menu call this method — one code path regardless of entry point.
+    func requestRemoval(_ packages: [Package]) async {
+        guard !packages.isEmpty else { return }
+        switch snapshotBeforeRemoval {
+        case .always:
+            await generateAndShowCleanupScript(packages: packages, captureSnapshot: true)
+        case .never:
+            await generateAndShowCleanupScript(packages: packages, captureSnapshot: false)
+        case .ask:
+            pendingRemovalPackages = packages
+        }
+    }
+
+    /// Called by SnapshotChoiceSheet when the user answers the snapshot question.
+    /// Clears the pending state (dismisses the sheet), optionally persists the choice,
+    /// then proceeds to script generation.
+    func confirmRemoval(packages: [Package], takeSnapshot: Bool, remember: Bool) async {
+        if remember {
+            snapshotBeforeRemoval = takeSnapshot ? .always : .never
+            persistSettings()
+        }
+        pendingRemovalPackages = nil
+        await generateAndShowCleanupScript(packages: packages, captureSnapshot: takeSnapshot)
+    }
+
+    /// Called when the user dismisses the snapshot-choice sheet without choosing.
+    func cancelRemoval() {
+        pendingRemovalPackages = nil
+    }
+
+    /// Generates a cleanup script, optionally capturing a snapshot first.
+    ///
+    /// - Parameters:
+    ///   - packagesToRemove: The packages to remove.
+    ///   - captureSnapshot: When `true`, a `.preCleanup` snapshot is captured before
+    ///     generating the script. Batch cleanup always passes `true`. Per-package
+    ///     removal routes through `requestRemoval(_:)` which resolves the preference.
+    ///
+    /// The snapshot records exactly the packages this operation will remove — it is
+    /// the restore point for *this cleanup*, so its scope matches the generated
+    /// script. The restore flow diffs it against live inventory to find what to
+    /// reinstall.
+    ///
+    /// The resulting `CleanupResult` records whether a snapshot was *actually*
+    /// captured — not merely requested. If `captureSnapshot` is true but the
+    /// capture fails, `snapshotTaken` is false, so the sheet never claims a
+    /// snapshot exists when it does not.
+    func generateAndShowCleanupScript(packages packagesToRemove: [Package], captureSnapshot: Bool) async {
         guard !packagesToRemove.isEmpty else { return }
 
         var snapshotCtx: SnapshotContext? = nil
-        if let sm = snapshotManager {
-            if let snap = try? await sm.capture(packages: packages, reason: .preCleanup, note: nil) {
+        if captureSnapshot, let sm = snapshotManager {
+            // The snapshot captures the packages being removed — it is the
+            // restore point for this specific cleanup, so its scope matches
+            // the generated script.
+            if let snap = try? await sm.capture(
+                packages: packagesToRemove,
+                reason: .preCleanup,
+                note: nil
+            ) {
                 snapshotCtx = SnapshotContext(id: snap.id, createdAt: snap.createdAt)
                 await refreshSnapshots()
             }
         }
 
         let generator = ScriptGenerator()
-        cleanupSheetScript = generator.generate(packages: packagesToRemove, snapshot: snapshotCtx)
+        let script = generator.generate(packages: packagesToRemove, snapshot: snapshotCtx)
+        cleanupResult = CleanupResult(script: script, snapshotTaken: snapshotCtx != nil)
     }
 
     // MARK: - Private
@@ -188,13 +289,30 @@ final class AppCoordinator {
         }
     }
 
+    private func restoreSettings() {
+        if let raw = UserDefaults.standard.string(forKey: "backshelf.settings.snapshotBeforeRemoval"),
+           let pref = SnapshotPreference(rawValue: raw) {
+            snapshotBeforeRemoval = pref
+        }
+        // Bool defaults are `false` in UserDefaults when not yet set, but our
+        // defaults for both flags are `true`. Guard with object(forKey:) to
+        // distinguish "never written" (keep true) from "explicitly written false".
+        if UserDefaults.standard.object(forKey: "backshelf.settings.scanOnLaunch") != nil {
+            scanOnLaunch = UserDefaults.standard.bool(forKey: "backshelf.settings.scanOnLaunch")
+        }
+        if UserDefaults.standard.object(forKey: "backshelf.settings.provenanceCollection") != nil {
+            provenanceCollection = UserDefaults.standard.bool(
+                forKey: "backshelf.settings.provenanceCollection"
+            )
+        }
+    }
+
     private func loadDescriptionStore() {
         guard let url = Bundle.main.url(forResource: "descriptions", withExtension: "json"),
               let store = try? DescriptionStore(contentsOf: url) else { return }
         descriptionStore = store
     }
 
-    // Compile-time arch check. Correct for native binaries; Rosetta processes return false.
     private var isAppleSilicon: Bool {
         #if arch(arm64)
         return true
@@ -211,9 +329,6 @@ final class AppCoordinator {
         let scanStartedAt = Date()
         defer { isScanning = false }
 
-        // Start security-scoped access for all granted bookmarks before any scanner runs.
-        // All scanners use SystemDirectoryAccessProvider (FileManager) which cannot see
-        // directories outside the sandbox container without this.
         var accessedURLs: [URL] = []
         for (_, data) in folderAccess.grantedBookmarks() {
             if let url = folderAccess.startAccessing(data) {
@@ -249,7 +364,6 @@ final class AppCoordinator {
 
         lastScanCompletedAt = Date()
 
-        // Persist the fresh package list and record this scan run.
         if let dao = packageDAO {
             try? dao.replaceAll(with: packages)
         }
@@ -261,6 +375,24 @@ final class AppCoordinator {
                 perManagerResults: scanStatuses
             )
             try? dao.save(scanRun)
+        }
+
+        // Provenance collection runs off the main thread after packages are persisted.
+        // packageDAO.replaceAll cascades ON DELETE CASCADE through provenance_evidence,
+        // so collection always runs fresh and there are no stale rows to upsert over.
+        // FK ordering is satisfied: packages row exists before provenance_evidence row.
+        if provenanceCollection, let dao = provenanceDAO {
+            let pkgs = packages
+            let evidence = await Task.detached(priority: .utility) {
+                ProvenanceCollector().collect(packages: pkgs)
+            }.value
+            for e in evidence {
+                try? await dao.upsert(e)
+            }
+            // Atomic swap — the detail pane never sees a partial dict.
+            provenanceByPackageId = Dictionary(
+                uniqueKeysWithValues: evidence.map { ($0.packageId, $0) }
+            )
         }
     }
 }

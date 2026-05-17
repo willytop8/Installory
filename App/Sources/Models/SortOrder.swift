@@ -1,4 +1,4 @@
-import BackshelfCore
+import InstalloryCore
 import Foundation
 
 enum PackageSortOrder: String, CaseIterable, Sendable {

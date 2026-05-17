@@ -1,6 +1,6 @@
 # Descriptions
 
-How Backshelf gets a plain-English description of every package on the user's machine. The bundled corpus is the whole story — there are no live lookups and no LLM in the runtime.
+How Installory gets a plain-English description of every package on the user's machine. The bundled corpus is the whole story — there are no live lookups and no LLM in the runtime.
 
 ## Why this matters
 
@@ -55,8 +55,8 @@ Run periodically (quarterly?) and commit the updated `descriptions.db` to the re
 
 ```bash
 cd scripts/generate-descriptions
-swift run backshelf-descriptions \
-    --output ../../Backshelf/Resources/descriptions.db \
+swift run installory-descriptions \
+    --output ../../Installory/Resources/descriptions.db \
     --checkpoint ./checkpoint.json
 ```
 

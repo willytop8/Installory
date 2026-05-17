@@ -9,7 +9,7 @@ final class FolderAccessManager {
     private(set) var staleBookmarkPaths: Set<String> = []
 
     private var storedBookmarks: [String: Data] = [:]
-    private let defaultsKey = "app.backshelf.bookmarks"
+    private let defaultsKey = "app.installory.bookmarks"
 
     // MARK: - Launch
 
@@ -46,7 +46,7 @@ final class FolderAccessManager {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.message = "Grant Backshelf read access to this folder"
+        panel.message = "Grant Installory read access to this folder"
         panel.prompt = "Grant Access"
         panel.directoryURL = suggestedURL
 
