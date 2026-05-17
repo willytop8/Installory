@@ -48,7 +48,7 @@ struct ScriptGeneratorTests {
         let result = generator.generate(packages: [])
         let script = result.scriptText
 
-        #expect(script.hasPrefix("#!/bin/bash\n"))
+        #expect(script.hasPrefix("#!/usr/bin/env bash\n"))
         #expect(script.contains("set -euo pipefail"))
         #expect(result.skippedReadOnly.isEmpty)
         #expect(result.warnedDenylisted.isEmpty)

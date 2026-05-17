@@ -211,7 +211,7 @@ private struct PackageRowView: View {
         .padding(.vertical, 2)
         .contextMenu {
             if let onRemove {
-                Button("Remove…", systemImage: "trash") {
+                Button("Create Removal Script…", systemImage: "doc.text") {
                     onRemove()
                 }
             }

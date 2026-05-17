@@ -18,19 +18,19 @@ When starting work in this repo, read in this order:
 4. `ARCHITECTURE.md` — high-level system design
 5. `ROADMAP.md` — current milestone and what comes next
 
-Then, when working on a specific subsystem, also read its doc in `docs/`:
+Then, when working on a specific subsystem, also read its doc in `files/`:
 
 | Working on | Read |
 | --- | --- |
-| Adding or modifying scanners | `docs/scanners.md` |
-| Anything Python-related | `docs/python-problem.md` |
-| The provenance pipeline | `docs/provenance.md` |
-| Description generation (bundled corpus) | `docs/descriptions.md` |
-| Cleanup script generation or snapshots | `docs/safety.md` (every time, no exceptions) |
-| Data model changes | `docs/data-model.md` |
-| SwiftUI views and screens | `docs/ui.md` |
-| Build, signing, App Store release | `docs/build-and-release.md` |
-| Sandbox model, entitlements, folder access | `docs/sandboxing.md` |
+| Adding or modifying scanners | `files/scanners.md` |
+| Anything Python-related | `files/python-problem.md` |
+| The provenance pipeline | `files/provenance.md` |
+| Description generation (bundled corpus) | `files/descriptions.md` |
+| Cleanup script generation or snapshots | `files/safety.md` (every time, no exceptions) |
+| Data model changes | `files/data-model.md` |
+| SwiftUI views and screens | `files/ui.md` |
+| Build, signing, App Store release | `files/build-and-release.md` |
+| Sandbox model, entitlements, folder access | `files/sandboxing.md` |
 
 ## Conventions
 
@@ -75,7 +75,7 @@ Installory/
 
 ### Things to never do
 
-- **Never** generate a cleanup script without first capturing a snapshot. See `docs/safety.md`.
+- Batch cleanup always captures a `.preCleanup` snapshot before generating a script. Per-package removal respects the `snapshotBeforeRemoval` preference (Always / Ask / Never); generating a script without a snapshot is correct when the user has chosen Never. See `files/safety.md`.
 - **Never** mark system Python (`/usr/bin/python3`, `/Library/Developer/CommandLineTools/...`) packages as removable. They're filtered out of cleanup scripts; enforced in the model layer too.
 - **Never** invoke external binaries via `Process`. The app is sandboxed and read-only — we read filesystem only.
 - **Never** make a network call at app runtime. All data is local or bundled. Description metadata is fetched only by the maintainer's `scripts/generate-descriptions/` build-time tool.

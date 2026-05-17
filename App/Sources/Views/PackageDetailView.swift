@@ -183,7 +183,7 @@ struct PackageDetailView: View {
 
     private var removalSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Remove")
+            Text("Removal Script")
                 .font(.headline)
 
             if package.isReadOnly {

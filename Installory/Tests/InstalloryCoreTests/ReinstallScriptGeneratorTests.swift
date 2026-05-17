@@ -29,14 +29,14 @@ struct ReinstallScriptGeneratorTests {
     @Test func scriptHasShebangAndSafetyFlags() {
         let result = generator.generate(missing: [makeMissing(manager: .brew, name: "ffmpeg")])
         let script = result.scriptText
-        #expect(script.hasPrefix("#!/bin/bash\n"))
+        #expect(script.hasPrefix("#!/usr/bin/env bash\n"))
         #expect(script.contains("set -euo pipefail"))
     }
 
     @Test func emptyMissingListProducesHeaderOnly() {
         let result = generator.generate(missing: [])
         let script = result.scriptText
-        #expect(script.hasPrefix("#!/bin/bash\n"))
+        #expect(script.hasPrefix("#!/usr/bin/env bash\n"))
         #expect(script.contains("set -euo pipefail"))
         #expect(!script.contains("brew install"))
         #expect(!script.contains("pip install"))
@@ -188,7 +188,7 @@ struct ReinstallScriptGeneratorTests {
     // MARK: - GeneratedReinstallScript public init
 
     @Test func generatedReinstallScriptHasPublicInit() {
-        let gs = GeneratedReinstallScript(scriptText: "#!/bin/bash\n")
-        #expect(gs.scriptText == "#!/bin/bash\n")
+        let gs = GeneratedReinstallScript(scriptText: "#!/usr/bin/env bash\n")
+        #expect(gs.scriptText == "#!/usr/bin/env bash\n")
     }
 }

@@ -29,9 +29,27 @@ struct CleanupScriptSheetView: View {
             Label("Snapshot captured before generation", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
                 .font(.callout)
+        } else if result.snapshotFailed {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Snapshot could not be saved")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.primary)
+                    Text("A snapshot was requested but failed to write. Your packages are not protected — if something goes wrong after running this script, you may not be able to restore them from Installory.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.red.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         } else {
             Label(
-                "No snapshot taken — you won't be able to undo this from Installory.",
+                "No snapshot taken — you won\u{2019}t be able to undo this from Installory.",
                 systemImage: "info.circle"
             )
             .foregroundStyle(.secondary)
@@ -78,7 +96,7 @@ struct CleanupScriptSheetView: View {
     )
     let script = ScriptGenerator().generate(packages: [sample])
     return CleanupScriptSheetView(
-        result: CleanupResult(script: script, snapshotTaken: true)
+        result: CleanupResult(script: script, snapshotTaken: true, snapshotFailed: false)
     )
 }
 
@@ -101,6 +119,29 @@ struct CleanupScriptSheetView: View {
     )
     let script = ScriptGenerator().generate(packages: [sample])
     return CleanupScriptSheetView(
-        result: CleanupResult(script: script, snapshotTaken: false)
+        result: CleanupResult(script: script, snapshotTaken: false, snapshotFailed: false)
+    )
+}
+
+#Preview("Snapshot failed") {
+    let sample = Package(
+        id: "brew::ffmpeg",
+        manager: .brew,
+        qualifier: nil,
+        name: "ffmpeg",
+        version: "7.0.1",
+        installPath: nil,
+        installedAt: nil,
+        installedAtConfidence: .low,
+        sizeBytes: nil,
+        isExplicit: true,
+        isReadOnly: false,
+        dependencies: [],
+        artifactPaths: nil,
+        lastSeen: Date()
+    )
+    let script = ScriptGenerator().generate(packages: [sample])
+    return CleanupScriptSheetView(
+        result: CleanupResult(script: script, snapshotTaken: false, snapshotFailed: true)
     )
 }

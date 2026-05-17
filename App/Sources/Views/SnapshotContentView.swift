@@ -45,7 +45,7 @@ struct SnapshotContentView: View {
                 )
                 if !pkgs.isEmpty {
                     Section(manager.displayName) {
-                        ForEach(pkgs, id: \.name) { pkg in
+                        ForEach(pkgs) { pkg in
                             SnapshotPackageRowView(package: pkg, manager: manager)
                         }
                     }

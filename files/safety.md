@@ -10,18 +10,19 @@ The defining design choice for v1: **Installory never executes anything that cha
 
 ## The five rules
 
-### Rule 1: Snapshot before generating any cleanup script
+### Rule 1: Snapshot behavior is preference-driven for per-package removal; always-on for batch
 
-Before a cleanup script is generated, a snapshot is captured to disk. No exceptions.
+Installory supports a `snapshotBeforeRemoval` preference (Always / Ask each time / Never) that governs per-package cleanup scripts. Batch cleanup always captures a snapshot regardless of this preference.
+
+When a snapshot is requested and succeeds, the cleanup sheet shows a green "Snapshot captured" confirmation. When a requested snapshot *fails*, the sheet shows a prominent red warning — this state is distinct from "user chose to skip a snapshot." The UI must never silently present a failed snapshot as a successful skip.
+
+Batch cleanup code path:
 
 ```swift
-func generateCleanupScript(for selection: [Package]) async throws -> CleanupScript {
-    let snapshot = try await snapshotManager.captureSnapshot(reason: .preCleanup)
-    return scriptGenerator.build(selection: selection, snapshotId: snapshot.id)
-}
+await generateAndShowCleanupScript(packages: selected, captureSnapshot: true)
 ```
 
-The snapshot is an export manifest of the user's current inventory. If they later regret a removal, they can export the snapshot as a reinstall script and run that. Installory never restores anything itself.
+Per-package code path routes through `requestRemoval(_:)` which resolves the preference and passes `captureSnapshot: true/false` accordingly. A `Never` preference is a legitimate user choice, not a safety violation.
 
 ### Rule 2: Generated scripts are defensive by default
 
@@ -88,18 +89,24 @@ The denylist is a static JSON file in the bundle, easy to edit. Add to it when w
 
 A snapshot is a single JSON file (stored as a row in `snapshots`) containing:
 
-- Every installed package across every manager that was scanned
+- Every package across the managers in scope (see scoping note below)
 - Each package's name, version, qualifier (for pip), and `isExplicit` flag
 - The timestamp and a free-text note
 - The reason (`manual` | `preCleanup` | `autoFirstScan`)
 
-### Auto-capture rule
+### Snapshot scoping
+
+Pre-cleanup snapshots intentionally capture only the packages being removed, not the full inventory. The snapshot is the restore point for *that specific cleanup operation*, so its scope matches the generated script. The restore diff ("Restore Missing Packages") then tells you exactly which of those packages are gone.
+
+First-scan and manual snapshots capture the full live inventory.
+
+### Snapshot kinds
 
 Installory captures three kinds of snapshots:
 
-- **First-scan snapshot** — automatically, the first time the user scans
-- **Pre-cleanup snapshot** — automatically, before any cleanup script is generated
-- **Manual snapshot** — user-initiated, from Settings or the menu
+- **First-scan snapshot** (`autoFirstScan`) — automatically, the first time the user scans. A one-time baseline. Controlled by the `backshelf.firstScanSnapshotTaken` UserDefaults flag (prefix retained from prior product name).
+- **Pre-cleanup snapshot** (`preCleanup`) — automatically before batch cleanup scripts. Per-package removal respects the `snapshotBeforeRemoval` preference (Always / Ask / Never).
+- **Manual snapshot** (`manual`) — user-initiated, from the toolbar or the menu.
 
 No automatic deletion. The user can delete snapshots manually in Settings. Disk impact is small (<200KB per snapshot for a populated Mac, JSON-compressed).
 
@@ -151,6 +158,8 @@ The `ScriptGenerator` computes a removal order using the scanned dependency grap
 4. Order the selected packages by topological sort so leaves are removed before roots within each manager.
 
 For dependencies across managers (e.g., a brew formula required by a Python package), we don't try to model. We only do dependency analysis within a single manager.
+
+**Known limitation:** dependency warnings consider only the packages in the current selection, not the full inventory. A package that depends on a selected package but is not itself visible in the current filter may be silently omitted from warnings.
 
 ## Never do
 

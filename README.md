@@ -21,7 +21,7 @@ In Xcode, go to the Installory target → Signing & Capabilities → set your De
 
 ## Library tests
 
-The `InstalloryCore` library has its own test suite (248 tests). Run without Xcode:
+The `InstalloryCore` library has its own test suite (315 tests). Run without Xcode:
 
 ```bash
 cd Installory

@@ -2,6 +2,51 @@
 
 ---
 
+# Audit Cleanup (2026-05-17)
+
+## What this session fixed
+
+Post-audit cleanup pass. No product behavior changed. Changes:
+
+| Task | What changed |
+|---|---|
+| Entitlements | `App/Installory.entitlements` was an empty dict — added `app-sandbox`, `files.user-selected.read-only`, `files.bookmarks.app-scope` |
+| Snapshot failure UX | `CleanupResult` gains `snapshotFailed: Bool`; `CleanupScriptSheetView` now shows a prominent red warning when a requested snapshot fails, distinct from the neutral grey "no snapshot taken" message |
+| First-scan snapshot | `AppCoordinator.scan()` now captures an `.autoFirstScan` snapshot on the first successful scan (UserDefaults flag: `backshelf.firstScanSnapshotTaken`); `SnapshotReason.autoFirstScan` was already defined but unused |
+| SnapshotContentView duplicate-ID | `SnapshotPackage` gains `Identifiable` with `id = "\(name)\|\(qualifier ?? "")"` — fixes the same duplicate-SwiftUI-ID class that broke the sidebar in Phase 5b; `SnapshotContentView` ForEach updated |
+| UI language | Context menu "Remove…" → "Create Removal Script…"; `SnapshotChoiceSheet` headline reworded to mention script generation, not removal; `PackageDetailView` section heading "Remove" → "Removal Script" |
+| SnapshotPreference comment | Comment now states the actual UserDefaults key (`backshelf.settings.snapshotBeforeRemoval`) and explains the prefix is intentional |
+| Shebang | `#!/bin/bash` → `#!/usr/bin/env bash` in both script generators; tests updated |
+| `files/safety.md` | Rewritten — see below |
+| `files/CLAUDE.md` | All `docs/` path references corrected to `files/`; stale "never snapshot" rule updated to reflect preference-based reality |
+| `README.md` | Library test count updated from 248 → 315 |
+| `HANDOFF.md` | Stale "Backshelf" refs fixed in 2026-05-17 sections (InstalloryApp, InstalloryCore path, menu name, reinstall filename) |
+| `NEXT-SESSION.md` | Replaced stale Phase-5b content with current-state pointer |
+
+## `files/safety.md` rewrite — why
+
+The code was correct. The doc was stale. Rule 1 previously said "Snapshot before any cleanup script. No exceptions." but the product intentionally supports a `snapshotBeforeRemoval` preference (Always / Ask / Never) for per-package removal. Batch cleanup always snapshots. Per-package honors the preference. Pre-cleanup snapshots scope to the packages being removed, not the full inventory. The rewritten doc matches what the code actually does.
+
+## Known limitations (documented, not fixed)
+
+1. **Dependency warnings scope** (`ScriptGenerator`): dependency warnings consider only the selected packages, not the full inventory. A dependent package outside the current filter may be silently omitted from the warning. Noted in `files/safety.md`.
+2. **App-layer test coverage**: `AppCoordinator`, settings, onboarding, and cleanup state have no unit tests (all SwiftUI / app-layer code). Tier 2 robustness item for a future phase.
+
+## William's manual checklist
+
+After `./scripts/regenerate-xcode.sh` + clean build:
+
+1. **Sandboxed launch**: confirm the app launches and scans without entitlements errors in the console. Check `~/Library/Containers/app.installory.mac/` exists.
+2. **First-scan snapshot**: on a clean container (or after clearing `backshelf.firstScanSnapshotTaken` from UserDefaults), run a scan. After completion, check Snapshots in the sidebar — a "First Scan Snapshot" entry should appear automatically.
+3. **Subsequent scan**: run a second scan. No new "First Scan Snapshot" should appear.
+4. **Snapshot-failure warning**: force a snapshot failure (e.g. fill the container disk, or temporarily point `snapshotManager` at a read-only path in a debug build) and trigger a cleanup script. The cleanup sheet should show a red "Snapshot could not be saved" warning box, not the neutral grey "No snapshot taken" line.
+5. **Context menu language**: right-click a package row — the item should read "Create Removal Script…" not "Remove…".
+6. **Snapshot-choice sheet language**: trigger the per-package removal flow with preference = Ask — the sheet headline should mention "generating a removal script", not "removing".
+7. **Detail pane section heading**: confirm the section is headed "Removal Script" not "Remove".
+8. **Entitlements validity**: `plutil -lint App/Installory.entitlements` should print "OK".
+
+---
+
 # Renamed Backshelf → Installory (2026-05-17)
 
 ## What changed
@@ -92,7 +137,7 @@ Three states the section can show:
 
 ### Settings window (Task 3)
 
-`BackshelfApp` now has a `Settings` scene alongside `WindowGroup`. The same `coordinator`
+`InstalloryApp` now has a `Settings` scene alongside `WindowGroup`. The same `coordinator`
 instance is injected into both scenes, so `SettingsView` binds directly to coordinator
 properties — one source of truth, live reactivity.
 
@@ -136,7 +181,7 @@ asked) without the user needing to open Settings first.
 |---|---|
 | `App/Sources/Models/SnapshotPreference.swift` | NEW — 3-state enum for snapshot preference |
 | `App/Sources/AppCoordinator.swift` | Major additions — settings, provenance, removal flow |
-| `App/Sources/BackshelfApp.swift` | Added `Settings` scene with coordinator injection |
+| `App/Sources/InstalloryApp.swift` | Added `Settings` scene with coordinator injection |
 | `App/Sources/Views/SettingsView.swift` | NEW — grouped Form bound to coordinator |
 | `App/Sources/Views/SnapshotChoiceSheet.swift` | NEW — coordinator-driven "Ask" dialog |
 | `App/Sources/Views/RootView.swift` | Added snapshot-choice sheet |
@@ -160,7 +205,7 @@ Run after `./scripts/regenerate-xcode.sh` + clean build + launch.
 
 ### Settings (Task 3)
 
-1. Open **Backshelf › Settings…** (or press ⌘,). The Settings window should open with three
+1. Open **Installory › Settings…** (or press ⌘,). The Settings window should open with three
    sections: Snapshots, Scanning, Provenance.
 2. Verify "Snapshot before removing a package" has three options (Always / Ask each time / Never)
    with Ask selected by default on a fresh install.
@@ -311,7 +356,7 @@ git commit -m "chore: expand npm descriptions corpus"
 
 ## New Library API
 
-- `DescriptionStore` — `Sendable` struct in `BackshelfCore/Descriptions/DescriptionStore.swift`
+- `DescriptionStore` — `Sendable` struct in `InstalloryCore/Descriptions/DescriptionStore.swift`
   - `init(contentsOf: URL) throws` — loads the bundled JSON corpus
   - `init()` — empty store (every lookup returns nil; graceful fallback)
   - `init(raw: [String: String])` — internal, for tests
@@ -405,7 +450,7 @@ Run after `./scripts/regenerate-xcode.sh` + clean build + launch:
 5. Uncheck one item — confirm the count in "Generate Reinstall Script (N)" decrements.
 6. Click "Generate Reinstall Script (N)" — the sheet surface switches to the script view. Verify the script contains `brew install`, `pip install ==version`, etc. for the checked packages.
 7. "Copy to Clipboard" — paste into a text editor and confirm the script is valid bash.
-8. "Save as .sh…" — NSSavePanel opens defaulting to `backshelf-reinstall.sh`.
+8. "Save as .sh…" — NSSavePanel opens defaulting to `installory-reinstall.sh`.
 9. Click "Done" — the entire sheet closes (back to snapshot content view).
 
 ### Nothing missing case

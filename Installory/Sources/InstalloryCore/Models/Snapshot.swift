@@ -37,7 +37,10 @@ public struct SnapshotPayload: Sendable {
 }
 
 /// A minimal package record stored inside a snapshot payload.
-public struct SnapshotPackage: Codable, Sendable {
+public struct SnapshotPackage: Identifiable, Codable, Sendable {
+    /// Composite of name and qualifier so that pip packages across different interpreters
+    /// with the same name don't collide when used as SwiftUI ForEach identifiers.
+    public var id: String { "\(name)|\(qualifier ?? "")" }
     public let name: String
     public let version: String
     /// Interpreter path for pip packages; nil for all other managers.

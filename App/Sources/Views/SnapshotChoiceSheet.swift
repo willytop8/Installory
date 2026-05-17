@@ -23,7 +23,7 @@ struct SnapshotChoiceSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Take a snapshot before removing \(packageNames)?")
+                Text("Take a snapshot before generating a removal script for \(packageNames)?")
                     .font(.headline)
                 Text("A snapshot lets you restore these packages later using Installory\u{2019}s \u{201C}Restore Missing Packages\u{201D} flow.")
                     .font(.callout)

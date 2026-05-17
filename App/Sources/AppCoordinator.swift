@@ -2,13 +2,15 @@ import InstalloryCore
 import Foundation
 
 /// The result of a cleanup-script generation, carrying both the script and
-/// whether a snapshot was actually captured. The sheet uses `snapshotTaken`
-/// to decide whether to show the snapshot-captured confirmation — it must not
-/// claim a snapshot exists when the user chose to skip it.
+/// the snapshot outcome. The sheet uses these flags to decide what status to show:
+///  - `snapshotTaken == true`: snapshot was captured successfully.
+///  - `snapshotFailed == true`: snapshot was requested but could not be saved.
+///  - Both false: user chose to skip the snapshot (Never preference or explicit skip).
 struct CleanupResult: Identifiable {
     let id = UUID()
     let script: GeneratedScript
     let snapshotTaken: Bool
+    let snapshotFailed: Bool
 }
 
 @Observable
@@ -257,6 +259,7 @@ final class AppCoordinator {
         guard !packagesToRemove.isEmpty else { return }
 
         var snapshotCtx: SnapshotContext? = nil
+        var snapshotFailed = false
         if captureSnapshot, let sm = snapshotManager {
             // The snapshot captures the packages being removed — it is the
             // restore point for this specific cleanup, so its scope matches
@@ -268,12 +271,21 @@ final class AppCoordinator {
             ) {
                 snapshotCtx = SnapshotContext(id: snap.id, createdAt: snap.createdAt)
                 await refreshSnapshots()
+            } else {
+                // Snapshot was requested but the capture failed. The sheet must
+                // show a prominent warning — this is different from the user
+                // having chosen to skip the snapshot.
+                snapshotFailed = true
             }
         }
 
         let generator = ScriptGenerator()
         let script = generator.generate(packages: packagesToRemove, snapshot: snapshotCtx)
-        cleanupResult = CleanupResult(script: script, snapshotTaken: snapshotCtx != nil)
+        cleanupResult = CleanupResult(
+            script: script,
+            snapshotTaken: snapshotCtx != nil,
+            snapshotFailed: snapshotFailed
+        )
     }
 
     // MARK: - Private
@@ -367,6 +379,19 @@ final class AppCoordinator {
         if let dao = packageDAO {
             try? dao.replaceAll(with: packages)
         }
+
+        // Capture an autoFirstScan snapshot the very first time the scan
+        // completes with results. Subsequent scans skip this entirely.
+        // The "backshelf." prefix is retained from the prior product name
+        // to keep the key stable across the rename.
+        if !packages.isEmpty,
+           !UserDefaults.standard.bool(forKey: "backshelf.firstScanSnapshotTaken"),
+           let sm = snapshotManager {
+            _ = try? await sm.capture(packages: packages, reason: .autoFirstScan, note: nil)
+            UserDefaults.standard.set(true, forKey: "backshelf.firstScanSnapshotTaken")
+            await refreshSnapshots()
+        }
+
         if let dao = scanRunDAO {
             let scanRun = ScanRun(
                 id: UUID(),
