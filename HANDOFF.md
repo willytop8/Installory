@@ -2,6 +2,58 @@
 
 ---
 
+# Phase 6: Cross-Manager Duplicate Detection (2026-05-17)
+
+## Scope and deliberate exclusions
+
+A "duplicate" is ONE tool installed by TWO OR MORE DIFFERENT package managers — e.g. `node` under both Homebrew and npm. This is almost always a genuine problem (wrong-version confusion on PATH) and almost never intentional.
+
+Two cases are explicitly excluded and must stay excluded:
+
+**Same-manager multi-environment** — `requests` appearing in nine pip interpreters is normal Python isolation. Flagging it would bury the real signal in noise. The qualifying rule is `distinctManagers.count >= 2` where `brew` and `brewCask` map to the same effective manager before the count.
+
+**brew + brewCask same name** — a Homebrew formula and a Homebrew cask with the same name are not a cross-manager duplicate. Both are Homebrew. The `effectiveManager` mapping (`.brewCask → .brew`) inside `crossManagerDuplicates()` enforces this at the library level.
+
+Matching is exact (case-insensitive) on `Package.name`. No fuzzy matching, no heuristic name normalization. A tool named `foo` in one manager and `foo-cli` in another is not matched in v1. Accept the misses; avoid false positives.
+
+## Architecture decisions
+
+**View reuse: dedicated `DuplicatesView`, `PackageDetailView` reused.** The duplicate content pane shows grouped data (tool name → installs), structurally unlike `PackageListView`'s flat list. Forcing groups into the flat list would require either a fake-Package wrapper type or leaking display logic into the coordinator. A small dedicated view is clean. `PackageDetailView` is reused for the detail pane — clicking any install row sets `coordinator.selectedPackage` and the existing detail pane opens with its full removal affordance. The removal flow is 100% unchanged.
+
+**Sidebar placement: "Package Managers" section, after "Read-only."** Duplicates is a cross-cutting view of current inventory — conceptually adjacent to the manager rows. A standalone section would add visual noise for a feature that is usually absent (0 duplicate groups = row hidden entirely).
+
+**`filtered(by: .duplicates)` returns `[]`.** `DuplicatesView` reads `coordinator.duplicateGroups` (backed by `crossManagerDuplicates()`) directly. When `.duplicates` is selected, `filteredPackages` is never consulted. Same pattern as `.snapshot`.
+
+**`.duplicates` persists normally.** Unlike `.snapshot(UUID)`, a duplicates selection is always valid on next launch. `persistUIPreferences()` was left unchanged; the existing `.snapshot`-only guard correctly passes `.duplicates` through to persistence.
+
+## Files changed
+
+| File | Change |
+|---|---|
+| `Installory/Sources/InstalloryCore/Models/DuplicateGroup.swift` | NEW — struct + `crossManagerDuplicates()` extension |
+| `Installory/Sources/InstalloryCore/Models/SidebarSelection.swift` | `.duplicates` case, userDefaultsKey, init?, filtered |
+| `Installory/Tests/InstalloryCoreTests/DuplicateDetectionTests.swift` | NEW — 6 library tests |
+| `App/Sources/AppCoordinator.swift` | `duplicateGroups` computed property |
+| `App/Sources/Views/SidebarView.swift` | Duplicates row in Package Managers section |
+| `App/Sources/Views/RootView.swift` | `.duplicates` branch in content pane |
+| `App/Sources/Views/DuplicatesView.swift` | NEW — grouped duplicate list |
+
+## William's manual verification checklist
+
+After `./scripts/regenerate-xcode.sh` + clean build:
+
+1. **No duplicates → row hidden**: with a fresh scan showing no cross-manager duplicates, no "Duplicates" row appears in the sidebar.
+2. **Duplicate appears → row shows**: install the same tool via two managers (or seed the DB directly). The "Duplicates (N)" row should appear with N = number of groups.
+3. **Sidebar navigation**: clicking "Duplicates" switches the content pane to the groups view. The detail pane shows "No Package Selected" until a row is clicked.
+4. **Group display**: each group shows the tool name as a section header. Each install row shows the manager badge, version, and qualifier/install path where known.
+5. **Removal routing**: click an install row. The detail pane opens. The "Removal Script" section is present and functional — generating a script works identically to the normal flow.
+6. **Persistence**: select "Duplicates" in the sidebar, quit and relaunch. The sidebar restores to the Duplicates selection.
+7. **brew + brewCask**: ensure a formula and a cask with the same name do NOT produce a duplicate group.
+8. **pip multi-environment**: ensure the same pip package across multiple interpreters does NOT produce a duplicate group.
+9. **`swift test` passes**: run `swift test` in the `Installory/` directory — 0 failures, 0 warnings.
+
+---
+
 # Audit Cleanup (2026-05-17)
 
 ## What this session fixed

@@ -11,6 +11,8 @@ struct RootView: View {
         } content: {
             if case .snapshot(let id) = coordinator.sidebarSelection {
                 SnapshotContentView(snapshotID: id)
+            } else if case .duplicates = coordinator.sidebarSelection {
+                DuplicatesView()
             } else {
                 PackageListView()
             }

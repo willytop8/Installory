@@ -111,6 +111,10 @@ final class AppCoordinator {
         packages.filtered(by: sidebarSelection, query: searchQuery).sorted(by: sortOrder)
     }
 
+    var duplicateGroups: [DuplicateGroup] {
+        packages.crossManagerDuplicates()
+    }
+
     // MARK: - Computed: directories
 
     var grantedDirectories: [GrantedDirectory] {

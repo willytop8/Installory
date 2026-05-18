@@ -48,6 +48,13 @@ struct SidebarView: View {
                     Label("Read-only (\(readOnlyCount))", systemImage: "lock")
                 }
             }
+
+            let duplicateCount = coordinator.duplicateGroups.count
+            if duplicateCount > 0 {
+                NavigationLink(value: SidebarSelection.duplicates) {
+                    Label("Duplicates (\(duplicateCount))", systemImage: "doc.on.doc")
+                }
+            }
         }
     }
 
