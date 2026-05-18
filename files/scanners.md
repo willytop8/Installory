@@ -180,7 +180,7 @@ Homebrew also keeps a JSON cache under `<prefix>/var/homebrew/` that mirrors wha
 4. Map to `Package` records. Manager is `.brew` or `.brewCask` based on which directory it came from.
 5. `installedAtConfidence: .high` — receipts are authoritative.
 
-For casks, the scanner decodes the `artifacts` array and flattens user-relevant paths into `Package.artifactPaths`. This field is optional and stored on `Package` rather than a separate associated table because Phase 1 only needs to display and preserve app paths and zap trash paths with the inventory row; if later cleanup planning needs per-artifact state or querying, migrate it into a dedicated table then. Runtime dependency names are normalized to bare names by stripping any tap prefix before the final `/`.
+For casks, the scanner decodes the `artifacts` array and flattens user-relevant paths into `Package.artifactPaths`. This field is optional and stored on `Package` rather than a separate associated table because the app only needs to display and preserve app paths and zap trash paths with the inventory row; if later cleanup planning needs per-artifact state or querying, migrate it into a dedicated table then. Runtime dependency names are normalized to bare names by stripping any tap prefix before the final `/`.
 
 **Test fixtures:** capture several `INSTALL_RECEIPT.json` files plus a fake `Cellar/` directory layout in `Tests/Fixtures/brew/`.
 
@@ -262,7 +262,7 @@ The `.gemspec` files are Ruby source files; we don't try to evaluate them. We ex
 
 The `mas` CLI is the only practical way to enumerate Mac App Store apps installed via the App Store, and we can't invoke it. Listing `/Applications` is too noisy (the user has many apps from other sources). For v1, the `mas` manager is reported as `.skipped(reason: "Not supported in sandboxed app — see Permissions")`.
 
-This is a known gap. If we ship the future "direct-download non-sandboxed version" (see `ROADMAP.md`), `mas list` parsing comes back. For App Store Installory, MAS-installed apps are simply outside our scope.
+This is a known gap. If we ship a future direct-download non-sandboxed version, `mas list` parsing comes back. For App Store Installory, MAS-installed apps are simply outside our scope.
 
 ## Adding a new scanner
 
@@ -275,7 +275,7 @@ The workflow:
 5. Register the scanner in `ScanCoordinator`'s default list.
 6. Add the manager case to `PackageManager` enum.
 7. Add a display name and color in `PackageManager+Display.swift`.
-8. Update `ROADMAP.md` if the scanner was previously listed as post-v0.
+8. Update the public docs if the scanner changes user-facing scope.
 9. Update the first-launch onboarding to ask for read access to the relevant directory.
 
 ## Honest about gaps

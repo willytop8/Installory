@@ -91,10 +91,9 @@ scripts/
                                  package-description corpus
 files/
 ├── screenshots/                 README screenshots
-└── *.md                         product docs, architecture notes, roadmap
-HANDOFF.md               Detailed phase-by-phase development record
+└── *.md                         product docs and architecture notes
 ```
 
 ## A note on the docs
 
-`files/PRODUCT.md` is the fuller product story. `HANDOFF.md` is the running development log — phase-by-phase decisions, rationale, and known limitations — and is the best place to understand *why* the codebase looks the way it does.
+`files/PRODUCT.md` is the fuller product story. `files/ARCHITECTURE.md` explains how the codebase is structured, and the subsystem docs under `files/` cover scanners, provenance, sandboxing, safety, and release notes.

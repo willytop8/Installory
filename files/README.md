@@ -2,7 +2,7 @@
 
 A native macOS app that helps you understand and clean up the packages cluttering your machine across every package manager you've used — Homebrew, pip, npm, and more.
 
-> **Status:** Early development. Pre-v0. Not yet usable.
+> **Status:** Feature-complete and in pre-release hardening ahead of Mac App Store submission.
 
 ## What it does
 
@@ -17,7 +17,7 @@ The existing tools — Homebrew's CLI, `pip list`, GUI wrappers like Taphouse, m
 - **Swift 6.1+ / SwiftUI** — native macOS, Apple Silicon and Intel
 - **GRDB.swift** for SQLite persistence
 - **Mac App Store** for distribution and updates (sandboxed, file-access entitlements + user-granted folder access)
-- **Bundled SQLite description corpus** — plain-language descriptions for ~20K packages, sourced from upstream registry metadata (formulae.brew.sh, PyPI, npm, crates.io) at build time
+- **Bundled JSON description corpus** — plain-language descriptions sourced from upstream registry metadata (formulae.brew.sh, PyPI, npm) at build time
 - No Electron. No web view. No telemetry. No network calls at runtime.
 
 ## Architecture at a glance
@@ -51,13 +51,20 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md) for detail.
 
 ## Getting started
 
-To be written when there's a buildable project. For now see:
+From the repository root:
 
-- [`CLAUDE.md`](CLAUDE.md) — instructions for AI agents working in this repo
-- [`PRODUCT.md`](PRODUCT.md) — what we're building and why
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it's structured
-- [`ROADMAP.md`](ROADMAP.md) — phased milestones
+```bash
+./scripts/regenerate-xcode.sh
+open Installory.xcodeproj
+```
+
+For more context:
+
+- [`PRODUCT.md`](PRODUCT.md) — what Installory is and why it exists
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — how the app and core library are structured
+- [`safety.md`](safety.md) — cleanup script and snapshot safety model
+- [`sandboxing.md`](sandboxing.md) — App Store sandbox and file-access model
 
 ## Status & license
 
-Private repo during development. License decisions deferred.
+License decisions deferred.

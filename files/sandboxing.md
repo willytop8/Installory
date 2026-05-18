@@ -13,7 +13,7 @@ The trade-off: we ship through the App Store, the user gets automatic updates, A
 
 ## Entitlements
 
-The complete entitlements file is in `docs/build-and-release.md`. The relevant declarations:
+The complete entitlements file is in `build-and-release.md`. The relevant declarations:
 
 - **`com.apple.security.app-sandbox`** — required for App Store distribution. Confines us to our container by default.
 - **`com.apple.security.files.user-selected.read-only`** — allows us to read files and folders the user explicitly selects through an `NSOpenPanel`. Read-only because we never modify the user's package manager directories; we only read.
@@ -116,7 +116,7 @@ If the user revokes access later (deletes the bookmark, moves the directory, or 
 These are real product gaps the user should expect, and they should be documented in the Permissions tab and in the FAQ:
 
 - **No execution of any command.** Installory generates a cleanup script; the user runs it. This is by design and we'd keep it even without the sandbox, but the sandbox makes it a hard constraint, not a choice.
-- **Mac App Store apps (the `mas` manager) cannot be enumerated.** Listing `/Applications` is too noisy to be useful, and the `mas` CLI is the only practical inventory source. We report this as a known gap (see `docs/scanners.md`).
+- **Mac App Store apps (the `mas` manager) cannot be enumerated.** Listing `/Applications` is too noisy to be useful, and the `mas` CLI is the only practical inventory source. We report this as a known gap (see `scanners.md`).
 - **No system-wide hooks.** No background daemon, no LaunchAgent. Installory is a foreground app only.
 - **No automatic interactive directory walks beyond the granted root.** If the user grants `/opt/homebrew`, we can walk inside that subtree freely. But if a package's metadata points to `/Users/will/something-else`, we can't follow that link unless that path is also granted.
 - **No invocation of the user's shell to read environment.** We can't ask `zsh` for the user's `$PATH`. We have hardcoded prefix discovery in `PathDiscovery` instead.
@@ -141,4 +141,4 @@ The two failure modes — "user never granted" and "user previously granted but 
 
 ## Future: the non-sandboxed direct-download build
 
-`ROADMAP.md` notes the possibility of a non-sandboxed Developer-ID-signed build for users who want Installory to perform the uninstall itself. If we ship that, this document needs a companion section explaining the symmetric set of behaviors: that build would *not* go through NSOpenPanel for every directory (it'd just read), would *not* need security-scoped bookmarks, but *would* still treat the cleanup script as the source of truth — running it via the user's preferred shell rather than asking the user to copy-paste. The two builds would share 95%+ of their code; the differences live entirely in `FolderAccessManager` and the cleanup wizard's final action.
+A non-sandboxed Developer-ID-signed build remains a possible future option for users who want Installory to perform uninstall actions itself. If we ship that, this document needs a companion section explaining the symmetric set of behaviors: that build would *not* go through NSOpenPanel for every directory (it'd just read), would *not* need security-scoped bookmarks, but *would* still treat the cleanup script as the source of truth — running it via the user's preferred shell rather than asking the user to copy-paste. The two builds would share 95%+ of their code; the differences live entirely in `FolderAccessManager` and the cleanup wizard's final action.

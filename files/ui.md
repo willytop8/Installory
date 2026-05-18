@@ -208,7 +208,7 @@ A list view with one row per snapshot:
 └────────────────────────────────────────────────────────────┘
 ```
 
-"Export as script" diffs the snapshot against the current inventory and produces a reinstall shell script (additive only — see `docs/safety.md`). Installory presents the script in the same Copy / Save-as-.sh pane as cleanup. The user runs it themselves in Terminal.
+"Export as script" diffs the snapshot against the current inventory and produces a reinstall shell script (additive only — see `safety.md`). Installory presents the script in the same Copy / Save-as-.sh pane as cleanup. The user runs it themselves in Terminal.
 
 ### 4. Settings
 

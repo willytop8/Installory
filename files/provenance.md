@@ -212,7 +212,7 @@ The phrasing is intentionally plainer than what an LLM would produce. That trade
 
 ### What we lose, and why we're fine with it
 
-An LLM narrative would sometimes synthesize across signals in ways a template can't ("they're typically used together for audio processing"). We chose to give that up in exchange for the simplicity of zero network calls and full sandbox compatibility. If we ever ship the future non-sandboxed direct-download version (see `ROADMAP.md`), we may revisit. For App Store Installory, templates are the entire pipeline.
+An LLM narrative would sometimes synthesize across signals in ways a template can't ("they're typically used together for audio processing"). We chose to give that up in exchange for the simplicity of zero network calls and full sandbox compatibility. If we ever ship a future non-sandboxed direct-download version, we may revisit. For App Store Installory, templates are the entire pipeline.
 
 ## Confidence calibration
 

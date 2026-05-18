@@ -177,7 +177,7 @@ The UI groups packages by interpreter under the "Python" manager label, showing 
 
 ## What cleanup-script generation means for pip
 
-Installory never removes anything directly. The cleanup script we generate (see `docs/safety.md`) emits the right command for each kind of interpreter; the user runs it in Terminal.
+Installory never removes anything directly. The cleanup script we generate (see `safety.md`) emits the right command for each kind of interpreter; the user runs it in Terminal.
 
 - **System Python:** filtered out entirely. Cannot appear in a generated script. UI greys these out with the explanation: "These packages are part of macOS or Xcode Command Line Tools and removing them can break system functionality."
 - **Homebrew Python:** emit `<interpreter> -m pip uninstall -y <pkg>` with a `# WARNING:` comment noting that some Homebrew formulae depend on Python packages.
@@ -194,10 +194,10 @@ When implementing the Python subsystem, build in this order:
 2. `DistInfoParser` for METADATA and RECORD
 3. `PipScanner` orchestrating discovery + parsing
 4. UI grouping by interpreter
-5. Cleanup-script generation for pip packages (gated until snapshots work — see `docs/safety.md`)
+5. Cleanup-script generation for pip packages (see `safety.md`)
 
 ## What we deliberately don't do in v0
 
 - **Don't infer pip dependencies.** The dependency tree for Python packages requires resolving `Requires-Dist` against installed versions, which is hard and error-prone. We show the raw `Requires-Dist` list but don't claim a dependency graph.
-- **Don't touch conda environments.** Conda's model (channels, environments, base env, mamba) is enough complexity for its own phase.
+- **Don't touch conda environments.** Conda's model (channels, environments, base env, mamba) is enough complexity for its own dedicated design.
 - **Don't try to upgrade.** We're an inventory and cleanup tool, not a package manager.

@@ -2,7 +2,7 @@
 
 The operational doc. Read when setting up a new dev machine, when shipping a release, or when something in the build pipeline goes wrong.
 
-> **Note (Phase 5a, 2026-05-15):** The Xcode project is now generated from `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen). `Installory.xcodeproj` is gitignored. To regenerate: `brew install xcodegen && ./scripts/regenerate-xcode.sh`. The manual setup steps below are historical reference and no longer the current workflow.
+The Xcode project is generated from `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen). `Installory.xcodeproj` is gitignored. To regenerate: `brew install xcodegen && ./scripts/regenerate-xcode.sh`.
 
 Installory is a **Mac App Store app**. Distribution is via App Store Connect. Signing is automatic via Xcode's App Store distribution flow. Updates are delivered by the App Store. There is no notarization step, no Sparkle, and no appcast — the App Store handles all of that.
 
@@ -33,13 +33,13 @@ Installory/                         # main app target
 ├── Safety/
 ├── Views/
 └── Resources/
-    ├── descriptions.db        # bundled corpus, read-only
+    ├── descriptions.json      # bundled corpus, read-only
     └── Assets.xcassets
 Installory.entitlements             # sandbox + file-access entitlements
 InstalloryTests/                    # unit tests
 InstalloryIntegrationTests/         # integration tests, opt-in
 scripts/
-├── generate-descriptions/     # the corpus generator (separate Swift package)
+├── generate-descriptions/     # build-time corpus generator
 └── release.sh
 Package.swift                  # for SPM dependencies if not using Xcode resolution
 ```
@@ -68,13 +68,12 @@ Three ways:
    ```
 3. **SPM (for the corpus generator)**:
    ```bash
-   cd scripts/generate-descriptions
-   swift run installory-descriptions --output ../../Installory/Resources/descriptions.db
+   python3 scripts/generate-descriptions/generate.py
    ```
 
 ## Sandboxing and entitlements
 
-Installory is sandboxed. See `docs/sandboxing.md` for the full model; this section covers the entitlement file specifically.
+Installory is sandboxed. See `sandboxing.md` for the full model; this section covers the entitlement file specifically.
 
 `Installory.entitlements`:
 
@@ -214,20 +213,16 @@ After the upload completes and App Store Connect finishes processing, the build 
 
 ## Generating the bundled descriptions
 
-The corpus generator is a separate Swift package at `scripts/generate-descriptions/`. It:
+The corpus generator lives at `scripts/generate-descriptions/`. It:
 
-1. Pulls registry metadata from `formulae.brew.sh`, PyPI JSON API, npm registry, crates.io, rubygems
-2. Normalizes the upstream `description` / `summary` field per `docs/descriptions.md`
-3. Writes `descriptions.db` SQLite file
-4. Resumes from a checkpoint file if interrupted
+1. Pulls registry metadata from `formulae.brew.sh`, PyPI JSON API, and the npm registry
+2. Normalizes the upstream `description` / `summary` field per `descriptions.md`
+3. Writes the bundled `App/Resources/descriptions.json` file
 
-Run periodically (quarterly?) and commit the updated `descriptions.db` to the repo. Yes, it's a few MB; yes, that's fine for a private repo.
+Run periodically and commit the updated `descriptions.json` to the repo.
 
 ```bash
-cd scripts/generate-descriptions
-swift run installory-descriptions \
-    --output ../../Installory/Resources/descriptions.db \
-    --checkpoint ./checkpoint.json
+python3 scripts/generate-descriptions/generate.py
 ```
 
 No API key required — all sources are public registries.
@@ -256,4 +251,4 @@ When we set it up, the minimum:
 - **App Review rejected (entitlements concern)**: respond with the Review Notes blurb above. If the reviewer wants more, offer a screencast showing the first-launch NSOpenPanel flow and a sample generated cleanup script.
 - **App launches but immediately quits in a TestFlight build**: check Console.app filtered to your bundle ID. Sandbox apps fail in subtle ways when an entitlement is missing — a `Sandbox: deny ...` line in Console will usually tell you which one.
 - **SQLite errors after schema change**: you forgot to add a migration. Migrations are append-only; never modify an existing one.
-- **NSOpenPanel grants disappear after launch**: the security-scoped bookmark wasn't persisted, or we forgot to call `startAccessingSecurityScopedResource()` before reading. See `docs/sandboxing.md`.
+- **NSOpenPanel grants disappear after launch**: the security-scoped bookmark wasn't persisted, or we forgot to call `startAccessingSecurityScopedResource()` before reading. See `sandboxing.md`.

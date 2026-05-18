@@ -20,7 +20,7 @@ How Installory is organized as code. Read this before making structural changes.
 - **Tauri / Electron** — kills the trust positioning. See `PRODUCT.md`.
 - **Rust core + Swift UI** — overkill. The bottleneck is filesystem walks, not our orchestration code. Swift's `TaskGroup` is plenty fast for parallel scans.
 - **Combine** — Apple has signaled `@Observable` is the way forward; Combine adds a parallel mental model with no upside for this app.
-- **Non-sandboxed Developer ID build** — keeps the option open for the future (see `ROADMAP.md`), but for v1 the App Store sandbox is the right trade. We give up the ability to invoke binaries; we get Apple review, automatic updates, and a stronger trust signal.
+- **Non-sandboxed Developer ID build** — kept as a possible future distribution option, but for v1 the App Store sandbox is the right trade. We give up the ability to invoke binaries; we get Apple review, automatic updates, and a stronger trust signal.
 
 ## Layered model
 
@@ -69,7 +69,7 @@ How Installory is organized as code. Read this before making structural changes.
 - **One concrete scanner per manager** — `BrewScanner`, `PipScanner`, `NpmScanner`, etc.
 - **`ScanCoordinator`** — runs scanners in parallel with `TaskGroup`, applies per-scanner timeouts, surfaces per-manager status to the UI (succeeded / failed / timed out / skipped).
 
-See [`docs/scanners.md`](docs/scanners.md) for the protocol shape and per-manager notes. See [`docs/python-problem.md`](docs/python-problem.md) for why Python gets its own dedicated subsystem inside the pip scanner.
+See [`scanners.md`](scanners.md) for the protocol shape and per-manager notes. See [`python-problem.md`](python-problem.md) for why Python gets its own dedicated subsystem inside the pip scanner.
 
 ### Descriptions
 
@@ -77,14 +77,14 @@ See [`docs/scanners.md`](docs/scanners.md) for the protocol shape and per-manage
 - **Bundled corpus** — SQLite read-only DB shipped inside the app bundle. Generated at build time by the maintainer's `scripts/generate-descriptions/` tool, which pulls upstream registry metadata (formulae.brew.sh, PyPI JSON API, npm registry, crates.io, rubygems) and writes them straight to SQLite. No LLM in the loop, no live lookup, no API key.
 - **Missing descriptions** — when a package isn't in the bundle, the UI shows "No description available" rather than fabricating one.
 
-See [`docs/descriptions.md`](docs/descriptions.md).
+See [`descriptions.md`](descriptions.md).
 
 ### Provenance
 
 - **`ProvenanceCollector`** — combines three signals: filesystem timestamps, shell history, Claude Code logs. Outputs structured `ProvenanceEvidence`.
 - **`NarrativeRenderer`** — turns structured evidence into a human-readable paragraph by interpolating Swift string templates. The structured pipeline is unchanged; only the final rendering step is template-based instead of LLM-generated.
 
-See [`docs/provenance.md`](docs/provenance.md).
+See [`provenance.md`](provenance.md).
 
 ### Safety
 
@@ -103,7 +103,7 @@ See [`docs/provenance.md`](docs/provenance.md).
 
 A single SQLite database at `~/Library/Application Support/Installory/installory.db`.
 
-Conceptual schema (see [`docs/data-model.md`](docs/data-model.md) for the full DDL):
+Conceptual schema (see [`data-model.md`](data-model.md) for the full DDL):
 
 - `packages` — current inventory, last scan time, manager, paths
 - `provenance_evidence` — structured signals, package-id-keyed
