@@ -38,20 +38,6 @@ Matching is exact (case-insensitive) on `Package.name`. No fuzzy matching, no he
 | `App/Sources/Views/RootView.swift` | `.duplicates` branch in content pane |
 | `App/Sources/Views/DuplicatesView.swift` | NEW — grouped duplicate list |
 
-## William's manual verification checklist
-
-After `./scripts/regenerate-xcode.sh` + clean build:
-
-1. **No duplicates → row hidden**: with a fresh scan showing no cross-manager duplicates, no "Duplicates" row appears in the sidebar.
-2. **Duplicate appears → row shows**: install the same tool via two managers (or seed the DB directly). The "Duplicates (N)" row should appear with N = number of groups.
-3. **Sidebar navigation**: clicking "Duplicates" switches the content pane to the groups view. The detail pane shows "No Package Selected" until a row is clicked.
-4. **Group display**: each group shows the tool name as a section header. Each install row shows the manager badge, version, and qualifier/install path where known.
-5. **Removal routing**: click an install row. The detail pane opens. The "Removal Script" section is present and functional — generating a script works identically to the normal flow.
-6. **Persistence**: select "Duplicates" in the sidebar, quit and relaunch. The sidebar restores to the Duplicates selection.
-7. **brew + brewCask**: ensure a formula and a cask with the same name do NOT produce a duplicate group.
-8. **pip multi-environment**: ensure the same pip package across multiple interpreters does NOT produce a duplicate group.
-9. **`swift test` passes**: run `swift test` in the `Installory/` directory — 0 failures, 0 warnings.
-
 ---
 
 # Audit Cleanup (2026-05-17)
@@ -83,19 +69,6 @@ The code was correct. The doc was stale. Rule 1 previously said "Snapshot before
 
 1. **Dependency warnings scope** (`ScriptGenerator`): dependency warnings consider only the selected packages, not the full inventory. A dependent package outside the current filter may be silently omitted from the warning. Noted in `files/safety.md`.
 2. **App-layer test coverage**: `AppCoordinator`, settings, onboarding, and cleanup state have no unit tests (all SwiftUI / app-layer code). Tier 2 robustness item for a future phase.
-
-## William's manual checklist
-
-After `./scripts/regenerate-xcode.sh` + clean build:
-
-1. **Sandboxed launch**: confirm the app launches and scans without entitlements errors in the console. Check `~/Library/Containers/app.installory.mac/` exists.
-2. **First-scan snapshot**: on a clean container (or after clearing `backshelf.firstScanSnapshotTaken` from UserDefaults), run a scan. After completion, check Snapshots in the sidebar — a "First Scan Snapshot" entry should appear automatically.
-3. **Subsequent scan**: run a second scan. No new "First Scan Snapshot" should appear.
-4. **Snapshot-failure warning**: force a snapshot failure (e.g. fill the container disk, or temporarily point `snapshotManager` at a read-only path in a debug build) and trigger a cleanup script. The cleanup sheet should show a red "Snapshot could not be saved" warning box, not the neutral grey "No snapshot taken" line.
-5. **Context menu language**: right-click a package row — the item should read "Create Removal Script…" not "Remove…".
-6. **Snapshot-choice sheet language**: trigger the per-package removal flow with preference = Ask — the sheet headline should mention "generating a removal script", not "removing".
-7. **Detail pane section heading**: confirm the section is headed "Removal Script" not "Remove".
-8. **Entitlements validity**: `plutil -lint App/Installory.entitlements` should print "OK".
 
 ---
 
@@ -131,13 +104,6 @@ to a new, empty container at:
 
 **Consequence**: the local SQLite database and any snapshots stored in the old container are not accessible to the new build. This is expected and acceptable pre-release — a clean local slate.
 
-## William's manual follow-up checklist
-
-- [ ] Rename the git root directory: `mv ../Backshelf ../Installory` (or Finder rename)
-- [ ] Regenerate the Xcode project: `./scripts/regenerate-xcode.sh`
-- [ ] Clean DerivedData for the old scheme (Xcode → Product → Clean Build Folder, or delete `~/Library/Developer/Xcode/DerivedData/Backshelf-*`)
-- [ ] Verify the new sandbox container `~/Library/Containers/app.installory.mac/` is created on first launch
-
 ---
 
 # Phase 5d-2: Provenance UI + Settings (2026-05-17)
@@ -145,7 +111,7 @@ to a new, empty container at:
 ## Status
 
 Implementation-complete. `swift build` + `swift test` pass (315 tests, zero warnings — library
-unchanged). **William must verify on hardware** using the checklist below before shipping.
+unchanged). Hardware verification status is tracked in `NEXT-SESSION.md`.
 
 ## Architecture decisions
 
@@ -251,68 +217,6 @@ asked) without the user needing to open Settings first.
 - **`nearbyProjects` is always `[]`**: the git-walk signal was deferred in Phase 4 and remains
   unimplemented.
 
-## William's manual verification checklist
-
-Run after `./scripts/regenerate-xcode.sh` + clean build + launch.
-
-### Settings (Task 3)
-
-1. Open **Installory › Settings…** (or press ⌘,). The Settings window should open with three
-   sections: Snapshots, Scanning, Provenance.
-2. Verify "Snapshot before removing a package" has three options (Always / Ask each time / Never)
-   with Ask selected by default on a fresh install.
-3. Toggle "Scan on launch" off → quit and relaunch. The app should NOT auto-scan on launch;
-   the package list should populate from the cached DB only (no scan spinner).
-4. Toggle it back on → relaunch → auto-scan fires normally.
-5. Toggle "Collect provenance" off → navigate to any package detail pane. The provenance
-   section should be absent (no empty section, no "Install origin unknown", nothing).
-6. Toggle it back on.
-
-### Provenance in detail pane (Task 2)
-
-7. Run a full scan (⌘R). After the scan completes, navigate to a Homebrew package installed
-   within the last few months.
-8. If provenance evidence was found: a sentence appears between the fields section and the
-   Remove section. Should read naturally ("Installed about 3 weeks ago via `brew install ffmpeg`
-   in your terminal."). NOT bold, NOT in a callout box.
-9. If provenance evidence was not found (old package, no matching history): quiet
-   "Install origin unknown." appears in gray tertiary color. This should NOT look like an error.
-10. Select a package that was installed via Claude Code (if any). The narrative should reference
-    the project path and session context.
-11. For a medium or low confidence package, a small "Medium confidence" / "Low confidence" badge
-    appears below the narrative. It should be subtle (muted color, small text).
-12. Section order in the detail pane: description header → fields → provenance → Remove →
-    Show raw record. Verify this ordering is correct.
-
-### Snapshot preference in the removal flow (Task 4)
-
-13. With setting = **Ask** (default): click "Remove this package…" on any non-system package.
-    A sheet should appear asking "Take a snapshot before removing [name]?" with a
-    "Remember my choice" toggle and two buttons: "Skip Snapshot" and "Take Snapshot".
-14. Tap "Take Snapshot" — sheet dismisses, cleanup script sheet opens with the green
-    "Snapshot captured" badge.
-15. Tap "Skip Snapshot" instead — cleanup script sheet opens WITHOUT the snapshot badge.
-16. Repeat step 13 but check "Remember my choice" before tapping "Take Snapshot". Setting
-    should flip to "Always" (verify in Settings window). Re-triggering removal should now
-    proceed without the dialog.
-17. Reset preference to "Ask" in Settings. Check "Remember my choice" + "Skip Snapshot" →
-    preference should flip to "Never". Removal now proceeds directly without snapshot.
-18. Set preference to **Always** directly in Settings → click "Remove this package…" →
-    no dialog, goes directly to cleanup script sheet with snapshot badge.
-19. Set preference to **Never** → click "Remove this package…" → no dialog, cleanup script
-    sheet with NO snapshot badge.
-20. Right-click a package row → "Remove…" (context menu) → same behavior as the button;
-    the dialog or direct-proceed depends on the current preference.
-21. **Batch cleanup is unaffected**: enter cleanup mode, select packages, "Generate Cleanup
-    Script (N)" always takes a snapshot regardless of preference.
-
-### Caption accuracy
-
-22. With setting = "Always": the caption below "Remove this package…" reads "Takes a snapshot
-    first so you can undo, then generates a removal script."
-23. With setting = "Never": caption reads "Generates a removal script without taking a snapshot."
-24. With setting = "Ask": caption reads "You'll be asked whether to take a snapshot first."
-
 ---
 
 # Phase 5d-1: Package Descriptions Corpus (2026-05-17)
@@ -320,8 +224,7 @@ Run after `./scripts/regenerate-xcode.sh` + clean build + launch.
 ## Status
 
 Implementation-complete. `swift test` passes (336 tests, zero warnings — 21 new
-`DescriptionStoreTests` plus 315 prior). William must verify on hardware using
-the checklist below. The corpus covers Homebrew (complete) and PyPI (top 4000).
+`DescriptionStoreTests` plus 315 prior). The corpus covers Homebrew (complete) and PyPI (top 4000).
 See "Completing the corpus" below for npm seed expansion.
 
 ## Why Bundled, Not Fetched
@@ -429,21 +332,6 @@ The corpus keys and the lookup normalize identically:
 
 21 tests in `DescriptionStoreTests.swift` cover all normalization paths explicitly.
 
-## William's Manual Verification Checklist
-
-Run after `./scripts/regenerate-xcode.sh` + clean build + launch:
-
-1. Select `ffmpeg` (or any common Homebrew package) in the package list.
-   - Detail pane header should show a description line below the version, in regular (non-monospaced) font.
-   - Example: "Play, record, convert, and stream audio and video".
-2. Select `requests` (pip package, any interpreter).
-   - Should show the pip description. Verify it appears even if the installed name is lowercase `requests`.
-3. Select an obscure or newly-installed package that was unlikely to be in the corpus
-   (e.g. a one-off pip package from a specific project).
-   - Should show "No description available" in tertiary (gray) color. This is the expected graceful fallback, not an error.
-4. Confirm the description text wraps normally (it's prose, not monospaced). It should look readable, not like a code block.
-5. Confirm re-running the scan does not reset or reload the description store (it's loaded once at startup).
-
 ---
 
 # Snapshot-Based Recovery: Diff + Reinstall (2026-05-17)
@@ -451,7 +339,6 @@ Run after `./scripts/regenerate-xcode.sh` + clean build + launch:
 ## Status
 
 Implementation-complete. `swift build` + `swift test` must be verified on hardware.
-William must run the manual checklist below before starting the next goal.
 
 ## Design: Why Diff, Not Whole-Snapshot Reinstall
 
@@ -489,33 +376,6 @@ The old "Exporting a snapshot as a reinstall script" section described whole-sna
 
 - `ScriptSheetView<Warning: View>` — generic sheet used by both cleanup and reinstall flows. `CleanupScriptSheetView` is now a thin wrapper.
 - `RestoreChecklistSheet` — private, embedded in `SnapshotContentView.swift`. Two-step: checklist → script. Dismissing from either step closes the sheet.
-
-## William's Manual Verification Checklist
-
-Run after `./scripts/regenerate-xcode.sh` + clean build + launch:
-
-### Restore Missing Packages flow
-1. Open a **pre-cleanup snapshot** (one captured before a cleanup run where you removed ≥1 package).
-2. Confirm "Restore Missing Packages…" button is visible in the metadata header, next to "Exit Snapshot".
-3. Click "Restore Missing Packages…" — checklist sheet should appear showing only packages that are no longer installed. Verify the header shows the snapshot reason AND capture date (e.g., "Pre-cleanup snapshot · Captured May 17, 2026 at 3:42 PM").
-4. Confirm all items are pre-checked (blue checkmarks).
-5. Uncheck one item — confirm the count in "Generate Reinstall Script (N)" decrements.
-6. Click "Generate Reinstall Script (N)" — the sheet surface switches to the script view. Verify the script contains `brew install`, `pip install ==version`, etc. for the checked packages.
-7. "Copy to Clipboard" — paste into a text editor and confirm the script is valid bash.
-8. "Save as .sh…" — NSSavePanel opens defaulting to `installory-reinstall.sh`.
-9. Click "Done" — the entire sheet closes (back to snapshot content view).
-
-### Nothing missing case
-10. Open the snapshot you just took **right now** (a fresh manual snapshot before anything was removed).
-11. Click "Restore Missing Packages…" — an alert should appear: "Everything in this snapshot is still installed." No checklist, no sheet.
-12. Click "OK" — alert dismisses.
-
-### Existing cleanup flow (confirm no regression)
-13. In normal mode, select ≥1 package for cleanup.
-14. Click "Generate Cleanup Script (N)" — cleanup sheet appears with "Cleanup Script Ready" title and green "Snapshot captured before generation" badge. Script text, Copy, Save, Done all work identically to before.
-
-### Uninstall script header (Task 5)
-15. Open the generated cleanup script in a text editor. The header should say `use "Restore Missing Packages"` (not `use 'Export as reinstall script'`).
 
 ---
 
@@ -581,41 +441,13 @@ This pairing matches macOS convention (action in inspector + right-click shortcu
 - `.preCleanup` snapshot is captured on every call to `generateAndShowCleanupScript(packages:)`, including single-package calls.
 - No "execute" button was added anywhere. The sheet shows, copies, and saves. The user runs it.
 
-## William's Manual Checklist
-
-Run after `./scripts/regenerate-xcode.sh` + clean build + launch:
-
-### Removal section in detail pane
-1. Click any non-system package (e.g. `ffmpeg`) → detail pane → "Remove" section appears below the fields section.
-2. Monospaced command is shown and text-selectable.
-3. "Copy command" copies just the command (no preamble).
-4. Red "Remove this package…" button triggers the cleanup sheet. Confirm the sheet header shows "Snapshot captured before generation ✓".
-5. Dismiss the sheet → confirm a "Pre-cleanup" snapshot entry appeared in the Snapshots sidebar.
-6. Click a system package (e.g. a pip package under `/usr/bin/python3`) → "Remove" section shows the lock icon + "cannot be removed" message. No command, no button.
-7. If you have a `.mas` package: detail pane shows the drag-to-Trash message. No command, no button.
-8. Click a denylisted package (e.g. `git`, `openssl`) → orange warning banner appears above the command.
-
-### Context menu
-9. Right-click a non-system package row → "Remove…" appears in the context menu.
-10. Click "Remove…" → sheet appears (snapshot captured, same path as the button).
-11. Right-click a read-only package row → no "Remove…" item (context menu may be empty; on macOS an empty `.contextMenu` produces no menu).
-12. Right-click while package B is selected in the list, but right-click package A's row → the sheet should be for package A (closure captures the row's package, not the selection).
-
-### Bottom bar (cleanup discoverability)
-13. With packages loaded, confirm "Select for Cleanup" is visible at the bottom of the package list pane at all window sizes, including narrow (< 500 px wide).
-14. Click it → bottom bar switches to "Generate Cleanup Script (0)" (disabled) + "Done".
-15. Select packages → count updates in the button label.
-16. Click "Generate Cleanup Script (N)" → sheet appears.
-17. Click "Done" → bar returns to "Select for Cleanup" mode, selections cleared.
-18. Sort picker remains in the toolbar and works normally in both modes.
-
 ---
 
 # Phase 5c-2 Handoff (2026-05-16)
 
 ## Status
 
-Phase 5c-2 is **implementation-complete**. `swift build` passes (zero errors, zero warnings). All 272 library tests pass. **William must verify on hardware** using the checklist below before starting Phase 5d.
+Phase 5c-2 is **implementation-complete**. `swift build` passes (zero errors, zero warnings). All 272 library tests pass.
 
 Tasks C (Snapshots UI), D (Cleanup Wizard), and E (Onboarding) are complete.
 
@@ -717,51 +549,13 @@ Tasks C (Snapshots UI), D (Cleanup Wizard), and E (Onboarding) are complete.
 - Cleanup mode exits automatically when "Done" is tapped; it does NOT exit automatically when the sidebar selection changes to a snapshot. The coordinator could add an observer for this, but it's harmless: cleanup mode toolbar items simply don't appear in `SnapshotContentView`.
 - `safetyReminder` in `CleanupScriptSheetView` uses markdown bold syntax (`**...**`) in a `Text` view — requires iOS 15+ / macOS 12+, which is met by the macOS 14.0 deployment target.
 
-## William's Manual Verification Checklist
-
-Run these after `./scripts/regenerate-xcode.sh` + clean build + launch:
-
-### Onboarding (Task E)
-1. **Fresh install simulation:** delete `backshelf.onboarding.completed` from UserDefaults (`defaults delete com.wricchiuti.Backshelf backshelf.onboarding.completed`), then relaunch. The onboarding sheet should appear immediately.
-2. Verify all three panels display and the page dots update.
-3. "Skip" (top right) dismisses and sets the flag — sheet should NOT reappear on next launch.
-4. Repeat step 1, navigate to page 3, tap "Grant Access to /opt/homebrew" — NSOpenPanel opens. Dismiss it. Flag should be set, sheet gone.
-5. Repeat step 1, tap "Skip for Now" on page 3 — same result as step 3.
-
-### Snapshots UI (Task C)
-6. In a fresh-launch state (no prior snapshots): sidebar "Snapshots" section shows "No snapshots yet".
-7. Click "Snapshot Now" (camera icon in toolbar) — button should be disabled until packages are loaded. Once enabled, click it. A new entry should appear in the Snapshots section immediately.
-8. The snapshot row should show "Manual snapshot" and a relative timestamp ("just now" or "0 seconds ago").
-9. Click the snapshot row — middle pane switches to `SnapshotContentView`. Confirm: reason label, capture date, package count are shown at the top; packages grouped by manager; "Exit Snapshot" button visible.
-10. Confirm search filters the snapshot list live.
-11. Click "Exit Snapshot" — returns to `PackageListView` / "All packages" mode.
-12. Generate a cleanup script (Task D, below). Verify a second snapshot row appears labelled "Pre-cleanup".
-
-### Cleanup Wizard (Task D)
-13. In normal mode (no cleanup mode), confirm no checkboxes are visible on package rows.
-14. Click "Select for Cleanup" (checkmark.circle) in the toolbar. Confirm checkboxes appear on non-readOnly rows; lock icons appear on readOnly rows.
-15. Click a few checkboxes — they should turn blue (`checkmark.circle.fill`). Confirm `selectedPackage` and the detail pane are NOT affected by clicking checkboxes.
-16. Click a package row (not the checkbox) — detail pane updates normally. Checkbox state is independent.
-17. Confirm "Generate Cleanup Script (N)" is disabled when 0 selected.
-18. Select ≥1 package, click "Generate Cleanup Script (N)".
-19. Cleanup sheet appears:
-    - Header says "Cleanup Script Ready" with green "Snapshot captured" badge
-    - Script text is visible, monospaced, selectable
-    - Safety reminder "Backshelf does not run it for you" is visible
-    - "Copy to Clipboard" writes script to clipboard
-    - "Save as .sh…" opens NSSavePanel; saving produces a valid `.sh` file
-    - "Done" dismisses the sheet
-20. After dismissing the sheet, confirm a "Pre-cleanup" snapshot appeared in the Snapshots sidebar section.
-21. Select a denylisted package (e.g. `git`, `openssl`, `node`) for cleanup. The sheet should show the orange denylist warning banner.
-22. Click "Done" in cleanup mode toolbar — checkboxes disappear, selection is cleared.
-
 ---
 
 # Phase 5c-1 Handoff (2026-05-16)
 
 ## Status
 
-Phase 5c-1 is implementation-complete. **William must verify on hardware before starting 5c-2.**
+Phase 5c-1 is implementation-complete.
 
 Tasks A, B, G, F are built and all 272 library tests pass with zero warnings. Tasks C, D, E (snapshots UI, cleanup wizard, onboarding) are in Phase 5c-2, pending hardware verification of this batch.
 
@@ -854,41 +648,13 @@ All stale rows are `.selectionDisabled()`. The empty-state text ("No directories
 - `scan_runs` rows accumulate and are not pruned. Disk impact negligible; worth pruning in 5d if desired.
 - No optimistic UI during rescan: the package list goes empty then refills as managers complete. A future improvement would keep stale packages visible during rescan.
 
-## William's Manual Verification Checklist
-
-Run these after `./scripts/regenerate-xcode.sh` + clean build + launch:
-
-### Persistence (Task B)
-1. Grant `/opt/homebrew`, let auto-scan complete. Quit the app.
-2. Relaunch: the package list should **populate immediately** (from DB) before any scan runs. Confirm count matches the previous scan.
-3. The bottom of the sidebar should show "Last scanned X ago" (relative time).
-4. Wait for the background re-scan to complete. Confirm the count updates and "Last scanned" resets to "just now".
-
-### NpmScanner dedup (Task A)
-5. Check the Xcode console for `ForEach<...> the ID npm:... occurs multiple times` warnings. There should be **none**.
-6. Click "npm (N)" in the sidebar — the list should filter to npm packages only, no duplicates visible.
-
-### Stale bookmarks (Task G)
-7. In a new terminal: `mv /opt/homebrew /opt/homebrew-bak` (or pick a non-critical granted path). Quit and relaunch Backshelf.
-8. The Directory Access section should show the stale path in orange with a "Re-grant" button.
-9. Clicking "Re-grant" should open NSOpenPanel pre-navigated to that path.
-10. (Restore: `mv /opt/homebrew-bak /opt/homebrew`)
-
-### Scan failure surfacing (Task F)
-11. With `/opt/homebrew` granted, also grant a path no scanner uses (e.g. `~/Documents`).
-12. To simulate a failure: not easily doable without mocking, but after a normal scan, failed/timedOut rows should show an orange warning icon. (Verify in a future session by introducing a timeout.)
-13. Confirm that manager rows with 0 packages but `.succeeded` status are hidden (npm shows if it found packages; hides if N=0 + no failure).
-
-### Bottom bar
-14. Confirm the sidebar bottom bar shows both the package/manager count summary and the "Last scanned" timestamp.
-
 ---
 
 > **Next:** Phase 5c-2 (Tasks C, D, E — Snapshots UI, Cleanup Wizard, Onboarding). Start with a fresh `/goal` after hardware verification of this batch.
 
 ---
 
-> **Renamed Cruft → Backshelf on 2026-05-15.** The SPM package directory, library target, and all source/doc references have been updated. The git root directory rename is handled separately by William.
+> **Renamed Cruft → Backshelf on 2026-05-15.** The SPM package directory, library target, and all source/doc references have been updated. The git root directory rename is handled separately by the maintainer.
 
 ---
 
@@ -944,7 +710,7 @@ After this, Phase 5b is officially closed.
 
 ## Phase 5c plan (design approved this session)
 
-Five design questions were discussed; William approved all five proposals:
+Five design questions were discussed; the maintainer approved all five proposals:
 
 1. **Snapshot UI placement.** Sidebar section called "Snapshots" below "Directory Access". Chronologically listed entries ("Yesterday at 3:42 PM — pre-cleanup", "Last week — manual capture"). Clicking one switches middle/detail panes into snapshot-viewer mode showing the inventory at that point in time. Same window, no modals. Mail.app pattern.
 
@@ -1034,7 +800,7 @@ Scope is meaty (7 sub-tasks; cleanup wizard alone is real work). Probably 100-12
 
 ## Tag history
 
-- `phase-5a-verified` — sandboxed app shell + working scan UI verified on hardware (110 brew + 78 pip + 5 npm packages on William's M-class MacBook Pro).
+- `phase-5a-verified` — sandboxed app shell + working scan UI verified on hardware (110 brew + 78 pip + 5 npm packages on the maintainer's M-class MacBook Pro).
 - `phase-5b-verified` — **pending step 4 above**.
 - Future: `phase-5c-verified` after snapshots + cleanup + onboarding land.
 
@@ -1296,25 +1062,6 @@ The fixed constraint fought `NavigationSplitView`'s own column sizing. Removed; 
 
 6. **`ManagerBadge` in `PackageDetailView`** imports both `AppKit` (for `NSWorkspace`) and `BackshelfCore`. Intentional for a macOS-only target.
 
-## William's Manual Checklist (run after this phase)
-
-1. `./scripts/regenerate-xcode.sh` from repo root
-2. `open Backshelf.xcodeproj`
-3. Set Development Team under Signing & Capabilities if prompted
-4. ⌘R — app launches
-5. If directories were already granted in 5a's UserDefaults: auto-scan fires and the package list populates within ~2 s
-6. If no directories granted: "No Access Granted" empty state appears; grant `/opt/homebrew` (or `/usr/local` on Intel) → Cmd+R to scan
-7. Sidebar → click "Homebrew (N)" → list filters to brew + cask packages only
-8. Click "All packages (N)" → list returns to full set
-9. Type in the search field → list filters live
-10. Open the Sort menu → switch to "Name (A–Z)" → list re-sorts
-11. Click any package row → detail pane shows name, version, badge, install path, dependencies
-12. Click "Reveal in Finder" → Finder opens to the install path
-13. Click "Show raw record" disclosure → pretty-printed JSON appears, is text-selectable
-14. ⌘R → scan re-runs; Refresh button shows spinner while running
-15. "Grant Recommended ▾" menu in sidebar bottom bar → lists ungranted canonical dirs
-16. "Custom…" button → NSOpenPanel opens to pick any directory
-
 ## Questions for Phase 5c (now superseded by RESUME HERE design decisions above)
 
 1. Database persistence.
@@ -1361,7 +1108,7 @@ files/build-and-release.md              UPDATED: XcodeGen-as-source-of-truth not
 5. **Security-scoped resource lifetime around scans.** `AppCoordinator.scan()` starts all granted bookmarks before constructing scanners and stops them in a `defer` block.
 6. **Scanner construction: zero-arg defaults** — `BrewScanner()`, `PipScanner()`, `NpmScanner()` all work with `SystemDirectoryAccessProvider()`.
 7. **AppCoordinator builds a new ScanCoordinator per scan** — no residual state between scans.
-8. **No code signing identity in project.yml** — William sets team in Xcode UI.
+8. **No code signing identity in project.yml** — the maintainer sets the team in Xcode UI.
 9. **AppIcon: solid indigo placeholder (10 PNGs).** Real design in Phase 5d.
 
 ## Phase 5a Known Limitations
@@ -1375,7 +1122,7 @@ files/build-and-release.md              UPDATED: XcodeGen-as-source-of-truth not
 
 ## Verification result
 
-App launched successfully on William's Apple Silicon MacBook Pro. Granted `/opt/homebrew`, scan reported:
+App launched successfully on the maintainer's Apple Silicon MacBook Pro. Granted `/opt/homebrew`, scan reported:
 - Homebrew: 110 packages · 0.1s
 - pip: 78 packages across 9 interpreters · 0.2s
 - npm: 5 packages · 0.0s

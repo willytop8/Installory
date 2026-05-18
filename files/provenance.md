@@ -95,7 +95,7 @@ This is the differentiator. For users who code with Claude Code, we can reconstr
 ~/.claude/
 ├── history.jsonl                          # every prompt ever, with timestamp
 ├── projects/
-│   └── -Users-will-projects-podcast-app/
+│   └── -Users-you-projects-podcast-app/
 │       ├── sessions-index.json            # session summaries, message counts, branches
 │       ├── <session-uuid>.jsonl           # the full transcript, one JSON per line
 │       └── ...
@@ -113,7 +113,7 @@ Each line is one event in a session:
   "sessionId": "abc123",
   "version": "1.x.x",
   "gitBranch": "main",
-  "cwd": "/Users/will/projects/podcast-app",
+  "cwd": "/Users/you/projects/podcast-app",
   "message": {
     "role": "user" | "assistant",
     "content": [

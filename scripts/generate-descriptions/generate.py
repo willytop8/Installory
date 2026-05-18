@@ -4,7 +4,7 @@ Installory descriptions corpus generator.
 
 Fetches one-line package descriptions from:
   - Homebrew formulae and casks  (bulk API — two requests total)
-  - PyPI top packages            (seed list from hukovk/top-pypi-packages)
+  - PyPI top packages            (seed list from hugovk/top-pypi-packages)
   - npm popular packages         (seed list from seeds/npm-seed-list.json)
 
 Output: ../../App/Resources/descriptions.json
@@ -135,7 +135,7 @@ def normalize_npm(name: str) -> str:
 # HTTP helpers
 # ---------------------------------------------------------------------------
 
-_UA = "Installory-description-generator/1.0 (https://github.com/wricchiuti/Installory)"
+_UA = "Installory-description-generator/1.0 (https://github.com/willytop8/Installory)"
 
 
 def _get(url: str, retries: int = 3) -> bytes:

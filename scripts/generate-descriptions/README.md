@@ -37,7 +37,7 @@ mid-run and re-running picks up where it left off. A full first run fetches
 package names to fetch descriptions for. They are committed to the repo so
 re-runs are reproducible without needing the upstream seed sources.
 
-- **PyPI seed**: generated from [hukovk/top-pypi-packages](https://hukovk.github.io/top-pypi-packages/)
+- **PyPI seed**: generated from [hugovk/top-pypi-packages](https://hugovk.github.io/top-pypi-packages/)
   (top packages by download count over the last 30 days). Re-fetched and saved
   the first time the script runs without an existing seed file.
 - **npm seed**: started as a curated list of ~200 well-known packages and expanded
