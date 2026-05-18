@@ -18,6 +18,16 @@ It's built for people — especially those working with AI coding tools like Cla
 
 **Duplicate detection.** Installory flags tools installed by more than one package manager — the classic cause of "why am I running the wrong version?" — so you can resolve the conflict.
 
+## Screenshots
+
+**The main window** — a unified, three-pane inventory of everything installed across Homebrew, pip, and npm:
+
+![Installory main window](files/screenshots/main-window.png)
+
+**Package detail** — a plain-language description, a provenance narrative explaining how the package likely got there, and a safe removal flow that generates a command for you to run yourself:
+
+![Installory package detail view](files/screenshots/package-detail.png)
+
 ## Design principles
 
 - **Read-only and sandboxed.** Installory inspects your system; it never modifies it. The app is fully App Store sandboxed with read-only, user-granted folder access.
@@ -79,7 +89,9 @@ scripts/
 ├── regenerate-xcode.sh          regenerates the Xcode project from project.yml
 └── generate-descriptions/       build-time tool that builds the bundled
                                  package-description corpus
-files/                   Product docs, architecture notes, roadmap
+files/
+├── screenshots/                 README screenshots
+└── *.md                         product docs, architecture notes, roadmap
 HANDOFF.md               Detailed phase-by-phase development record
 ```
 
