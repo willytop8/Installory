@@ -35,7 +35,7 @@ public actor ScanCoordinator {
     public func scan() -> AsyncStream<ScanEvent> {
         let scanners = self.scanners
         let timeouts = self.timeouts
-        return AsyncStream { continuation in
+        return AsyncStream { (continuation: AsyncStream<ScanEvent>.Continuation) in
             Task.detached {
                 var allPackages: [Package] = []
                 var perManager: [PackageManager: ScannerStatus] = [:]
@@ -53,11 +53,17 @@ public actor ScanCoordinator {
                             let packages: [Package]
                             do {
                                 let pkgs = try await withTimeout(timeoutSecs) {
-                                    try await scanner.scan()
+                                    guard await scanner.isAvailable() else {
+                                        throw ScannerUnavailable(reason: scanner.unavailableReason)
+                                    }
+                                    return try await scanner.scan()
                                 }
                                 let ms = Int(Date().timeIntervalSince(start) * 1000)
                                 status = .succeeded(count: pkgs.count, durationMs: ms)
                                 packages = pkgs
+                            } catch let unavailable as ScannerUnavailable {
+                                status = .skipped(reason: unavailable.reason)
+                                packages = []
                             } catch is TimeoutError {
                                 let ms = Int(Date().timeIntervalSince(start) * 1000)
                                 status = .timedOut(durationMs: ms)
@@ -83,4 +89,8 @@ public actor ScanCoordinator {
             }
         }
     }
+}
+
+private struct ScannerUnavailable: Error, Sendable {
+    let reason: String
 }

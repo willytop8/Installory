@@ -106,7 +106,7 @@ Default timeouts per scanner:
 | npm | 15s | walk `node_modules/<pkg>/package.json` across multiple node installs |
 | cargo | 2s | single `~/.cargo/.crates2.json` read |
 | gem | 5s | walk `specifications/` directories |
-| mas | — | unsupported in a sandboxed app (see "Honest about gaps") |
+| mas | 5s | walk granted Applications folders and read App Store receipts |
 
 Timeouts are configurable in Settings (advanced section, defaulted hidden).
 
@@ -258,11 +258,13 @@ For Ruby version managers (rbenv, chruby, asdf), enumerate each managed Ruby's g
 
 The `.gemspec` files are Ruby source files; we don't try to evaluate them. We extract only what the filename tells us. Install time: mtime of the gemspec file.
 
-### MasScanner (unsupported in sandboxed v1)
+### MasScanner
 
-The `mas` CLI is the only practical way to enumerate Mac App Store apps installed via the App Store, and we can't invoke it. Listing `/Applications` is too noisy (the user has many apps from other sources). For v1, the `mas` manager is reported as `.skipped(reason: "Not supported in sandboxed app — see Permissions")`.
+**Strategy:** Walk granted Applications folders and report only `.app` bundles that contain an App Store receipt at `Contents/_MASReceipt/receipt`. No `mas` invocation.
 
-This is a known gap. If we ship a future direct-download non-sandboxed version, `mas list` parsing comes back. For App Store Installory, MAS-installed apps are simply outside our scope.
+For each receipt-bearing app bundle, read `Contents/Info.plist` for `CFBundleName`, `CFBundleDisplayName`, `CFBundleIdentifier`, `CFBundleShortVersionString`, and `CFBundleVersion`. The package id uses the bundle identifier when available. Confidence for install time is `.low` using the receipt mtime or app bundle mtime as a fallback.
+
+This does not recover the numeric App Store product id that `mas list` would return, because invoking `mas` is outside the sandbox model. Reinstall scripts therefore emit a comment directing the user back to the App Store.
 
 ## Adding a new scanner
 
@@ -288,11 +290,11 @@ pip          89 packages across 3 Pythons    ✓
 npm          12 packages    ✓ (may miss installs done via mismatched npm prefix)
 pipx         5 tools    ✓
 cargo        18 crates    ✓
-gem          ~        Skipped (multiple Rubies — only rbenv + system Ruby scanned)
-mas          —        Unsupported in sandboxed v1
+gem          ~        ✓ (rbenv, user gems, Homebrew gems, system gems read-only)
+mas          ~        ✓ (receipt-bearing apps in granted Applications folders)
 pnpm         ~        Skipped (post-v0)
 bun          ~        Skipped (post-v0)
 conda        ~        Skipped (post-v0)
 ```
 
-We never present a partial scan as complete. The MAS gap and "npm globals installed via a non-standard prefix" gap are documented in the UI's per-scanner status row so the user sees exactly what we missed and why.
+We never present a partial scan as complete. Gaps like "npm globals installed via a non-standard prefix" are documented in the UI's per-scanner status row so the user sees exactly what we missed and why.

@@ -81,7 +81,7 @@ struct ReinstallScriptGeneratorTests {
         let result = generator.generate(missing: [
             makeMissing(manager: .pip, name: "requests", version: "2.31.0", qualifier: "/path/with $pecial/python3")
         ])
-        #expect(result.scriptText.contains("\\$pecial"))
+        #expect(result.scriptText.contains("'/path/with $pecial/python3'"))
     }
 
     @Test func pipNilQualifierFallsBackToPython3() {
@@ -89,7 +89,7 @@ struct ReinstallScriptGeneratorTests {
             makeMissing(manager: .pip, name: "requests", version: "2.31.0", qualifier: nil)
         ])
         let script = result.scriptText
-        #expect(script.contains("\"python3\" -m pip install"))
+        #expect(script.contains("python3 -m pip install"))
     }
 
     @Test func pipGroupsByInterpreter() {
@@ -106,14 +106,14 @@ struct ReinstallScriptGeneratorTests {
 
     @Test func npmPinsVersion() {
         let result = generator.generate(missing: [makeMissing(manager: .npm, name: "typescript", version: "5.4.5")])
-        #expect(result.scriptText.contains("npm install -g \"typescript@5.4.5\""))
+        #expect(result.scriptText.contains("npm install -g typescript@5.4.5"))
     }
 
     // MARK: - pipx (pins version)
 
     @Test func pipxPinsVersion() {
         let result = generator.generate(missing: [makeMissing(manager: .pipx, name: "black", version: "24.4.2")])
-        #expect(result.scriptText.contains("pipx install \"black==24.4.2\""))
+        #expect(result.scriptText.contains("pipx install black==24.4.2"))
     }
 
     // MARK: - cargo (pins version)

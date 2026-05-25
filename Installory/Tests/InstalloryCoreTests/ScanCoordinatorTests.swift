@@ -6,18 +6,34 @@ import Foundation
 
 private struct MockScanner: PackageScanner, Sendable {
     let manager: PackageManager
+    let available: Bool
+    let unavailableReason: String
     private let behavior: @Sendable () async throws -> [Package]
 
-    init(manager: PackageManager, _ behavior: @escaping @Sendable () async throws -> [Package]) {
+    init(
+        manager: PackageManager,
+        available: Bool = true,
+        unavailableReason: String = "mock unavailable",
+        _ behavior: @escaping @Sendable () async throws -> [Package]
+    ) {
         self.manager = manager
+        self.available = available
+        self.unavailableReason = unavailableReason
         self.behavior = behavior
     }
 
-    func isAvailable() async -> Bool { true }
+    func isAvailable() async -> Bool { available }
     func scan() async throws -> [Package] { try await behavior() }
 
     static func succeeding(manager: PackageManager, packages: [Package] = []) -> MockScanner {
         MockScanner(manager: manager) { packages }
+    }
+
+    static func unavailable(manager: PackageManager, reason: String) -> MockScanner {
+        MockScanner(manager: manager, available: false, unavailableReason: reason) {
+            Issue.record("scan() must not run for unavailable scanners")
+            return []
+        }
     }
 
     static func throwing(manager: PackageManager, error: some Error & Sendable) -> MockScanner {
@@ -164,6 +180,31 @@ struct ScanCoordinatorTests {
         }
         #expect(perManager.isEmpty)
         #expect(allPackages.isEmpty)
+    }
+
+    @Test("unavailable scanner is skipped without running scan")
+    func unavailableScannerIsSkipped() async throws {
+        let coordinator = ScanCoordinator(
+            scanners: [
+                MockScanner.unavailable(manager: .mas, reason: "Applications folder not granted"),
+                MockScanner.succeeding(manager: .brew),
+            ],
+            timeouts: [.mas: 5, .brew: 5]
+        )
+
+        let events = await collectEvents(from: coordinator)
+
+        guard case .allFinished(let perManager, let allPackages) = events.last else {
+            Issue.record("last event must be .allFinished")
+            return
+        }
+
+        #expect(allPackages.isEmpty)
+        #expect(perManager[.mas] == .skipped(reason: "Applications folder not granted"))
+        guard case .succeeded(0, _) = perManager[.brew] else {
+            Issue.record(".brew must have .succeeded(0, _) status")
+            return
+        }
     }
 
     @Test("scannerStarted always precedes the matching scannerFinished for each manager")

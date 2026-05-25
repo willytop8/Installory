@@ -46,7 +46,7 @@ struct ScriptSheetView<Warning: View>: View {
         HStack(spacing: 8) {
             Image(systemName: "info.circle")
                 .foregroundStyle(.secondary)
-            Text("Open Terminal, paste this script, and press Enter to review what it will do. **Installory does not run it for you** — the script runs entirely in your hands.")
+            Text("Review this script here first. When you are ready, copy or save it and run it yourself in Terminal. **Installory never runs commands for you.**")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }

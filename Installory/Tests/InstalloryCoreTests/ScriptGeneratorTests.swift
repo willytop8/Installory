@@ -109,8 +109,7 @@ struct ScriptGeneratorTests {
         let result = generator.generate(packages: [pkg])
         let script = result.scriptText
 
-        // The actual command line (unquoted form in the script)
-        let expectedCmd = #""/Users/x/.pyenv/versions/3.11.7/bin/python" -m pip uninstall -y "requests""#
+        let expectedCmd = #"/Users/x/.pyenv/versions/3.11.7/bin/python -m pip uninstall -y requests"#
         #expect(lines(of: script).contains(expectedCmd))
 
         // Section header includes the interpreter path
@@ -124,8 +123,7 @@ struct ScriptGeneratorTests {
         let result = generator.generate(packages: [pkg])
         let script = result.scriptText
 
-        // Command must double-quote the interpreter path
-        #expect(script.contains("\"\(interpreter)\" -m pip uninstall -y \"flask\""))
+        #expect(script.contains("'\(interpreter)' -m pip uninstall -y flask"))
     }
 
     // MARK: - npm
@@ -135,7 +133,7 @@ struct ScriptGeneratorTests {
         let result = generator.generate(packages: [pkg])
         let script = result.scriptText
 
-        #expect(lines(of: script).contains(#"npm uninstall -g "typescript""#))
+        #expect(lines(of: script).contains("npm uninstall -g typescript"))
         #expect(script.contains("# === npm (global) ==="))
     }
 
@@ -144,7 +142,7 @@ struct ScriptGeneratorTests {
         let result = generator.generate(packages: [pkg])
         let script = result.scriptText
 
-        #expect(lines(of: script).contains(#"npm uninstall -g "@types/node""#))
+        #expect(lines(of: script).contains("npm uninstall -g @types/node"))
     }
 
     // MARK: - Read-only filter
@@ -325,6 +323,12 @@ struct ScriptGeneratorTests {
         #expect(result.scriptText.hasSuffix("\n"))
     }
 
+    @Test func shellArgumentsQuoteUnsafePackageNames() {
+        let pkg = makePackage(manager: .brew, name: "weird package'$(rm -rf ~)")
+        let result = generator.generate(packages: [pkg])
+        #expect(lines(of: result.scriptText).contains(#"brew uninstall 'weird package'\''$(rm -rf ~)'"#))
+    }
+
     // MARK: - removalCommand(for:)
 
     @Test func removalCommandBrewFormula() {
@@ -340,22 +344,22 @@ struct ScriptGeneratorTests {
     @Test func removalCommandPipWithQualifier() {
         let interpreter = "/opt/homebrew/bin/python3.12"
         let pkg = makePackage(manager: .pip, name: "requests", qualifier: interpreter)
-        #expect(generator.removalCommand(for: pkg) == #""/opt/homebrew/bin/python3.12" -m pip uninstall -y "requests""#)
+        #expect(generator.removalCommand(for: pkg) == #"/opt/homebrew/bin/python3.12 -m pip uninstall -y requests"#)
     }
 
     @Test func removalCommandPipNoQualifierFallsBackToPython3() {
         let pkg = makePackage(manager: .pip, name: "flask")
-        #expect(generator.removalCommand(for: pkg) == #""python3" -m pip uninstall -y "flask""#)
+        #expect(generator.removalCommand(for: pkg) == "python3 -m pip uninstall -y flask")
     }
 
     @Test func removalCommandNpm() {
         let pkg = makePackage(manager: .npm, name: "typescript")
-        #expect(generator.removalCommand(for: pkg) == #"npm uninstall -g "typescript""#)
+        #expect(generator.removalCommand(for: pkg) == "npm uninstall -g typescript")
     }
 
     @Test func removalCommandScopedNpm() {
         let pkg = makePackage(manager: .npm, name: "@types/node")
-        #expect(generator.removalCommand(for: pkg) == #"npm uninstall -g "@types/node""#)
+        #expect(generator.removalCommand(for: pkg) == "npm uninstall -g @types/node")
     }
 
     @Test func removalCommandPipx() {
@@ -387,6 +391,6 @@ struct ScriptGeneratorTests {
         let interpreter = "/Users/my user/.pyenv/versions/3.12.0/bin/python"
         let pkg = makePackage(manager: .pip, name: "flask", qualifier: interpreter)
         let cmd = generator.removalCommand(for: pkg)
-        #expect(cmd == #""/Users/my user/.pyenv/versions/3.12.0/bin/python" -m pip uninstall -y "flask""#)
+        #expect(cmd == #"'/Users/my user/.pyenv/versions/3.12.0/bin/python' -m pip uninstall -y flask"#)
     }
 }

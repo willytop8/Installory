@@ -7,7 +7,10 @@ struct CanonicalDirectory: Identifiable, Sendable {
     let managers: [PackageManager]
 
     var displayPath: String {
-        path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+        path.replacingOccurrences(
+            of: FileManager.default.homeDirectoryForCurrentUser.path,
+            with: "~"
+        )
     }
 
     var subtitle: String {
@@ -16,16 +19,22 @@ struct CanonicalDirectory: Identifiable, Sendable {
 
     // All canonical directories for this Mac architecture.
     static func all(isAppleSilicon: Bool) -> [CanonicalDirectory] {
-        let home = NSHomeDirectory()
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
         var dirs: [CanonicalDirectory] = []
         if isAppleSilicon {
-            dirs.append(.init(path: "/opt/homebrew", managers: [.brew, .brewCask, .pip, .npm]))
+            dirs.append(.init(path: "/opt/homebrew", managers: [.brew, .brewCask, .pip, .npm, .gem]))
         } else {
-            dirs.append(.init(path: "/usr/local", managers: [.brew, .brewCask, .pip, .npm]))
+            dirs.append(.init(path: "/usr/local", managers: [.brew, .brewCask, .pip, .npm, .gem]))
         }
         dirs.append(.init(path: "\(home)/.pyenv", managers: [.pip]))
         dirs.append(.init(path: "\(home)/.nvm", managers: [.npm]))
         dirs.append(.init(path: "\(home)/.volta", managers: [.npm]))
+        dirs.append(.init(path: "\(home)/.local/share/pipx", managers: [.pipx]))
+        dirs.append(.init(path: "\(home)/.cargo", managers: [.cargo]))
+        dirs.append(.init(path: "\(home)/.rbenv", managers: [.gem]))
+        dirs.append(.init(path: "\(home)/.gem", managers: [.gem]))
+        dirs.append(.init(path: "/Applications", managers: [.mas]))
+        dirs.append(.init(path: "\(home)/Applications", managers: [.mas]))
         return dirs
     }
 }

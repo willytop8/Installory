@@ -59,23 +59,23 @@ public struct ScriptGenerator: Sendable {
     /// private and script-oriented; this method owns the nil cases cleanly.
     public func removalCommand(for package: Package) -> String? {
         guard !package.isReadOnly else { return nil }
+        let name = shellArgument(package.name)
         switch package.manager {
         case .brew:
-            return "brew uninstall \(package.name)"
+            return "brew uninstall \(name)"
         case .brewCask:
-            return "brew uninstall --cask \(package.name)"
+            return "brew uninstall --cask \(name)"
         case .pip:
             let interpreter = package.qualifier ?? "python3"
-            let escaped = shellDoubleQuoteEscape(interpreter)
-            return "\"\(escaped)\" -m pip uninstall -y \"\(package.name)\""
+            return "\(shellArgument(interpreter)) -m pip uninstall -y \(name)"
         case .npm:
-            return "npm uninstall -g \"\(package.name)\""
+            return "npm uninstall -g \(name)"
         case .pipx:
-            return "pipx uninstall \(package.name)"
+            return "pipx uninstall \(name)"
         case .cargo:
-            return "cargo uninstall \(package.name)"
+            return "cargo uninstall \(name)"
         case .gem:
-            return "gem uninstall \(package.name)"
+            return "gem uninstall \(name)"
         case .mas:
             return nil
         }
@@ -241,23 +241,23 @@ public struct ScriptGenerator: Sendable {
     // MARK: - Command rendering
 
     private func renderCommand(for pkg: Package) -> String {
+        let name = shellArgument(pkg.name)
         switch pkg.manager {
         case .brew:
-            return "brew uninstall \(pkg.name)"
+            return "brew uninstall \(name)"
         case .brewCask:
-            return "brew uninstall --cask \(pkg.name)"
+            return "brew uninstall --cask \(name)"
         case .pip:
             let interpreter = pkg.qualifier ?? "python3"
-            let escaped = shellDoubleQuoteEscape(interpreter)
-            return "\"\(escaped)\" -m pip uninstall -y \"\(pkg.name)\""
+            return "\(shellArgument(interpreter)) -m pip uninstall -y \(name)"
         case .npm:
-            return "npm uninstall -g \"\(pkg.name)\""
+            return "npm uninstall -g \(name)"
         case .pipx:
-            return "pipx uninstall \(pkg.name)"
+            return "pipx uninstall \(name)"
         case .cargo:
-            return "cargo uninstall \(pkg.name)"
+            return "cargo uninstall \(name)"
         case .gem:
-            return "gem uninstall \(pkg.name)"
+            return "gem uninstall \(name)"
         case .mas:
             // mas has no CLI uninstall; caller handles this case before reaching renderCommand
             return "\(pkg.name)  # remove manually from /Applications"

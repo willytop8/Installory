@@ -51,7 +51,7 @@ final class AppCoordinator {
 
     var snapshotBeforeRemoval: SnapshotPreference = .ask
     var scanOnLaunch: Bool = true
-    var provenanceCollection: Bool = true
+    var provenanceCollection: Bool = false
 
     // MARK: - Removal flow (coordinator-driven "Ask" dialog)
 
@@ -165,11 +165,13 @@ final class AppCoordinator {
     }
 
     func grantDirectory(suggestedPath: String) async {
-        await folderAccess.requestAccess(to: URL(fileURLWithPath: suggestedPath))
+        guard await folderAccess.requestAccess(to: URL(fileURLWithPath: suggestedPath)) != nil else { return }
+        Task { await refresh() }
     }
 
     func grantCustomDirectory() async {
-        await folderAccess.requestAccess(to: nil)
+        guard await folderAccess.requestAccess(to: nil) != nil else { return }
+        Task { await refresh() }
     }
 
     func persistUIPreferences() {
@@ -310,9 +312,9 @@ final class AppCoordinator {
            let pref = SnapshotPreference(rawValue: raw) {
             snapshotBeforeRemoval = pref
         }
-        // Bool defaults are `false` in UserDefaults when not yet set, but our
-        // defaults for both flags are `true`. Guard with object(forKey:) to
-        // distinguish "never written" (keep true) from "explicitly written false".
+        // Bool defaults are `false` in UserDefaults when not yet set.
+        // Guard with object(forKey:) for settings whose product default differs
+        // from the raw UserDefaults default.
         if UserDefaults.standard.object(forKey: "backshelf.settings.scanOnLaunch") != nil {
             scanOnLaunch = UserDefaults.standard.bool(forKey: "backshelf.settings.scanOnLaunch")
         }
@@ -358,7 +360,11 @@ final class AppCoordinator {
         let scanners: [any PackageScanner] = [
             BrewScanner(),
             PipScanner(),
+            PipxScanner(),
             NpmScanner(),
+            CargoScanner(),
+            GemScanner(),
+            MasScanner(applicationDirectories: grantedApplicationsDirectories(accessedURLs)),
         ]
         let scanCoordinator = ScanCoordinator(scanners: scanners)
 
@@ -422,6 +428,23 @@ final class AppCoordinator {
             provenanceByPackageId = Dictionary(
                 uniqueKeysWithValues: evidence.map { ($0.packageId, $0) }
             )
+        }
+    }
+
+    private func grantedApplicationsDirectories(_ grantedRoots: [URL]) -> [URL] {
+        let homeApplications = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications", isDirectory: true)
+        let candidates = [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            homeApplications,
+        ]
+
+        return candidates.filter { candidate in
+            grantedRoots.contains { root in
+                let rootPath = root.standardizedFileURL.path
+                let candidatePath = candidate.standardizedFileURL.path
+                return rootPath == candidatePath || candidatePath.hasPrefix(rootPath + "/")
+            }
         }
     }
 }

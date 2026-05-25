@@ -100,41 +100,43 @@ public struct ReinstallScriptGenerator: Sendable {
             out.append("# \(mp.package.name): reinstall from the Mac App Store (no CLI reinstall path)")
 
         case .brew:
-            let cmd = "brew install \(mp.package.name)"
+            let cmd = "brew install \(shellArgument(mp.package.name))"
             out.append("# snapshot recorded \(mp.package.version); Homebrew installs the current version")
             out.append(shellEchoLine(for: cmd))
             out.append(cmd)
 
         case .brewCask:
-            let cmd = "brew install --cask \(mp.package.name)"
+            let cmd = "brew install --cask \(shellArgument(mp.package.name))"
             out.append("# snapshot recorded \(mp.package.version); Homebrew installs the current version")
             out.append(shellEchoLine(for: cmd))
             out.append(cmd)
 
         case .pip:
             let interpreter = mp.package.qualifier ?? "python3"
-            let escaped = shellDoubleQuoteEscape(interpreter)
-            let cmd = "\"\(escaped)\" -m pip install \"\(mp.package.name)==\(mp.package.version)\""
+            let spec = "\(mp.package.name)==\(mp.package.version)"
+            let cmd = "\(shellArgument(interpreter)) -m pip install \(shellArgument(spec))"
             out.append(shellEchoLine(for: cmd))
             out.append(cmd)
 
         case .npm:
-            let cmd = "npm install -g \"\(mp.package.name)@\(mp.package.version)\""
+            let spec = "\(mp.package.name)@\(mp.package.version)"
+            let cmd = "npm install -g \(shellArgument(spec))"
             out.append(shellEchoLine(for: cmd))
             out.append(cmd)
 
         case .pipx:
-            let cmd = "pipx install \"\(mp.package.name)==\(mp.package.version)\""
+            let spec = "\(mp.package.name)==\(mp.package.version)"
+            let cmd = "pipx install \(shellArgument(spec))"
             out.append(shellEchoLine(for: cmd))
             out.append(cmd)
 
         case .cargo:
-            let cmd = "cargo install \(mp.package.name) --version \(mp.package.version)"
+            let cmd = "cargo install \(shellArgument(mp.package.name)) --version \(shellArgument(mp.package.version))"
             out.append(shellEchoLine(for: cmd))
             out.append(cmd)
 
         case .gem:
-            let cmd = "gem install \(mp.package.name) -v \(mp.package.version)"
+            let cmd = "gem install \(shellArgument(mp.package.name)) -v \(shellArgument(mp.package.version))"
             out.append(shellEchoLine(for: cmd))
             out.append(cmd)
         }

@@ -5,6 +5,7 @@
 
 # Xcode / SPM build output
 .build/
+build/
 .swiftpm/
 DerivedData/
 *.xcodeproj/xcuserdata/

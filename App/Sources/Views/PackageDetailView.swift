@@ -230,55 +230,63 @@ struct PackageDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             }
 
-            // Primary path — the removal command, to copy and run in Terminal.
-            Text(cmd)
-                .font(.system(.callout, design: .monospaced))
-                .textSelection(.enabled)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.secondary.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-
             Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(cmd, forType: .string)
-                copiedCommand = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    copiedCommand = false
-                }
+                Task { await coordinator.requestRemoval([package]) }
             } label: {
-                Label(
-                    copiedCommand ? "Copied" : "Copy command",
-                    systemImage: copiedCommand ? "checkmark" : "doc.on.doc"
-                )
+                Label("Create Removal Script\u{2026}", systemImage: "doc.text")
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
 
-            Text("Paste into Terminal and press Enter. Installory doesn't remove anything itself \u{2014} you run the command.")
+            Text(removalScriptCaption)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Divider()
-                .padding(.vertical, 2)
+            rawCommandDisclosure(cmd)
+        }
+    }
 
-            // Secondary path — generates a script (with optional snapshot) rather
-            // than the bare command. Routes through coordinator.requestRemoval,
-            // which resolves the snapshot preference and may raise the
-            // snapshot-choice dialog via RootView.
-            Button {
-                Task { await coordinator.requestRemoval([package]) }
-            } label: {
-                Label("Create Removal Script\u{2026}", systemImage: "doc.text")
-            }
-            .buttonStyle(.bordered)
-
-            Text(removalScriptCaption)
+    @ViewBuilder
+    private func rawCommandDisclosure(_ cmd: String) -> some View {
+        if Denylist.default.isDenylisted(package) {
+            Text("Raw command copy is hidden for common essentials. Use the generated script so the command stays commented out unless you deliberately edit it.")
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        } else {
+            DisclosureGroup("Advanced command") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(cmd)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.secondary.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(cmd, forType: .string)
+                        copiedCommand = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            copiedCommand = false
+                        }
+                    } label: {
+                        Label(
+                            copiedCommand ? "Copied" : "Copy command",
+                            systemImage: copiedCommand ? "checkmark" : "doc.on.doc"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+
+                    Text("This bypasses Installory's snapshot and script review flow.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 6)
+            }
         }
     }
 

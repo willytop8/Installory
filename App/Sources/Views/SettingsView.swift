@@ -32,7 +32,7 @@ struct SettingsView: View {
 
             Section {
                 Toggle("Collect provenance", isOn: $coordinator.provenanceCollection)
-                Text("Reads shell history and Claude Code logs to show when and why each package was installed. Runs locally — no network calls.")
+                Text("Optional. Reads granted local history sources to show when and why packages were installed. Runs locally — no network calls.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {

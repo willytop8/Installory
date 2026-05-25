@@ -1,12 +1,12 @@
 # Installory
 
-A native macOS app that helps you understand and clean up the packages cluttering your machine across every package manager you've used — Homebrew, pip, npm, and more.
+A native macOS app that helps you understand and clean up the packages cluttering your machine across developer package managers — Homebrew, pip, pipx, npm, Cargo, RubyGems, and Mac App Store apps.
 
 > **Status:** Feature-complete and in pre-release hardening ahead of Mac App Store submission.
 
 ## What it does
 
-If you've spent the last year coding with AI assistants, you've probably run `brew install` and `pip install` and `npm install -g` dozens of times based on whatever Claude or Cursor told you to. Installory scans every package manager on your Mac, explains each package in plain English, traces when and why you installed it, and helps you safely remove the stuff you don't need anymore.
+If you've spent the last year coding with AI assistants, you've probably run `brew install`, `pip install`, `pipx install`, `npm install -g`, `cargo install`, and `gem install` dozens of times based on whatever Claude or Cursor told you to. Installory scans supported package managers on your Mac, explains each package in plain English, traces when and why you installed it, and helps you safely remove the stuff you don't need anymore.
 
 ## Why it exists
 
@@ -37,8 +37,8 @@ The existing tools — Homebrew's CLI, `pip list`, GUI wrappers like Taphouse, m
 │Scanners │      │ Descriptions │   │ Provenance  │   │  Safety    │
 │(brew,   │      │ (bundled,    │   │ (3-signal   │   │ (snapshots │
 │ pip,    │      │  read-only)  │   │  pipeline + │   │  + cleanup │
-│ npm…)   │      │              │   │  template   │   │  script    │
-│  files- │      │              │   │  narratives)│   │  generator)│
+│ npm,    │      │              │   │  template   │   │  script    │
+│ etc.)   │      │              │   │  narratives)│   │  generator)│
 │  only   │      │              │   │             │   │            │
 └──┬──────┘      └───────┬──────┘   └──────┬──────┘   └─────┬──────┘
    │                     │                 │                │

@@ -66,7 +66,7 @@ How Installory is organized as code. Read this before making structural changes.
 ### Scanners
 
 - **`PackageScanner` protocol** — uniform contract: discover availability, scan, return `[Package]`.
-- **One concrete scanner per manager** — `BrewScanner`, `PipScanner`, `NpmScanner`, etc.
+- **One concrete scanner per manager** — `BrewScanner`, `PipScanner`, `PipxScanner`, `NpmScanner`, `CargoScanner`, `GemScanner`, and `MasScanner`.
 - **`ScanCoordinator`** — runs scanners in parallel with `TaskGroup`, applies per-scanner timeouts, surfaces per-manager status to the UI (succeeded / failed / timed out / skipped).
 
 See [`scanners.md`](scanners.md) for the protocol shape and per-manager notes. See [`python-problem.md`](python-problem.md) for why Python gets its own dedicated subsystem inside the pip scanner.

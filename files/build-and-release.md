@@ -10,7 +10,7 @@ Installory is a **Mac App Store app**. Distribution is via App Store Connect. Si
 
 Requirements:
 
-- **macOS 14 or later** (we develop on current macOS; the app targets 13+)
+- **macOS 14 or later** (we develop on current macOS; the app targets 14+)
 - **Xcode 26 or later** (Swift 6.1+ required for GRDB 7)
 - **Apple Developer Program membership** — $99/year, required for App Store distribution
 - **An App Store Connect account** linked to that membership
@@ -137,7 +137,9 @@ For Debug builds during development, Xcode uses "Sign to Run Locally". No certif
 
 ## App Store Connect setup
 
-The first time you push a build:
+The first time you push a build, use the paste-ready copy in `APP_STORE_SUBMISSION.md`.
+
+High-level setup:
 
 1. Create the app record in App Store Connect with the matching bundle ID.
 2. Fill out the privacy nutrition label. Installory's answers:
@@ -169,7 +171,7 @@ The hard part for Installory is explaining the file-access entitlement. Apple's 
 
 Prepare a Review Notes block to attach to the submission:
 
-> Installory is an inventory and cleanup tool for macOS package managers (Homebrew, pip, npm, etc.). To present a list of packages installed on the user's machine, Installory reads on-disk metadata files in well-known locations: `/opt/homebrew/Cellar/.../INSTALL_RECEIPT.json`, `~/.local/share/pipx/venvs/`, `~/.cargo/.crates2.json`, and similar. These directories live outside the app's sandbox container, so Installory uses `com.apple.security.files.user-selected.read-only` plus `NSOpenPanel`: at first launch, the user explicitly grants Installory read access to each package manager directory. Access is persisted with security-scoped bookmarks (`com.apple.security.files.bookmarks.app-scope`). Installory never writes to these directories, never invokes external binaries, and never makes any network call. When the user wants to remove a package, Installory generates a shell script which the user reviews and runs themselves in Terminal — the app itself never modifies the user's packages.
+> Installory is an inventory and cleanup tool for macOS package managers (Homebrew, pip, pipx, npm, Cargo, RubyGems, and Mac App Store apps). To present a list of packages installed on the user's machine, Installory reads on-disk metadata files in well-known locations: `/opt/homebrew/Cellar/.../INSTALL_RECEIPT.json`, `~/.local/share/pipx/venvs/`, `~/.cargo/.crates2.json`, Ruby gem `specifications/*.gemspec` files, and App Store app receipts under `Contents/_MASReceipt/receipt`. These directories live outside the app's sandbox container, so Installory uses `com.apple.security.files.user-selected.read-only` plus `NSOpenPanel`: at first launch, the user explicitly grants Installory read access to each package manager directory. Access is persisted with security-scoped bookmarks (`com.apple.security.files.bookmarks.app-scope`). Installory never writes to these directories, never invokes external binaries, and never makes any network call. When the user wants to remove a package, Installory generates a shell script which the user reviews and runs themselves in Terminal — the app itself never modifies the user's packages.
 
 Be ready to repeat this in a phone-review call if the reviewer requests one. The first submission for a tool like this commonly gets a "we need more information" round; the rejection is rarely fatal.
 

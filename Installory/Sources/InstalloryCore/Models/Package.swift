@@ -4,18 +4,22 @@ import GRDB
 /// A single installed package identified by `(manager, qualifier, name)`.
 ///
 /// Identity is the `id` string with format `"{manager}:{qualifier}:{name}"`.
-/// The qualifier is the interpreter path for pip packages and nil for all others.
+/// The qualifier disambiguates package-manager scopes such as pip interpreters,
+/// npm global roots, or Ruby gem specification directories.
 ///
 /// Examples:
 /// - `brew::ffmpeg`
 /// - `brewCask::visual-studio-code`
 /// - `pip:/Users/x/.pyenv/versions/3.11.7/bin/python:requests`
 /// - `pipx::black`
+/// - `cargo::ripgrep`
+/// - `gem:/Users/x/.rbenv/versions/3.2.2/lib/ruby/gems/3.2.0/specifications:bundler`
+/// - `mas::com.apple.dt.Xcode`
 public struct Package: Identifiable, Codable, Equatable, Hashable, Sendable {
     /// Stable row identity in the form `"{manager}:{qualifier}:{name}"`.
     public let id: String
     public let manager: PackageManager
-    /// Interpreter path for pip packages; nil for all other managers.
+    /// Manager-specific scope, such as a pip interpreter or Ruby specifications directory.
     public let qualifier: String?
     public let name: String
     public let version: String

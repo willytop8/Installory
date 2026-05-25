@@ -425,7 +425,7 @@ struct DatabaseTests {
             perManagerResults: [
                 .brew: .succeeded(count: 247, durationMs: 1200),
                 .pip: .succeeded(count: 89, durationMs: 800),
-                .mas: .skipped(reason: "sandboxed: mas not supported"),
+                .mas: .skipped(reason: "Applications folder not granted or not found"),
                 .cargo: .failed(reason: "permission denied", durationMs: 99),
             ]
         )
@@ -441,7 +441,7 @@ struct DatabaseTests {
         #expect(f.completedAt != nil)
         #expect(f.perManagerResults[.brew] == .succeeded(count: 247, durationMs: 1200))
         #expect(f.perManagerResults[.pip] == .succeeded(count: 89, durationMs: 800))
-        #expect(f.perManagerResults[.mas] == .skipped(reason: "sandboxed: mas not supported"))
+        #expect(f.perManagerResults[.mas] == .skipped(reason: "Applications folder not granted or not found"))
         #expect(f.perManagerResults[.cargo] == .failed(reason: "permission denied", durationMs: 99))
     }
 

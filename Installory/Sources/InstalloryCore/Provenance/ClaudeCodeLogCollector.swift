@@ -9,7 +9,7 @@ public struct ClaudeCodeLogCollector: Sendable {
 
     public init(
         directoryAccess: any DirectoryAccessProvider = SystemDirectoryAccessProvider(),
-        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         detector: InstallCommandDetector = InstallCommandDetector()
     ) {
         self.directoryAccess = directoryAccess

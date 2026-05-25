@@ -102,7 +102,7 @@ public struct PythonInterpreterDiscovery: Sendable {
 
     public init(
         directoryAccess: any DirectoryAccessProvider = SystemDirectoryAccessProvider(),
-        homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory())
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) {
         self.directoryAccess = directoryAccess
         self.homeDirectory = homeDirectory

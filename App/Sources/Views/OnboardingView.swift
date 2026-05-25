@@ -33,7 +33,7 @@ struct OnboardingView: View {
             OnboardingPanel(
                 systemImage: "shippingbox.fill",
                 title: "Meet Installory",
-                message: "Installory scans your Mac for packages installed by Homebrew, pip, npm, and other tools — giving you a clear picture of what's installed and why."
+                message: "Installory scans your Mac for packages installed by Homebrew, pip, pipx, npm, Cargo, RubyGems, and the Mac App Store — giving you a clear picture of what's installed and why."
             )
         case 1:
             OnboardingPanel(
@@ -45,7 +45,7 @@ struct OnboardingView: View {
             OnboardingPanel(
                 systemImage: "folder.badge.plus",
                 title: "Grant access to get started",
-                message: "Installory reads — but never writes — your package directories. Grant access to /opt/homebrew (or /usr/local on Intel) to scan your Homebrew packages."
+                message: "Installory reads — but never writes — your package directories. Grant access to /opt/homebrew (or /usr/local on Intel) to start with Homebrew, pip, npm, and RubyGems packages."
             )
         }
     }

@@ -53,7 +53,7 @@ final class FolderAccessManager {
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
 
         guard let data = try? url.bookmarkData(
-            options: .withSecurityScope,
+            options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
             includingResourceValuesForKeys: nil,
             relativeTo: nil
         ) else { return nil }

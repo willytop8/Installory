@@ -382,7 +382,7 @@ struct ScanRunTests {
             .succeeded(count: 247, durationMs: 1234),
             .failed(reason: "permission denied", durationMs: 99),
             .timedOut(durationMs: 15000),
-            .skipped(reason: "sandboxed: mas not supported"),
+            .skipped(reason: "Applications folder not granted or not found"),
         ]
         for original in cases {
             let data = try JSONEncoder().encode(original)
@@ -400,7 +400,7 @@ struct ScanRunTests {
             perManagerResults: [
                 .brew: .succeeded(count: 247, durationMs: 1200),
                 .pip: .succeeded(count: 89, durationMs: 800),
-                .mas: .skipped(reason: "sandboxed: mas not supported"),
+                .mas: .skipped(reason: "Applications folder not granted or not found"),
             ]
         )
         let data = try JSONEncoder().encode(original)

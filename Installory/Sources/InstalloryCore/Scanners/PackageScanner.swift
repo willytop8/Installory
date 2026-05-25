@@ -15,11 +15,20 @@ public protocol PackageScanner: Sendable {
     /// packages. Call before `scan()` to skip unavailable managers.
     func isAvailable() async -> Bool
 
+    /// Human-readable reason used when `isAvailable()` returns false.
+    var unavailableReason: String { get }
+
     /// Enumerate all installed packages for this manager.
     ///
     /// Throws `ScannerError` on unrecoverable failure. Returns an empty array
     /// if the manager is available but has no installed packages.
     func scan() async throws -> [Package]
+}
+
+public extension PackageScanner {
+    var unavailableReason: String {
+        "Not installed or not accessible"
+    }
 }
 
 /// Errors that a `PackageScanner` may throw on unrecoverable failure.

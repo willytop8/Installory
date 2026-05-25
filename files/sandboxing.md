@@ -116,7 +116,7 @@ If the user revokes access later (deletes the bookmark, moves the directory, or 
 These are real product gaps the user should expect, and they should be documented in the Permissions tab and in the FAQ:
 
 - **No execution of any command.** Installory generates a cleanup script; the user runs it. This is by design and we'd keep it even without the sandbox, but the sandbox makes it a hard constraint, not a choice.
-- **Mac App Store apps (the `mas` manager) cannot be enumerated.** Listing `/Applications` is too noisy to be useful, and the `mas` CLI is the only practical inventory source. We report this as a known gap (see `scanners.md`).
+- **Mac App Store coverage is receipt-based.** Installory can report App Store apps in granted Applications folders by reading `Contents/_MASReceipt/receipt`, but it cannot recover the numeric App Store product id that the `mas` CLI exposes.
 - **No system-wide hooks.** No background daemon, no LaunchAgent. Installory is a foreground app only.
 - **No automatic interactive directory walks beyond the granted root.** If the user grants `/opt/homebrew`, we can walk inside that subtree freely. But if a package's metadata points to `/Users/will/something-else`, we can't follow that link unless that path is also granted.
 - **No invocation of the user's shell to read environment.** We can't ask `zsh` for the user's `$PATH`. We have hardcoded prefix discovery in `PathDiscovery` instead.
