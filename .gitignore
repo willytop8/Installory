@@ -31,3 +31,6 @@ Package.resolved
 
 # Personal/project-tool artifacts
 .claude/settings.local.json
+
+# Local Netlify folder
+.netlify

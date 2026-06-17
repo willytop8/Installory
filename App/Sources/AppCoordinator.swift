@@ -47,11 +47,28 @@ final class AppCoordinator {
     // Kept deliberately — renaming them would orphan existing users' settings. Not worth a migration.
     var onboardingCompleted: Bool = UserDefaults.standard.bool(forKey: "backshelf.onboarding.completed")
 
+    // MARK: - Demo mode
+
+    /// When true, the app is showing pre-populated sample data instead of a real
+    /// scan. Demo mode is fully self-contained: it never reads the filesystem,
+    /// writes to the database, or makes network calls. It exists so the app's
+    /// full feature set can be verified on a machine with no package managers
+    /// installed (for example, App Review's clean test device).
+    private(set) var isDemoMode: Bool = false
+
+    /// True when the process was launched in demo mode via `-demo` argument or
+    /// the `INSTALLORY_DEMO=1` environment variable. Lets App Review script the
+    /// demo without any clicks.
+    private static var demoLaunchRequested: Bool {
+        CommandLine.arguments.contains("-demo")
+            || ProcessInfo.processInfo.environment["INSTALLORY_DEMO"] == "1"
+    }
+
     // MARK: - Settings
 
     var snapshotBeforeRemoval: SnapshotPreference = .ask
     var scanOnLaunch: Bool = true
-    var provenanceCollection: Bool = false
+    var provenanceCollection: Bool { false }
 
     // MARK: - Removal flow (coordinator-driven "Ask" dialog)
 
@@ -66,7 +83,6 @@ final class AppCoordinator {
     /// Updated atomically at the end of provenance collection; never partially filled.
     /// Stale entries for removed packages are harmless — they're never selected.
     private(set) var provenanceByPackageId: [String: ProvenanceEvidence] = [:]
-    private var provenanceDAO: ProvenanceDAO?
 
     // MARK: - Description corpus
 
@@ -93,7 +109,6 @@ final class AppCoordinator {
                 packageDAO = PackageDAO(database: db)
                 scanRunDAO = ScanRunDAO(database: db)
                 snapshotManager = SnapshotManager(database: db)
-                provenanceDAO = ProvenanceDAO(database: db)
                 packages = (try? packageDAO!.loadAll()) ?? []
                 lastScanCompletedAt = try? scanRunDAO!.mostRecentCompletedAt()
             }
@@ -103,6 +118,52 @@ final class AppCoordinator {
         restoreUIPreferences()
         restoreSettings()
         loadDescriptionStore()
+
+        // Allow App Review (or anyone) to launch straight into demo mode without
+        // any clicks, via `-demo` or INSTALLORY_DEMO=1.
+        if Self.demoLaunchRequested {
+            enterDemoMode()
+        }
+    }
+
+    // MARK: - Demo mode actions
+
+    /// Loads the bundled sample inventory and snapshots into memory and switches
+    /// the app into demo mode. No filesystem, database, or network access occurs.
+    func enterDemoMode() {
+        isDemoMode = true
+        isScanning = false
+        searchQuery = ""
+        sidebarSelection = .all
+        selectedPackage = nil
+        isCleanupMode = false
+        selectedForCleanup = []
+        packages = DemoData.packages()
+        snapshots = DemoData.snapshots()
+        scanStatuses = [:]
+        lastScanCompletedAt = Date()
+        // Dismiss onboarding for the demo session without persisting the flag —
+        // a developer who runs `-demo` once shouldn't permanently skip onboarding.
+        onboardingCompleted = true
+    }
+
+    /// Leaves demo mode and restores the real (possibly empty) local state.
+    func exitDemoMode() {
+        isDemoMode = false
+        packages = (try? packageDAO?.loadAll()) ?? []
+        lastScanCompletedAt = try? scanRunDAO?.mostRecentCompletedAt()
+        snapshots = []
+        scanStatuses = [:]
+        selectedPackage = nil
+        isCleanupMode = false
+        selectedForCleanup = []
+        searchQuery = ""
+        sidebarSelection = .all
+        onboardingCompleted = UserDefaults.standard.bool(forKey: "backshelf.onboarding.completed")
+        Task {
+            await refreshSnapshots()
+            await autoScanIfNeeded()
+        }
     }
 
     // MARK: - Computed: packages
@@ -154,12 +215,19 @@ final class AppCoordinator {
     // MARK: - Actions
 
     func autoScanIfNeeded() async {
+        guard !isDemoMode else { return }
         guard folderAccess.hasAnyGrant, scanOnLaunch else { return }
         await refreshSnapshots()
         await scan()
     }
 
     func refresh() async {
+        // In demo mode a "scan" just re-seeds the sample inventory — there is
+        // nothing on disk to read.
+        guard !isDemoMode else {
+            enterDemoMode()
+            return
+        }
         await scan()
         await refreshSnapshots()
     }
@@ -190,7 +258,6 @@ final class AppCoordinator {
             forKey: "backshelf.settings.snapshotBeforeRemoval"
         )
         UserDefaults.standard.set(scanOnLaunch, forKey: "backshelf.settings.scanOnLaunch")
-        UserDefaults.standard.set(provenanceCollection, forKey: "backshelf.settings.provenanceCollection")
     }
 
     func completeOnboarding() {
@@ -199,11 +266,19 @@ final class AppCoordinator {
     }
 
     func refreshSnapshots() async {
+        // Demo snapshots live only in memory — never overwrite them from the DB.
+        guard !isDemoMode else { return }
         guard let sm = snapshotManager else { return }
         snapshots = (try? await sm.list()) ?? []
     }
 
     func captureManualSnapshot() async {
+        // In demo mode, capture a snapshot in memory so the flow is demonstrable
+        // without writing to the database.
+        if isDemoMode {
+            snapshots.insert(DemoData.makeSnapshot(reason: .manual, from: packages), at: 0)
+            return
+        }
         guard let sm = snapshotManager else { return }
         _ = try? await sm.capture(packages: packages, reason: .manual, note: nil)
         await refreshSnapshots()
@@ -266,7 +341,13 @@ final class AppCoordinator {
 
         var snapshotCtx: SnapshotContext? = nil
         var snapshotFailed = false
-        if captureSnapshot, let sm = snapshotManager {
+        if captureSnapshot, isDemoMode {
+            // Simulate the pre-cleanup snapshot in memory so the full removal
+            // flow is demonstrable without writing to the database.
+            let snap = DemoData.makeSnapshot(reason: .preCleanup, from: packagesToRemove)
+            snapshots.insert(snap, at: 0)
+            snapshotCtx = SnapshotContext(id: snap.id, createdAt: snap.createdAt)
+        } else if captureSnapshot, let sm = snapshotManager {
             // The snapshot captures the packages being removed — it is the
             // restore point for this specific cleanup, so its scope matches
             // the generated script.
@@ -318,11 +399,6 @@ final class AppCoordinator {
         if UserDefaults.standard.object(forKey: "backshelf.settings.scanOnLaunch") != nil {
             scanOnLaunch = UserDefaults.standard.bool(forKey: "backshelf.settings.scanOnLaunch")
         }
-        if UserDefaults.standard.object(forKey: "backshelf.settings.provenanceCollection") != nil {
-            provenanceCollection = UserDefaults.standard.bool(
-                forKey: "backshelf.settings.provenanceCollection"
-            )
-        }
     }
 
     private func loadDescriptionStore() {
@@ -342,6 +418,7 @@ final class AppCoordinator {
     // MARK: - Scan
 
     func scan() async {
+        guard !isDemoMode else { return }
         guard !isScanning else { return }
         isScanning = true
         let scanStartedAt = Date()
@@ -412,23 +489,10 @@ final class AppCoordinator {
             try? dao.save(scanRun)
         }
 
-        // Provenance collection runs off the main thread after packages are persisted.
-        // packageDAO.replaceAll cascades ON DELETE CASCADE through provenance_evidence,
-        // so collection always runs fresh and there are no stale rows to upsert over.
-        // FK ordering is satisfied: packages row exists before provenance_evidence row.
-        if provenanceCollection, let dao = provenanceDAO {
-            let pkgs = packages
-            let evidence = await Task.detached(priority: .utility) {
-                ProvenanceCollector().collect(packages: pkgs)
-            }.value
-            for e in evidence {
-                try? await dao.upsert(e)
-            }
-            // Atomic swap — the detail pane never sees a partial dict.
-            provenanceByPackageId = Dictionary(
-                uniqueKeysWithValues: evidence.map { ($0.packageId, $0) }
-            )
-        }
+        // Provenance collection is intentionally disabled for App Store v1.
+        // The core collectors remain tested library code, but the app must not
+        // read shell history or assistant transcripts until a dedicated consent
+        // and per-source permission UI exists.
     }
 
     private func grantedApplicationsDirectories(_ grantedRoots: [URL]) -> [URL] {

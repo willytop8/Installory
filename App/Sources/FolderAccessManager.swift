@@ -48,7 +48,12 @@ final class FolderAccessManager {
         panel.allowsMultipleSelection = false
         panel.message = "Grant Installory read access to this folder"
         panel.prompt = "Grant Access"
-        panel.directoryURL = suggestedURL
+        // Only pre-navigate the panel to the suggested folder when it actually
+        // exists as a readable directory. Pointing the panel at a missing or
+        // root-owned system path can lead the user to grant a protected
+        // directory, which makes macOS present an authentication sheet. When the
+        // suggestion isn't usable, start in the user's home folder instead.
+        panel.directoryURL = Self.safePanelDirectory(for: suggestedURL)
 
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
 
@@ -94,6 +99,21 @@ final class FolderAccessManager {
     }
 
     // MARK: - Helpers
+
+    /// Returns a safe starting directory for the open panel: the suggested URL
+    /// only when it exists as a directory, otherwise the user's home folder.
+    /// Never returns a path that doesn't exist, so the panel can't land the user
+    /// inside a missing or system-protected location.
+    static func safePanelDirectory(for suggestedURL: URL?) -> URL {
+        let fm = FileManager.default
+        if let suggestedURL {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: suggestedURL.path, isDirectory: &isDir), isDir.boolValue {
+                return suggestedURL
+            }
+        }
+        return fm.homeDirectoryForCurrentUser
+    }
 
     var hasAnyGrant: Bool { !storedBookmarks.isEmpty }
 

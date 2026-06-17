@@ -77,11 +77,13 @@ struct PackageDetailView: View {
                             .font(.system(.body, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
-                        Button("Reveal in Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([installPath])
+                        if FileManager.default.fileExists(atPath: installPath.path) {
+                            Button("Reveal in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([installPath])
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.callout)
                         }
-                        .buttonStyle(.borderless)
-                        .font(.callout)
                     }
                 }
             }

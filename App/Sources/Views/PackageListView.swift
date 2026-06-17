@@ -17,6 +17,9 @@ struct PackageListView: View {
             }
         }
         .searchable(text: $coordinator.searchQuery, placement: .toolbar, prompt: "Filter packages")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            demoBanner
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             cleanupBottomBar
         }
@@ -43,6 +46,32 @@ struct PackageListView: View {
         }
     }
 
+    // MARK: - Demo banner
+
+    @ViewBuilder
+    private var demoBanner: some View {
+        if coordinator.isDemoMode {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Image(systemName: "wand.and.stars")
+                    Text("You're viewing sample data. Nothing here is from your Mac.")
+                        .font(.callout)
+                    Spacer(minLength: 0)
+                    Button("Exit Demo Mode") {
+                        coordinator.exitDemoMode()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.callout.weight(.semibold))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.accentColor.opacity(0.14))
+                Divider()
+            }
+        }
+    }
+
     // MARK: - Empty states
 
     @ViewBuilder
@@ -58,15 +87,29 @@ struct PackageListView: View {
             ContentUnavailableView {
                 Label("No Access Granted", systemImage: "folder.badge.questionmark")
             } description: {
-                Text("Grant access to a directory to see what's installed.")
+                Text("Grant access to a directory to see what's installed, or explore a pre-populated sample inventory.")
+            } actions: {
+                exploreSampleDataButton
             }
         } else {
             ContentUnavailableView {
                 Label("No Packages Found", systemImage: "shippingbox")
             } description: {
-                Text("Installory didn't find any packages in the granted directories.")
+                Text("Installory didn't find any packages in the granted directories. You can explore a pre-populated sample inventory instead.")
+            } actions: {
+                exploreSampleDataButton
             }
         }
+    }
+
+    private var exploreSampleDataButton: some View {
+        Button {
+            coordinator.enterDemoMode()
+        } label: {
+            Label("Explore with Sample Data", systemImage: "wand.and.stars")
+        }
+        .buttonStyle(.borderedProminent)
+        .help("Load a pre-populated sample inventory so you can explore every feature without granting access to any folders.")
     }
 
     private var noMatchState: some View {

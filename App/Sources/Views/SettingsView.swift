@@ -31,18 +31,30 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Collect provenance", isOn: $coordinator.provenanceCollection)
-                Text("Optional. Reads granted local history sources to show when and why packages were installed. Runs locally — no network calls.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if coordinator.isDemoMode {
+                    Label("Demo mode is on — showing sample data.", systemImage: "wand.and.stars")
+                        .foregroundStyle(.secondary)
+                    Button("Exit Demo Mode") {
+                        coordinator.exitDemoMode()
+                    }
+                    Text("Exit to scan your own Mac. Demo data is never saved and never leaves this device.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button("Load Sample Data") {
+                        coordinator.enterDemoMode()
+                    }
+                    Text("Loads a pre-populated sample inventory so you can explore every feature without granting access to any folders.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } header: {
-                Text("Provenance")
+                Text("Demo Mode")
             }
         }
         .formStyle(.grouped)
         .onChange(of: coordinator.snapshotBeforeRemoval) { _, _ in coordinator.persistSettings() }
         .onChange(of: coordinator.scanOnLaunch) { _, _ in coordinator.persistSettings() }
-        .onChange(of: coordinator.provenanceCollection) { _, _ in coordinator.persistSettings() }
         .frame(width: 400)
         .padding(.vertical, 8)
     }

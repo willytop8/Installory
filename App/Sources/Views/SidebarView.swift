@@ -154,6 +154,25 @@ struct SidebarView: View {
 
     private var bottomBar: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if coordinator.isDemoMode {
+                HStack(spacing: 6) {
+                    Label("Demo data", systemImage: "wand.and.stars")
+                        .font(.caption.weight(.medium))
+                    Spacer(minLength: 0)
+                    Button("Exit") {
+                        coordinator.exitDemoMode()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .help("Exit demo mode and scan your own Mac")
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.accentColor.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+
             Text(coordinator.statusSummary)
                 .font(.caption)
                 .foregroundStyle(.secondary)

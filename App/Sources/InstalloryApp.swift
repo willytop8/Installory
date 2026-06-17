@@ -38,6 +38,17 @@ struct InstalloryApp: App {
                 }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
                 .disabled(coordinator.packages.isEmpty)
+
+                Divider()
+
+                Button(coordinator.isDemoMode ? "Exit Demo Mode" : "Load Sample Data") {
+                    if coordinator.isDemoMode {
+                        coordinator.exitDemoMode()
+                    } else {
+                        coordinator.enterDemoMode()
+                    }
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
             }
         }
 

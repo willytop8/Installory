@@ -1,3 +1,4 @@
+import Foundation
 import InstalloryCore
 import SwiftUI
 
@@ -8,9 +9,19 @@ struct OnboardingView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            VStack(spacing: 32) {
+            VStack(spacing: 24) {
                 pageContent
-                navigationRow
+                VStack(spacing: 14) {
+                    navigationRow
+                    Button {
+                        coordinator.enterDemoMode()
+                        dismiss()
+                    } label: {
+                        Label("Explore with Sample Data", systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(.link)
+                    .help("Load a pre-populated sample inventory so you can explore every feature without granting access to any folders.")
+                }
             }
             .padding(40)
 
@@ -71,13 +82,29 @@ struct OnboardingView: View {
                 .keyboardShortcut(.defaultAction)
             } else {
                 HStack(spacing: 12) {
-                    Button("Grant Access to /opt/homebrew") {
-                        Task {
-                            await coordinator.grantDirectory(suggestedPath: brewRoot)
-                            complete()
+                    // Only offer the one-click Homebrew grant when that folder
+                    // actually exists. On a Mac without Homebrew, pointing the
+                    // open panel at a missing/system path can lead the user to
+                    // grant a protected directory and trigger a macOS
+                    // authentication sheet — so we fall back to a plain folder
+                    // picker that starts in the user's home folder.
+                    if brewRootExists {
+                        Button("Grant Access to \(brewRoot)") {
+                            Task {
+                                await coordinator.grantDirectory(suggestedPath: brewRoot)
+                                complete()
+                            }
                         }
+                        .buttonStyle(.borderedProminent)
+                    } else {
+                        Button("Choose a Folder to Scan…") {
+                            Task {
+                                await coordinator.grantCustomDirectory()
+                                complete()
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
-                    .buttonStyle(.borderedProminent)
 
                     Button("Skip for Now") {
                         complete()
@@ -96,6 +123,14 @@ struct OnboardingView: View {
         #else
         "/usr/local"
         #endif
+    }
+
+    /// Whether the Homebrew prefix exists as a directory on this Mac. When it
+    /// doesn't (e.g. Homebrew isn't installed), onboarding avoids pointing the
+    /// folder picker at it.
+    private var brewRootExists: Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: brewRoot, isDirectory: &isDir) && isDir.boolValue
     }
 
     private func complete() {

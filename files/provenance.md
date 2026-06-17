@@ -1,6 +1,8 @@
 # Provenance
 
-How Installory figures out *when* a package was installed and *what the user was doing* at the time. This is the differentiating feature — and it's the most engineered part of the system.
+How Installory can figure out *when* a package was installed and *what the user was doing* at the time.
+
+**App Store v1 status:** provenance collection is not exposed in the app. The core collectors remain in the library and test suite, but the shipped app does not read shell history or AI assistant transcripts until a dedicated consent and per-source permission UI exists. App Store v1 uses package-manager metadata and filesystem timestamps only.
 
 ## The three signals
 
@@ -83,7 +85,7 @@ Edge cases:
 
 ### Privacy and consent
 
-Shell history is sensitive. On first launch, Installory asks for permission to read history files. The Settings pane shows which files are being read and offers a per-file toggle. We never transmit shell history off the device.
+Shell history is sensitive. Before this ships, Installory must ask for explicit permission to read history files. The Settings pane must show which files are being read and offer a per-file toggle. We never transmit shell history off the device.
 
 ## Signal C: Claude Code logs
 
