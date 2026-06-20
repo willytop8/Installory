@@ -17,7 +17,8 @@ Installory.xcodeproj/
 *.xcuserstate
 
 # Swift Package Manager
-Package.resolved
+# Package.resolved is intentionally committed (not ignored) to pin the exact
+# GRDB version for reproducible builds. Xcode/SPM generates it on the next build.
 
 # IDE
 .vscode/

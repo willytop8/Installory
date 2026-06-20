@@ -18,7 +18,10 @@ struct PackageListView: View {
         }
         .searchable(text: $coordinator.searchQuery, placement: .toolbar, prompt: "Filter packages")
         .safeAreaInset(edge: .top, spacing: 0) {
-            demoBanner
+            VStack(spacing: 0) {
+                demoBanner
+                storageBanner
+            }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             cleanupBottomBar
@@ -72,6 +75,29 @@ struct PackageListView: View {
         }
     }
 
+    // MARK: - Storage warning banner
+
+    @ViewBuilder
+    private var storageBanner: some View {
+        if let warning = coordinator.storageWarning, !coordinator.isDemoMode {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(warning)
+                        .font(.callout)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.12))
+                .accessibilityElement(children: .combine)
+                Divider()
+            }
+        }
+    }
+
     // MARK: - Empty states
 
     @ViewBuilder
@@ -79,8 +105,9 @@ struct PackageListView: View {
         if coordinator.isScanning {
             VStack(spacing: 12) {
                 ProgressView()
-                Text("Scanning…")
+                Text(scanningStatusText)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if !coordinator.folderAccess.hasAnyGrant {
@@ -110,6 +137,14 @@ struct PackageListView: View {
         }
         .buttonStyle(.borderedProminent)
         .help("Load a pre-populated sample inventory so you can explore every feature without granting access to any folders.")
+    }
+
+    /// Per-manager scan progress for the scanning empty state. Falls back to a
+    /// generic message when no managers are currently in flight.
+    private var scanningStatusText: String {
+        let names = coordinator.inFlightManagers.map(\.displayName).sorted()
+        guard !names.isEmpty else { return "Scanning…" }
+        return "Scanning \(names.joined(separator: ", "))…"
     }
 
     private var noMatchState: some View {
@@ -222,6 +257,7 @@ private struct PackageRowView: View {
                         .foregroundStyle(.tertiary)
                         .imageScale(.small)
                         .help("Read-only system package — cannot be removed")
+                        .accessibilityLabel("Read-only system package, cannot be removed")
                 } else {
                     Button {
                         onToggleCleanup?()
@@ -230,6 +266,8 @@ private struct PackageRowView: View {
                             .foregroundStyle(isSelectedForCleanup ? Color.accentColor : Color.secondary)
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel(isSelectedForCleanup ? "Selected for cleanup" : "Not selected for cleanup")
+                    .accessibilityHint("Double-tap to toggle whether \(package.name) is included in the cleanup script")
                 }
             }
             VStack(alignment: .leading, spacing: 3) {

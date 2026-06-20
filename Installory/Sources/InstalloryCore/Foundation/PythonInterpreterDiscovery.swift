@@ -92,6 +92,17 @@ public struct PythonInterpreter: Equatable, Hashable, Sendable {
     }
 }
 
+/// Reference-type, thread-safe memo cache so `discover()` runs its filesystem
+/// walk at most once per `PythonInterpreterDiscovery` instance.
+private final class DiscoveryCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [PythonInterpreter]?
+    var value: [PythonInterpreter]? {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); defer { lock.unlock() }; stored = newValue }
+    }
+}
+
 /// Discovers Python interpreters by walking known filesystem locations.
 ///
 /// Discovery never invokes Python or `pip`; all filesystem operations go
@@ -99,6 +110,7 @@ public struct PythonInterpreter: Equatable, Hashable, Sendable {
 public struct PythonInterpreterDiscovery: Sendable {
     private let directoryAccess: any DirectoryAccessProvider
     private let homeDirectory: URL
+    private let cache = DiscoveryCache()
 
     public init(
         directoryAccess: any DirectoryAccessProvider = SystemDirectoryAccessProvider(),
@@ -108,8 +120,22 @@ public struct PythonInterpreterDiscovery: Sendable {
         self.homeDirectory = homeDirectory
     }
 
-    /// Returns all discovered interpreters from currently supported locations.
+    /// Returns all discovered interpreters, memoized for the lifetime of this
+    /// discovery instance.
+    ///
+    /// A single scan reuses one `PythonInterpreterDiscovery` for both
+    /// `isAvailable()` and `scan()`, so without memoization the (filesystem-heavy)
+    /// walk runs multiple times per scan. The cache is shared across struct copies
+    /// because it's a reference type, and a fresh discovery is created per scan, so
+    /// results stay current run-to-run.
     public func discover() -> [PythonInterpreter] {
+        if let cached = cache.value { return cached }
+        let result = computeDiscover()
+        cache.value = result
+        return result
+    }
+
+    private func computeDiscover() -> [PythonInterpreter] {
         let candidates = systemCandidates()
             + commandLineToolsCandidates()
             + homebrewCandidates()

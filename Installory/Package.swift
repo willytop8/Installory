@@ -3,12 +3,15 @@ import PackageDescription
 
 let package = Package(
     name: "Installory",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     products: [
         .library(name: "InstalloryCore", targets: ["InstalloryCore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/groue/GRDB.swift", .upToNextMajor(from: "7.10.0")),
+        // Pinned to the minor series so a clean checkout years from now resolves
+        // to a known-good GRDB 7.10.x rather than drifting to a future 7.x minor.
+        // Commit Package.resolved alongside this for a fully reproducible build.
+        .package(url: "https://github.com/groue/GRDB.swift", .upToNextMinor(from: "7.10.0")),
     ],
     targets: [
         .target(

@@ -251,6 +251,7 @@ struct SidebarView: View {
                 .foregroundStyle(.orange)
                 .imageScale(.small)
                 .help(warning)
+                .accessibilityLabel("\(manager.displayName) scan warning: \(warning)")
         }
     }
 }

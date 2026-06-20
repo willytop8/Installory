@@ -23,6 +23,15 @@ final class AppCoordinator {
     private(set) var isScanning = false
     private(set) var lastScanCompletedAt: Date?
 
+    /// Non-nil when local persistence is unavailable — the SQLite cache couldn't
+    /// be opened, or a save failed. The UI surfaces this so results that silently
+    /// won't be remembered between launches don't look like a mysterious bug.
+    private(set) var storageWarning: String?
+
+    /// Managers whose scan is currently in flight, used for per-manager progress
+    /// in the scanning empty state.
+    private(set) var inFlightManagers: Set<PackageManager> = []
+
     // MARK: - UI state
 
     var searchQuery: String = ""
@@ -111,13 +120,17 @@ final class AppCoordinator {
                 snapshotManager = SnapshotManager(database: db)
                 packages = (try? packageDAO!.loadAll()) ?? []
                 lastScanCompletedAt = try? scanRunDAO!.mostRecentCompletedAt()
+            } else {
+                storageWarning = "Couldn't open the local cache, so scan results won't be saved between launches."
             }
+        } else {
+            storageWarning = "Couldn't locate Application Support, so scan results won't be saved between launches."
         }
 
         folderAccess.loadPersistedBookmarks()
         restoreUIPreferences()
         restoreSettings()
-        loadDescriptionStore()
+        loadDescriptionStoreInBackground()
 
         // Allow App Review (or anyone) to launch straight into demo mode without
         // any clicks, via `-demo` or INSTALLORY_DEMO=1.
@@ -401,10 +414,19 @@ final class AppCoordinator {
         }
     }
 
-    private func loadDescriptionStore() {
-        guard let url = Bundle.main.url(forResource: "descriptions", withExtension: "json"),
-              let store = try? DescriptionStore(contentsOf: url) else { return }
-        descriptionStore = store
+    /// Loads the ~940 KB bundled description corpus off the main thread so it
+    /// never blocks app launch. Until it finishes, `descriptionStore` is the empty
+    /// default and detail views simply show "No description available" — the store
+    /// is swapped in on the main actor once decoding completes.
+    private func loadDescriptionStoreInBackground() {
+        guard let url = Bundle.main.url(forResource: "descriptions", withExtension: "json") else { return }
+        Task { [weak self] in
+            let store = await Task.detached(priority: .utility) {
+                try? DescriptionStore(contentsOf: url)
+            }.value
+            guard let store else { return }
+            self?.descriptionStore = store
+        }
     }
 
     private var isAppleSilicon: Bool {
@@ -447,24 +469,33 @@ final class AppCoordinator {
 
         packages = []
         scanStatuses = [:]
+        inFlightManagers = []
 
         for await event in await scanCoordinator.scan() {
             switch event {
-            case .scannerStarted:
-                break
+            case let .scannerStarted(manager):
+                inFlightManagers.insert(manager)
             case let .scannerFinished(manager, status, pkgs):
+                inFlightManagers.remove(manager)
                 scanStatuses[manager] = status
                 packages += pkgs
             case let .allFinished(perManager, allPackages):
+                inFlightManagers = []
                 scanStatuses = perManager
                 packages = allPackages
             }
         }
 
+        inFlightManagers = []
         lastScanCompletedAt = Date()
 
         if let dao = packageDAO {
-            try? dao.replaceAll(with: packages)
+            do {
+                try dao.replaceAll(with: packages)
+                storageWarning = nil  // a successful save clears any prior warning
+            } catch {
+                storageWarning = "Couldn't save the latest scan to the local cache, so it won't be remembered next launch."
+            }
         }
 
         // Capture an autoFirstScan snapshot the very first time the scan
