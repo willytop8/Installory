@@ -2,9 +2,13 @@
 
 **See what's installed on your Mac — and understand how it got there.**
 
+[Download on the Mac App Store](https://apps.apple.com/us/app/installory/id6772879429?mt=12) · [installory.app](https://installory.app/) · Free · MIT licensed · macOS 14+
+
 Installory is a native macOS app that scans your machine for software installed by developer package managers (Homebrew, pip, pipx, npm, Cargo, RubyGems, and Mac App Store apps) and turns the result into something you can actually understand: a clean inventory of every package, what each one is, when it arrived, and how it got there.
 
 It's built for people — especially those working with AI coding tools like Claude Code and Cursor — who've accumulated piles of packages they don't remember installing and don't fully understand. The terminal is intimidating; `brew list` is a wall of names with no context. Installory makes the invisible visible, and makes cleanup safe.
+
+**Why a GUI and not just `brew list`?** Because the value isn't the list — it's the context across managers. One window unifies six package managers plus Mac App Store receipts, adds a plain-language description of what each package is, tells you *why* it's there (provenance), flags cross-manager duplicates, and generates a reviewable removal script you run yourself. It is read-only and makes no network connections. The whole point is to make the system legible without changing it.
 
 ## What it does
 
@@ -36,7 +40,7 @@ It's built for people — especially those working with AI coding tools like Cla
 
 ## Project status
 
-Installory is **feature-complete** and in pre-release hardening ahead of a Mac App Store submission. The core library has 336 passing tests.
+Installory is **live on the Mac App Store** and free. The core scanning/provenance/script-generation library has 336 passing tests. Issues and pull requests are welcome — I'm still fairly new to this, so feedback on which package managers or workflows to support next is especially appreciated.
 
 ## Building
 
@@ -92,3 +96,7 @@ scripts/
 files/
 └── screenshots/                 README screenshots
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE). Free to use, modify, and distribute.
