@@ -35,3 +35,7 @@ Installory.xcodeproj/
 
 # Local Netlify folder
 .netlify
+
+# Marketing site — deployed separately via Netlify CLI, not part of the app repo
+website/
+netlify.toml
