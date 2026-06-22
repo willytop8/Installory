@@ -27,7 +27,7 @@ targets:
         CFBundleName: $(PRODUCT_NAME)
         CFBundlePackageType: APPL
         CFBundleShortVersionString: "1.1"
-        CFBundleVersion: "5"
+        CFBundleVersion: "6"
         LSApplicationCategoryType: public.app-category.developer-tools
     entitlements:
       path: App/Installory.entitlements

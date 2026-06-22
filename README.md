@@ -90,10 +90,5 @@ scripts/
 └── generate-descriptions/       build-time tool that builds the bundled
                                  package-description corpus
 files/
-├── screenshots/                 README screenshots
-└── *.md                         product docs and architecture notes
+└── screenshots/                 README screenshots
 ```
-
-## A note on the docs
-
-`files/PRODUCT.md` is the fuller product story. `files/ARCHITECTURE.md` explains how the codebase is structured, and the subsystem docs under `files/` cover scanners, provenance, sandboxing, safety, and release notes.
