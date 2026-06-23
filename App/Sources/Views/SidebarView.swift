@@ -9,6 +9,7 @@ struct SidebarView: View {
 
         List(selection: $coordinator.sidebarSelection) {
             packageManagerSection
+            scanCoverageSection
             directoryAccessSection
             snapshotsSection
         }
@@ -136,11 +137,67 @@ struct SidebarView: View {
     }
 
     private func snapshotReasonLabel(_ reason: SnapshotReason) -> String {
-        switch reason {
-        case .manual: return "Manual snapshot"
-        case .preCleanup: return "Pre-cleanup"
-        case .preUninstall: return "Pre-uninstall"
-        case .autoFirstScan: return "First scan"
+        reason.displayName
+    }
+
+    // MARK: - Scan coverage section
+
+    @ViewBuilder
+    private var scanCoverageSection: some View {
+        let coverage = coordinator.scanCoverage
+        if !coverage.isEmpty {
+            Section("Scan Coverage") {
+                ForEach(coverage, id: \.manager) { entry in
+                    HStack(spacing: 6) {
+                        Image(systemName: coverageIcon(entry.status))
+                            .foregroundStyle(coverageColor(entry.status))
+                            .imageScale(.small)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(entry.manager.displayName)
+                                .font(.caption)
+                            Text(coverageDetail(entry.status))
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(2)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .selectionDisabled()
+                    .help(coverageDetail(entry.status))
+                    .accessibilityLabel("\(entry.manager.displayName): \(coverageDetail(entry.status))")
+                }
+            }
+        }
+    }
+
+    private func coverageIcon(_ status: ScannerStatus) -> String {
+        switch status {
+        case .succeeded:  return "checkmark.circle.fill"
+        case .skipped:    return "minus.circle"
+        case .failed:     return "xmark.octagon.fill"
+        case .timedOut:   return "clock.badge.exclamationmark"
+        }
+    }
+
+    private func coverageColor(_ status: ScannerStatus) -> Color {
+        switch status {
+        case .succeeded: return .green
+        case .skipped:   return .secondary
+        case .failed:    return .red
+        case .timedOut:  return .orange
+        }
+    }
+
+    private func coverageDetail(_ status: ScannerStatus) -> String {
+        switch status {
+        case .succeeded(let count, _):
+            return "\(count) package\(count == 1 ? "" : "s")"
+        case .skipped(let reason):
+            return reason
+        case .failed(let reason, _):
+            return reason
+        case .timedOut:
+            return "Scan timed out"
         }
     }
 

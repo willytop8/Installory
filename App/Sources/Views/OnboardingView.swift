@@ -44,7 +44,7 @@ struct OnboardingView: View {
             OnboardingPanel(
                 systemImage: "shippingbox.fill",
                 title: "Meet Installory",
-                message: "Installory scans your Mac for packages installed by Homebrew, pip, pipx, npm, Cargo, RubyGems, and the Mac App Store — giving you a clear picture of what's installed and why."
+                message: "Installory scans your Mac for packages installed by Homebrew, pip, pipx, npm, Cargo, RubyGems, and the Mac App Store — giving you a clear picture of what's installed."
             )
         case 1:
             OnboardingPanel(
@@ -52,6 +52,8 @@ struct OnboardingView: View {
                 title: "We never delete anything",
                 message: "When you want to clean up, Installory generates a shell script you review and run yourself in Terminal. Nothing is removed without your explicit action."
             )
+        case 2:
+            BadgeLegendPanel()
         default:
             OnboardingPanel(
                 systemImage: "folder.badge.plus",
@@ -65,7 +67,7 @@ struct OnboardingView: View {
         HStack {
             // Page dots
             HStack(spacing: 6) {
-                ForEach(0..<3, id: \.self) { i in
+                ForEach(0..<4, id: \.self) { i in
                     Circle()
                         .fill(i == page ? Color.accentColor : Color.secondary.opacity(0.3))
                         .frame(width: 7, height: 7)
@@ -74,7 +76,7 @@ struct OnboardingView: View {
 
             Spacer()
 
-            if page < 2 {
+            if page < 3 {
                 Button("Next") {
                     withAnimation { page += 1 }
                 }
@@ -157,6 +159,42 @@ private struct OnboardingPanel: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 340)
+        }
+    }
+}
+
+/// Onboarding page that introduces the colored manager badges so users can
+/// recognize them at a glance in the package list and detail views.
+private struct BadgeLegendPanel: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "circle.grid.2x2")
+                .font(.system(size: 44))
+                .foregroundStyle(.tint)
+                .symbolRenderingMode(.hierarchical)
+            Text("What the badges mean")
+                .font(.title2)
+                .fontWeight(.bold)
+            Text("Each badge marks which package manager installed an item.")
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            LazyVGrid(
+                columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
+                alignment: .leading,
+                spacing: 8
+            ) {
+                ForEach(PackageManager.allCases, id: \.self) { manager in
+                    HStack(spacing: 6) {
+                        ManagerBadge(manager: manager)
+                        Text(manager.displayName)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.top, 4)
+            .frame(maxWidth: 360)
         }
     }
 }

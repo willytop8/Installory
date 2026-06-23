@@ -1,3 +1,4 @@
+import AppKit
 import InstalloryCore
 import SwiftUI
 
@@ -21,6 +22,7 @@ struct PackageListView: View {
             VStack(spacing: 0) {
                 demoBanner
                 storageBanner
+                failureBanner
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -87,6 +89,43 @@ struct PackageListView: View {
                     Text(warning)
                         .font(.callout)
                     Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.12))
+                .accessibilityElement(children: .combine)
+                Divider()
+            }
+        }
+    }
+
+    // MARK: - Failure banner
+
+    @ViewBuilder
+    private var failureBanner: some View {
+        let failed = coordinator.failedManagers
+        if !failed.isEmpty, !coordinator.isDemoMode {
+            VStack(spacing: 0) {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(failed.count == 1
+                             ? "\(failed[0].0.displayName) didn\u{2019}t finish scanning"
+                             : "\(failed.count) scanners didn\u{2019}t finish")
+                            .font(.callout.weight(.semibold))
+                        Text(failed.map { "\($0.0.displayName): \($0.1)" }.joined(separator: " · "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    Button("Rescan") {
+                        Task { await coordinator.refresh() }
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.callout)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -291,12 +330,31 @@ private struct PackageRowView: View {
         }
         .padding(.vertical, 2)
         .contextMenu {
+            Button("Copy Name", systemImage: "doc.on.doc") {
+                copy(package.name)
+            }
+            if let path = package.installPath?.path {
+                Button("Copy Install Path", systemImage: "doc.on.doc.fill") {
+                    copy(path)
+                }
+                let exists = FileManager.default.fileExists(atPath: path)
+                Button("Reveal in Finder", systemImage: "folder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                }
+                .disabled(!exists)
+            }
             if let onRemove {
-                Button("Create Removal Script…", systemImage: "doc.text") {
+                Divider()
+                Button("Create Removal Script\u{2026}", systemImage: "doc.text") {
                     onRemove()
                 }
             }
         }
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private func installDateText(_ date: Date) -> String {

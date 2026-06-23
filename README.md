@@ -14,7 +14,7 @@ It's built for people — especially those working with AI coding tools like Cla
 
 **Unified inventory.** One window showing every package across Homebrew, pip, pipx, npm, Cargo, RubyGems, and Mac App Store apps — name, version, install location, dependencies, and a plain-language description of what each package actually is.
 
-**Provenance.** Installory cross-references your shell history and Claude Code logs to answer the question package managers never do: *why is this here?* It can tell you a package was "installed by Claude Code about three weeks ago," so you're not guessing.
+**Provenance _(in development)_.** A future release will cross-reference your shell history and Claude Code logs — behind an explicit per-source consent toggle — to answer the question package managers never do: *why is this here?* The collectors and tests already live in the codebase under `InstalloryCore/Provenance`; the v1.x app deliberately keeps the feature off until the consent UI ships.
 
 **Safe removal.** When you want to clean up, Installory helps — but it **never deletes anything itself.** It generates the exact uninstall command or a reviewable shell script, which you run yourself in your terminal. You stay in control; nothing is destructive without your hand on it.
 
@@ -28,7 +28,7 @@ It's built for people — especially those working with AI coding tools like Cla
 
 ![Installory main window](files/screenshots/main-window.png)
 
-**Package detail** — a plain-language description, a provenance narrative explaining how the package likely got there, and a safe removal flow that generates a command for you to run yourself:
+**Package detail** — a plain-language description, install metadata, and a safe removal flow that generates a command for you to run yourself:
 
 ![Installory package detail view](files/screenshots/package-detail.png)
 

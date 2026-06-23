@@ -120,12 +120,7 @@ struct SnapshotContentView: View {
     }
 
     private func snapshotReasonLabel(_ reason: SnapshotReason) -> String {
-        switch reason {
-        case .manual: return "Manual Snapshot"
-        case .preCleanup: return "Pre-Cleanup Snapshot"
-        case .preUninstall: return "Pre-Uninstall Snapshot"
-        case .autoFirstScan: return "First Scan Snapshot"
-        }
+        reason.displayName
     }
 
     private func formattedDate(_ date: Date) -> String {
@@ -299,12 +294,7 @@ private struct RestoreChecklistSheet: View {
     // MARK: - Helpers
 
     private func snapshotReasonLabel(_ reason: SnapshotReason) -> String {
-        switch reason {
-        case .manual: return "Manual snapshot"
-        case .preCleanup: return "Pre-cleanup snapshot"
-        case .preUninstall: return "Pre-uninstall snapshot"
-        case .autoFirstScan: return "First scan snapshot"
-        }
+        reason.displayName
     }
 
     private func formattedDate(_ date: Date) -> String {

@@ -1,5 +1,7 @@
+import AppKit
 import InstalloryCore
 import Foundation
+import UniformTypeIdentifiers
 
 /// The result of a cleanup-script generation, carrying both the script and
 /// the snapshot outcome. The sheet uses these flags to decide what status to show:
@@ -11,6 +13,20 @@ struct CleanupResult: Identifiable {
     let script: GeneratedScript
     let snapshotTaken: Bool
     let snapshotFailed: Bool
+}
+
+/// Canonical UserDefaults key names. The original product was named "Backshelf";
+/// keys carry an `app.installory.` prefix today and a one-time migration in
+/// `init` copies any pre-existing `backshelf.` keys forward so settings survive
+/// the rename without orphaning anyone.
+private enum DefaultsKey {
+    static let onboardingCompleted   = "app.installory.onboarding.completed"
+    static let sortOrder             = "app.installory.ui.sortOrder"
+    static let sidebarSelection      = "app.installory.ui.sidebarSelection"
+    static let snapshotBeforeRemoval = "app.installory.settings.snapshotBeforeRemoval"
+    static let scanOnLaunch          = "app.installory.settings.scanOnLaunch"
+    static let firstScanTaken        = "app.installory.firstScanSnapshotTaken"
+    static let migrationCompleted    = "app.installory.migration.fromBackshelf"
 }
 
 @Observable
@@ -52,9 +68,7 @@ final class AppCoordinator {
 
     // MARK: - Onboarding
 
-    // UserDefaults keys retain the "backshelf." prefix from a prior product name.
-    // Kept deliberately — renaming them would orphan existing users' settings. Not worth a migration.
-    var onboardingCompleted: Bool = UserDefaults.standard.bool(forKey: "backshelf.onboarding.completed")
+    var onboardingCompleted: Bool = UserDefaults.standard.bool(forKey: DefaultsKey.onboardingCompleted)
 
     // MARK: - Demo mode
 
@@ -77,7 +91,6 @@ final class AppCoordinator {
 
     var snapshotBeforeRemoval: SnapshotPreference = .ask
     var scanOnLaunch: Bool = true
-    var provenanceCollection: Bool { false }
 
     // MARK: - Removal flow (coordinator-driven "Ask" dialog)
 
@@ -85,13 +98,6 @@ final class AppCoordinator {
     /// preference is `.ask`. RootView presents the snapshot-choice sheet while
     /// this is set; the sheet clears it on confirm or cancel.
     var pendingRemovalPackages: [Package]? = nil
-
-    // MARK: - Provenance
-
-    /// In-memory provenance evidence keyed by package id, populated after each scan.
-    /// Updated atomically at the end of provenance collection; never partially filled.
-    /// Stale entries for removed packages are harmless — they're never selected.
-    private(set) var provenanceByPackageId: [String: ProvenanceEvidence] = [:]
 
     // MARK: - Description corpus
 
@@ -103,16 +109,23 @@ final class AppCoordinator {
     private(set) var database: Database?
     private var packageDAO: PackageDAO?
     private var scanRunDAO: ScanRunDAO?
+    private var dataDirectory: URL?
+    /// Minimum interval between automatic scans triggered by `autoScanIfNeeded`.
+    /// Manual `refresh()` ignores this — the user pressing ⌘R always rescans.
+    private static let autoScanCooldown: TimeInterval = 60
 
     // MARK: - Init
 
     init() {
+        migrateLegacyDefaultsIfNeeded()
+
         if let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first {
             let dir = appSupport.appendingPathComponent("Installory", isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            dataDirectory = dir
             if let db = try? Database(directory: dir) {
                 database = db
                 packageDAO = PackageDAO(database: db)
@@ -138,6 +151,40 @@ final class AppCoordinator {
             enterDemoMode()
         }
     }
+
+    // MARK: - Defaults migration
+
+    /// Copies legacy `backshelf.*` keys to their `app.installory.*` equivalents
+    /// the first time the renamed app launches. Old keys are left in place so a
+    /// downgrade still finds its settings.
+    private func migrateLegacyDefaultsIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: DefaultsKey.migrationCompleted) else { return }
+
+        let pairs: [(legacy: String, current: String, kind: DefaultsKind)] = [
+            ("backshelf.onboarding.completed",            DefaultsKey.onboardingCompleted,   .bool),
+            ("backshelf.ui.sortOrder",                    DefaultsKey.sortOrder,             .string),
+            ("backshelf.ui.sidebarSelection",             DefaultsKey.sidebarSelection,      .string),
+            ("backshelf.settings.snapshotBeforeRemoval",  DefaultsKey.snapshotBeforeRemoval, .string),
+            ("backshelf.settings.scanOnLaunch",           DefaultsKey.scanOnLaunch,          .bool),
+            ("backshelf.firstScanSnapshotTaken",          DefaultsKey.firstScanTaken,        .bool),
+        ]
+        for pair in pairs {
+            guard defaults.object(forKey: pair.legacy) != nil,
+                  defaults.object(forKey: pair.current) == nil
+            else { continue }
+            switch pair.kind {
+            case .bool:
+                defaults.set(defaults.bool(forKey: pair.legacy), forKey: pair.current)
+            case .string:
+                if let value = defaults.string(forKey: pair.legacy) {
+                    defaults.set(value, forKey: pair.current)
+                }
+            }
+        }
+        defaults.set(true, forKey: DefaultsKey.migrationCompleted)
+    }
+    private enum DefaultsKind { case bool, string }
 
     // MARK: - Demo mode actions
 
@@ -172,7 +219,7 @@ final class AppCoordinator {
         selectedForCleanup = []
         searchQuery = ""
         sidebarSelection = .all
-        onboardingCompleted = UserDefaults.standard.bool(forKey: "backshelf.onboarding.completed")
+        onboardingCompleted = UserDefaults.standard.bool(forKey: DefaultsKey.onboardingCompleted)
         Task {
             await refreshSnapshots()
             await autoScanIfNeeded()
@@ -210,12 +257,18 @@ final class AppCoordinator {
     // MARK: - Computed: status
 
     var statusSummary: String {
-        let dirs = grantedDirectories.count
-        let managers = Set(packages.map(\.manager)).count
+        if isScanning {
+            let names = inFlightManagers.map(\.displayName).sorted()
+            return names.isEmpty ? "Scanning…" : "Scanning \(names.joined(separator: ", "))…"
+        }
         let pkgs = packages.count
-        return "\(dirs) \(dirs == 1 ? "directory" : "directories"), "
-            + "\(managers) \(managers == 1 ? "manager" : "managers"), "
-            + "\(pkgs) \(pkgs == 1 ? "package" : "packages")"
+        let managers = Set(packages.map(\.manager)).count
+        if pkgs == 0 {
+            return "Ready — no packages scanned yet."
+        }
+        let pkgWord = pkgs == 1 ? "package" : "packages"
+        let mgrWord = managers == 1 ? "manager" : "managers"
+        return "\(pkgs) \(pkgWord) across \(managers) \(mgrWord)."
     }
 
     var lastScanSummary: String? {
@@ -225,11 +278,35 @@ final class AppCoordinator {
         return "Last scanned \(formatter.localizedString(for: date, relativeTo: Date()))"
     }
 
+    /// Per-manager status entries (managers that ran or were skipped/failed),
+    /// sorted by display name. Used by the "Scan coverage" view.
+    var scanCoverage: [(manager: PackageManager, status: ScannerStatus)] {
+        scanStatuses
+            .map { ($0.key, $0.value) }
+            .sorted { $0.0.displayName < $1.0.displayName }
+    }
+
+    /// Managers whose last scan failed or timed out. Used by the aggregated
+    /// "Some scans failed" banner above the package list.
+    var failedManagers: [(PackageManager, String)] {
+        scanStatuses.compactMap { (manager, status) -> (PackageManager, String)? in
+            switch status {
+            case .failed(let reason, _): return (manager, reason)
+            case .timedOut:              return (manager, "Scan timed out")
+            default:                     return nil
+            }
+        }
+        .sorted { $0.0.displayName < $1.0.displayName }
+    }
+
     // MARK: - Actions
 
     func autoScanIfNeeded() async {
         guard !isDemoMode else { return }
         guard folderAccess.hasAnyGrant, scanOnLaunch else { return }
+        if let last = lastScanCompletedAt, Date().timeIntervalSince(last) < Self.autoScanCooldown {
+            return
+        }
         await refreshSnapshots()
         await scan()
     }
@@ -245,6 +322,40 @@ final class AppCoordinator {
         await refreshSnapshots()
     }
 
+    /// Rescan just one manager, leaving the rest of the inventory in place.
+    /// Useful after the user fixes a perms issue or grants a new directory.
+    func rescan(manager: PackageManager) async {
+        guard !isDemoMode, !isScanning else { return }
+        isScanning = true
+        inFlightManagers = [manager]
+        defer {
+            isScanning = false
+            inFlightManagers = []
+        }
+
+        var accessedURLs: [URL] = []
+        for (_, data) in folderAccess.grantedBookmarks() {
+            if let url = folderAccess.startAccessing(data) {
+                accessedURLs.append(url)
+            }
+        }
+        defer { for url in accessedURLs { folderAccess.stopAccessing(url) } }
+
+        guard let scanner = scanner(for: manager, grantedURLs: accessedURLs) else { return }
+        let coordinator = ScanCoordinator(scanners: [scanner])
+        for await event in await coordinator.scan() {
+            if case let .scannerFinished(mgr, status, pkgs) = event {
+                scanStatuses[mgr] = status
+                packages.removeAll { $0.manager == mgr }
+                packages += pkgs
+            }
+        }
+        lastScanCompletedAt = Date()
+        if let dao = packageDAO {
+            try? dao.replaceAll(with: packages)
+        }
+    }
+
     func grantDirectory(suggestedPath: String) async {
         guard await folderAccess.requestAccess(to: URL(fileURLWithPath: suggestedPath)) != nil else { return }
         Task { await refresh() }
@@ -256,26 +367,63 @@ final class AppCoordinator {
     }
 
     func persistUIPreferences() {
-        UserDefaults.standard.set(sortOrder.rawValue, forKey: "backshelf.ui.sortOrder")
+        UserDefaults.standard.set(sortOrder.rawValue, forKey: DefaultsKey.sortOrder)
         if let sel = sidebarSelection, case .snapshot = sel {
             return  // do not persist snapshot selection — the ID may not exist on next launch
         }
         if let sel = sidebarSelection {
-            UserDefaults.standard.set(sel.userDefaultsKey, forKey: "backshelf.ui.sidebarSelection")
+            UserDefaults.standard.set(sel.userDefaultsKey, forKey: DefaultsKey.sidebarSelection)
         }
     }
 
     func persistSettings() {
         UserDefaults.standard.set(
             snapshotBeforeRemoval.rawValue,
-            forKey: "backshelf.settings.snapshotBeforeRemoval"
+            forKey: DefaultsKey.snapshotBeforeRemoval
         )
-        UserDefaults.standard.set(scanOnLaunch, forKey: "backshelf.settings.scanOnLaunch")
+        UserDefaults.standard.set(scanOnLaunch, forKey: DefaultsKey.scanOnLaunch)
     }
 
     func completeOnboarding() {
         onboardingCompleted = true
-        UserDefaults.standard.set(true, forKey: "backshelf.onboarding.completed")
+        UserDefaults.standard.set(true, forKey: DefaultsKey.onboardingCompleted)
+    }
+
+    /// Re-show the onboarding sheet on next view appearance. Used by Settings.
+    func resetOnboarding() {
+        onboardingCompleted = false
+        UserDefaults.standard.set(false, forKey: DefaultsKey.onboardingCompleted)
+    }
+
+    /// Reveals the local data directory (Application Support/Installory) in Finder
+    /// so users can see exactly what Installory persists.
+    func revealDataFolder() {
+        guard let dir = dataDirectory else {
+            NSSound.beep()
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([dir])
+    }
+
+    /// Writes the current inventory to a user-chosen path as CSV or Markdown.
+    /// Returns the URL on success, nil on cancel or failure.
+    @discardableResult
+    func exportInventory(format: InventoryExporter.Format) -> URL? {
+        let panel = NSSavePanel()
+        panel.title = "Export Inventory"
+        panel.nameFieldStringValue = "installory-inventory.\(format.fileExtension)"
+        if let type = UTType(filenameExtension: format.fileExtension) {
+            panel.allowedContentTypes = [type]
+        }
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        let content = InventoryExporter().export(packages, format: format)
+        do {
+            try content.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            return nil
+        }
     }
 
     func refreshSnapshots() async {
@@ -333,37 +481,16 @@ final class AppCoordinator {
     }
 
     /// Generates a cleanup script, optionally capturing a snapshot first.
-    ///
-    /// - Parameters:
-    ///   - packagesToRemove: The packages to remove.
-    ///   - captureSnapshot: When `true`, a `.preCleanup` snapshot is captured before
-    ///     generating the script. Batch cleanup always passes `true`. Per-package
-    ///     removal routes through `requestRemoval(_:)` which resolves the preference.
-    ///
-    /// The snapshot records exactly the packages this operation will remove — it is
-    /// the restore point for *this cleanup*, so its scope matches the generated
-    /// script. The restore flow diffs it against live inventory to find what to
-    /// reinstall.
-    ///
-    /// The resulting `CleanupResult` records whether a snapshot was *actually*
-    /// captured — not merely requested. If `captureSnapshot` is true but the
-    /// capture fails, `snapshotTaken` is false, so the sheet never claims a
-    /// snapshot exists when it does not.
     func generateAndShowCleanupScript(packages packagesToRemove: [Package], captureSnapshot: Bool) async {
         guard !packagesToRemove.isEmpty else { return }
 
         var snapshotCtx: SnapshotContext? = nil
         var snapshotFailed = false
         if captureSnapshot, isDemoMode {
-            // Simulate the pre-cleanup snapshot in memory so the full removal
-            // flow is demonstrable without writing to the database.
             let snap = DemoData.makeSnapshot(reason: .preCleanup, from: packagesToRemove)
             snapshots.insert(snap, at: 0)
             snapshotCtx = SnapshotContext(id: snap.id, createdAt: snap.createdAt)
         } else if captureSnapshot, let sm = snapshotManager {
-            // The snapshot captures the packages being removed — it is the
-            // restore point for this specific cleanup, so its scope matches
-            // the generated script.
             if let snap = try? await sm.capture(
                 packages: packagesToRemove,
                 reason: .preCleanup,
@@ -372,9 +499,6 @@ final class AppCoordinator {
                 snapshotCtx = SnapshotContext(id: snap.id, createdAt: snap.createdAt)
                 await refreshSnapshots()
             } else {
-                // Snapshot was requested but the capture failed. The sheet must
-                // show a prominent warning — this is different from the user
-                // having chosen to skip the snapshot.
                 snapshotFailed = true
             }
         }
@@ -391,33 +515,29 @@ final class AppCoordinator {
     // MARK: - Private
 
     private func restoreUIPreferences() {
-        if let raw = UserDefaults.standard.string(forKey: "backshelf.ui.sortOrder"),
+        if let raw = UserDefaults.standard.string(forKey: DefaultsKey.sortOrder),
            let sort = PackageSortOrder(rawValue: raw) {
             sortOrder = sort
         }
-        if let raw = UserDefaults.standard.string(forKey: "backshelf.ui.sidebarSelection"),
+        if let raw = UserDefaults.standard.string(forKey: DefaultsKey.sidebarSelection),
            let sel = SidebarSelection(userDefaultsKey: raw) {
             sidebarSelection = sel
         }
     }
 
     private func restoreSettings() {
-        if let raw = UserDefaults.standard.string(forKey: "backshelf.settings.snapshotBeforeRemoval"),
+        if let raw = UserDefaults.standard.string(forKey: DefaultsKey.snapshotBeforeRemoval),
            let pref = SnapshotPreference(rawValue: raw) {
             snapshotBeforeRemoval = pref
         }
         // Bool defaults are `false` in UserDefaults when not yet set.
         // Guard with object(forKey:) for settings whose product default differs
         // from the raw UserDefaults default.
-        if UserDefaults.standard.object(forKey: "backshelf.settings.scanOnLaunch") != nil {
-            scanOnLaunch = UserDefaults.standard.bool(forKey: "backshelf.settings.scanOnLaunch")
+        if UserDefaults.standard.object(forKey: DefaultsKey.scanOnLaunch) != nil {
+            scanOnLaunch = UserDefaults.standard.bool(forKey: DefaultsKey.scanOnLaunch)
         }
     }
 
-    /// Loads the ~940 KB bundled description corpus off the main thread so it
-    /// never blocks app launch. Until it finishes, `descriptionStore` is the empty
-    /// default and detail views simply show "No description available" — the store
-    /// is swapped in on the main actor once decoding completes.
     private func loadDescriptionStoreInBackground() {
         guard let url = Bundle.main.url(forResource: "descriptions", withExtension: "json") else { return }
         Task { [weak self] in
@@ -456,9 +576,12 @@ final class AppCoordinator {
             for url in accessedURLs { folderAccess.stopAccessing(url) }
         }
 
+        let pythonDiscovery = PythonInterpreterDiscovery(
+            projectVenvRoots: accessedURLs
+        )
         let scanners: [any PackageScanner] = [
             BrewScanner(),
-            PipScanner(),
+            PipScanner(discovery: pythonDiscovery),
             PipxScanner(),
             NpmScanner(),
             CargoScanner(),
@@ -467,8 +590,10 @@ final class AppCoordinator {
         ]
         let scanCoordinator = ScanCoordinator(scanners: scanners)
 
-        packages = []
-        scanStatuses = [:]
+        // Double-buffer: build into local vars so the UI doesn't briefly flip
+        // to "empty" between clearing and the first scanner finishing.
+        var buildPackages: [Package] = []
+        var buildStatuses: [PackageManager: ScannerStatus] = [:]
         inFlightManagers = []
 
         for await event in await scanCoordinator.scan() {
@@ -477,36 +602,36 @@ final class AppCoordinator {
                 inFlightManagers.insert(manager)
             case let .scannerFinished(manager, status, pkgs):
                 inFlightManagers.remove(manager)
-                scanStatuses[manager] = status
-                packages += pkgs
+                buildStatuses[manager] = status
+                buildPackages += pkgs
             case let .allFinished(perManager, allPackages):
                 inFlightManagers = []
-                scanStatuses = perManager
-                packages = allPackages
+                buildStatuses = perManager
+                buildPackages = allPackages
             }
         }
 
+        // Swap in the freshly built results once. This is the only point
+        // where `packages` and `scanStatuses` change during a scan.
+        packages = buildPackages
+        scanStatuses = buildStatuses
         inFlightManagers = []
         lastScanCompletedAt = Date()
 
         if let dao = packageDAO {
             do {
                 try dao.replaceAll(with: packages)
-                storageWarning = nil  // a successful save clears any prior warning
+                storageWarning = nil
             } catch {
                 storageWarning = "Couldn't save the latest scan to the local cache, so it won't be remembered next launch."
             }
         }
 
-        // Capture an autoFirstScan snapshot the very first time the scan
-        // completes with results. Subsequent scans skip this entirely.
-        // The "backshelf." prefix is retained from the prior product name
-        // to keep the key stable across the rename.
         if !packages.isEmpty,
-           !UserDefaults.standard.bool(forKey: "backshelf.firstScanSnapshotTaken"),
+           !UserDefaults.standard.bool(forKey: DefaultsKey.firstScanTaken),
            let sm = snapshotManager {
             _ = try? await sm.capture(packages: packages, reason: .autoFirstScan, note: nil)
-            UserDefaults.standard.set(true, forKey: "backshelf.firstScanSnapshotTaken")
+            UserDefaults.standard.set(true, forKey: DefaultsKey.firstScanTaken)
             await refreshSnapshots()
         }
 
@@ -524,6 +649,18 @@ final class AppCoordinator {
         // The core collectors remain tested library code, but the app must not
         // read shell history or assistant transcripts until a dedicated consent
         // and per-source permission UI exists.
+    }
+
+    private func scanner(for manager: PackageManager, grantedURLs: [URL]) -> (any PackageScanner)? {
+        switch manager {
+        case .brew, .brewCask: return BrewScanner()
+        case .pip:             return PipScanner(discovery: PythonInterpreterDiscovery(projectVenvRoots: grantedURLs))
+        case .pipx:            return PipxScanner()
+        case .npm:             return NpmScanner()
+        case .cargo:           return CargoScanner()
+        case .gem:             return GemScanner()
+        case .mas:             return MasScanner(applicationDirectories: grantedApplicationsDirectories(grantedURLs))
+        }
     }
 
     private func grantedApplicationsDirectories(_ grantedRoots: [URL]) -> [URL] {

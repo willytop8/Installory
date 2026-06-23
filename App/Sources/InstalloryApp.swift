@@ -1,3 +1,4 @@
+import InstalloryCore
 import SwiftUI
 
 @main
@@ -49,6 +50,24 @@ struct InstalloryApp: App {
                     }
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("Export Inventory as CSV\u{2026}") {
+                    coordinator.exportInventory(format: .csv)
+                }
+                .disabled(coordinator.packages.isEmpty)
+                .keyboardShortcut("e", modifiers: .command)
+
+                Button("Export Inventory as Markdown\u{2026}") {
+                    coordinator.exportInventory(format: .markdown)
+                }
+                .disabled(coordinator.packages.isEmpty)
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                Button("Show Data Folder in Finder") {
+                    coordinator.revealDataFolder()
+                }
             }
         }
 

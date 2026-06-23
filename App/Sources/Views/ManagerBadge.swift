@@ -12,6 +12,9 @@ struct ManagerBadge: View {
             .background(manager.badgeColor.opacity(0.15))
             .foregroundStyle(manager.badgeColor)
             .clipShape(Capsule())
+            .accessibilityLabel(manager.displayName)
+            .accessibilityAddTraits(.isStaticText)
+            .help(manager.displayName)
     }
 }
 

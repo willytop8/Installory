@@ -37,7 +37,7 @@ struct CleanupScriptSheetView: View {
                     Text("Snapshot could not be saved")
                         .fontWeight(.semibold)
                         .foregroundStyle(.primary)
-                    Text("A snapshot was requested but failed to write. Your packages are not protected — if something goes wrong after running this script, you may not be able to restore them from Installory.")
+                    Text("A snapshot was requested but couldn\u{2019}t be written. Without it, Installory won\u{2019}t be able to undo this removal — proceed with caution.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

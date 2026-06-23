@@ -14,6 +14,7 @@ struct ScriptSheetView<Warning: View>: View {
     let scriptText: String
     @ViewBuilder let warningContent: () -> Warning
     @Environment(\.dismiss) private var dismiss
+    @State private var copied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -54,14 +55,27 @@ struct ScriptSheetView<Warning: View>: View {
 
     private var buttonRow: some View {
         HStack {
-            Button("Copy to Clipboard") {
+            Button {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(scriptText, forType: .string)
+                copied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    copied = false
+                }
+            } label: {
+                Label(
+                    copied ? "Copied" : "Copy to Clipboard",
+                    systemImage: copied ? "checkmark" : "doc.on.doc"
+                )
             }
+            .keyboardShortcut("c", modifiers: .command)
 
-            Button("Save as .sh…") {
+            Button {
                 saveScript()
+            } label: {
+                Label("Save as .sh\u{2026}", systemImage: "square.and.arrow.down")
             }
+            .keyboardShortcut("s", modifiers: .command)
 
             Spacer()
 

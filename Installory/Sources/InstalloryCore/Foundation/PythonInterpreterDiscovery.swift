@@ -114,10 +114,12 @@ public struct PythonInterpreterDiscovery: Sendable {
 
     public init(
         directoryAccess: any DirectoryAccessProvider = SystemDirectoryAccessProvider(),
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        projectVenvRoots: [URL] = []
     ) {
         self.directoryAccess = directoryAccess
         self.homeDirectory = homeDirectory
+        self._projectVenvRoots = projectVenvRoots
     }
 
     /// Returns all discovered interpreters, memoized for the lifetime of this
@@ -251,8 +253,22 @@ public struct PythonInterpreterDiscovery: Sendable {
         }
     }
 
+    /// uv installs interpreters under `~/.local/share/uv/python/<id>/`. Each
+    /// `<id>` directory contains a `bin/python3.<minor>` executable. We accept
+    /// either `bin/python3` or `bin/python3.<minor>`.
     private func uvCandidates() -> [Candidate] {
-        []
+        let root = homeDirectory.appendingPathComponent(".local/share/uv/python")
+        return childDirectories(of: root).flatMap { versionRoot -> [Candidate] in
+            let bin = versionRoot.appendingPathComponent("bin")
+            return pythonExecutables(in: bin).map {
+                Candidate(
+                    executable: $0,
+                    kind: .uv,
+                    installRoot: versionRoot,
+                    versionHint: versionRoot.lastPathComponent
+                )
+            }
+        }
     }
 
     private func condaCandidates() -> [Candidate] {
@@ -263,9 +279,38 @@ public struct PythonInterpreterDiscovery: Sendable {
         []
     }
 
+    /// Project venvs in additional roots provided by the host app (typically
+    /// directories the user granted read access to). For each root we look one
+    /// level deep for `.venv/bin/python(3)` and `venv/bin/python(3)`. Going
+    /// deeper would force-walk the filesystem under every granted directory,
+    /// which is too expensive — Installory only surfaces venvs that live at
+    /// the top of a granted folder.
     private func projectVenvCandidates() -> [Candidate] {
-        []
+        projectVenvRoots.flatMap { root -> [Candidate] in
+            childDirectories(of: root).flatMap { child -> [Candidate] in
+                let venvCandidates = [
+                    child.appendingPathComponent(".venv"),
+                    child.appendingPathComponent("venv"),
+                ]
+                return venvCandidates.flatMap { venv -> [Candidate] in
+                    let bin = venv.appendingPathComponent("bin")
+                    return pythonExecutables(in: bin).map {
+                        Candidate(
+                            executable: $0,
+                            kind: .projectVenv,
+                            installRoot: venv,
+                            versionHint: $0.lastPathComponent
+                        )
+                    }
+                }
+            }
+        }
     }
+
+    /// Extra roots to look under for project venvs. Defaults to none; the app
+    /// layer injects this from the user's granted directories.
+    private var projectVenvRoots: [URL] { _projectVenvRoots }
+    private let _projectVenvRoots: [URL]
 
     // MARK: - Interpreter construction
 

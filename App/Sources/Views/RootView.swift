@@ -35,12 +35,39 @@ struct RootView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Menu {
+                    DirectoryGrantsView()
+                    Divider()
+                    Button("Grant Custom Directory\u{2026}", systemImage: "folder") {
+                        Task { await coordinator.grantCustomDirectory() }
+                    }
+                } label: {
+                    Label("Grant Access", systemImage: "folder.badge.plus")
+                }
+                .help("Grant Installory read access to a folder")
+            }
+
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 8) {
                     if coordinator.isScanning {
                         ProgressView()
                             .controlSize(.small)
                     }
+                    Button {
+                        coordinator.isCleanupMode.toggle()
+                        if !coordinator.isCleanupMode {
+                            coordinator.selectedForCleanup = []
+                        }
+                    } label: {
+                        Label(
+                            coordinator.isCleanupMode ? "Exit Cleanup Mode" : "Cleanup Mode",
+                            systemImage: coordinator.isCleanupMode ? "checklist.checked" : "checklist"
+                        )
+                    }
+                    .disabled(coordinator.packages.isEmpty)
+                    .help("Select packages to generate a cleanup script (⇧⌘K)")
+
                     Button {
                         Task { await coordinator.captureManualSnapshot() }
                     } label: {

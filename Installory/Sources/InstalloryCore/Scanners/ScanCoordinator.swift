@@ -17,9 +17,12 @@ public actor ScanCoordinator {
     private let scanners: [any PackageScanner]
     private let timeouts: [PackageManager: TimeInterval]
 
+    // npm is given the highest budget because deep nvm trees with many node
+    // versions each carrying a large global node_modules can take noticeably
+    // longer than the other scanners' filesystem walks.
     private static let defaultTimeouts: [PackageManager: TimeInterval] = [
-        .brew: 5, .brewCask: 5, .pip: 8, .npm: 15,
-        .pipx: 5, .cargo: 2, .gem: 5, .mas: 5,
+        .brew: 5, .brewCask: 5, .pip: 8, .npm: 30,
+        .pipx: 5, .cargo: 5, .gem: 5, .mas: 5,
     ]
 
     public init(

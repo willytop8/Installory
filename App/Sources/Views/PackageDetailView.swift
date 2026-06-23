@@ -15,12 +15,6 @@ struct PackageDetailView: View {
                 headerSection
                 Divider()
                 fieldsSection
-                // Provenance sits between fields and removal — context, not action.
-                // Only shown when provenance collection is enabled in Settings.
-                if coordinator.provenanceCollection {
-                    Divider()
-                    provenanceSection
-                }
                 Divider()
                 removalSection
                 Divider()
@@ -77,13 +71,14 @@ struct PackageDetailView: View {
                             .font(.system(.body, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
-                        if FileManager.default.fileExists(atPath: installPath.path) {
-                            Button("Reveal in Finder") {
-                                NSWorkspace.shared.activateFileViewerSelecting([installPath])
-                            }
-                            .buttonStyle(.borderless)
-                            .font(.callout)
+                        let exists = FileManager.default.fileExists(atPath: installPath.path)
+                        Button("Reveal in Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([installPath])
                         }
+                        .buttonStyle(.borderless)
+                        .font(.callout)
+                        .disabled(!exists)
+                        .help(exists ? "Open the install path in Finder" : "File no longer exists at this path")
                     }
                 }
             }
@@ -107,77 +102,6 @@ struct PackageDetailView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
             }
-        }
-    }
-
-    // MARK: - Provenance section
-
-    /// Reads directly from the coordinator's in-memory provenance dict.
-    /// The dict updates atomically after each scan, so this section re-renders
-    /// naturally with no async fetch or @State needed.
-    ///
-    /// Three states:
-    ///  - Evidence found → narrative sentence + optional low-confidence badge
-    ///  - No evidence (collection ran, nothing matched) → quiet "Install origin unknown."
-    ///  - Provenance disabled in Settings → section is omitted entirely (handled in body)
-    @ViewBuilder
-    private var provenanceSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            let evidence = coordinator.provenanceByPackageId[package.id]
-
-            if let evidence {
-                let nameByPackageId = Dictionary(
-                    uniqueKeysWithValues: coordinator.packages.map { ($0.id, $0.name) }
-                )
-                Text(NarrativeRenderer().render(
-                    evidence,
-                    package: package,
-                    nameByPackageId: nameByPackageId
-                ))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-                if evidence.overallConfidence < .high {
-                    confidenceBadge(evidence.overallConfidence)
-                }
-            } else {
-                Text("Install origin unknown.")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func confidenceBadge(_ confidence: Confidence) -> some View {
-        let style = confidenceBadgeStyle(confidence)
-        if !style.label.isEmpty {
-            Text(style.label)
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundStyle(style.color)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(style.color.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-        }
-    }
-
-    /// Plain (non-ViewBuilder) helper: maps a confidence level to its badge
-    /// label and color. Kept separate from `confidenceBadge` because a
-    /// statement-style `switch` that assigns variables cannot live directly
-    /// inside a @ViewBuilder body — the builder reads it as a `()` expression.
-    private func confidenceBadgeStyle(_ confidence: Confidence) -> (label: String, color: Color) {
-        switch confidence {
-        case .medium:
-            return ("Medium confidence", .orange)
-        case .low:
-            return ("Low confidence", Color(nsColor: .secondaryLabelColor))
-        case .unknown:
-            return ("No timestamp data", Color(nsColor: .secondaryLabelColor))
-        case .high:
-            return ("", .clear)
         }
     }
 
@@ -253,7 +177,7 @@ struct PackageDetailView: View {
     @ViewBuilder
     private func rawCommandDisclosure(_ cmd: String) -> some View {
         if Denylist.default.isDenylisted(package) {
-            Text("Raw command copy is hidden for common essentials. Use the generated script so the command stays commented out unless you deliberately edit it.")
+            Text("Raw command hidden for safety. Use the script flow above.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -283,7 +207,7 @@ struct PackageDetailView: View {
                     }
                     .buttonStyle(.bordered)
 
-                    Text("This bypasses Installory's snapshot and script review flow.")
+                    Text("Skips the snapshot and review steps. For advanced users.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
