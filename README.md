@@ -24,13 +24,13 @@ It's built for people — especially those working with AI coding tools like Cla
 
 ## Screenshots
 
-**The main window** — a unified, three-pane inventory of everything installed across the supported managers:
+**The main window** — a unified, three-pane inventory across every supported manager, with a Scan Coverage section that surfaces exactly what was checked and what was skipped:
 
 ![Installory main window](files/screenshots/main-window.png)
 
-**Package detail** — a plain-language description, install metadata, and a safe removal flow that generates a command for you to run yourself:
+**Cleanup, the safe way** — Installory captures a snapshot before generating a removal script. The script stays on screen for you to review; you copy it into Terminal yourself when you're ready:
 
-![Installory package detail view](files/screenshots/package-detail.png)
+![Installory cleanup script sheet](files/screenshots/cleanup-script.png)
 
 ## Design principles
 
