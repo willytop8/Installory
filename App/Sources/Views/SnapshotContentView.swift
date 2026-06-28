@@ -1,10 +1,21 @@
 import InstalloryCore
 import SwiftUI
 
+// MARK: - Tab selection
+
+private enum SnapshotViewTab: String, CaseIterable, Identifiable {
+    case contents = "Snapshot"
+    case changes  = "Changes"
+    var id: String { rawValue }
+}
+
+// MARK: - Main view
+
 struct SnapshotContentView: View {
     let snapshotID: UUID
     @Environment(AppCoordinator.self) private var coordinator
     @State private var searchQuery = ""
+    @State private var activeTab: SnapshotViewTab = .contents
 
     // Restore flow state — all local; nothing in coordinator changes.
     @State private var missingPackages: [MissingPackage] = []
@@ -35,21 +46,33 @@ struct SnapshotContentView: View {
         List {
             Section {
                 metadataHeader(snapshot)
+                Picker("View Mode", selection: $activeTab) {
+                    ForEach(SnapshotViewTab.allCases) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.vertical, 2)
             }
             .selectionDisabled()
 
-            ForEach(managers, id: \.self) { manager in
-                let pkgs = filteredPackages(
-                    snapshot.payload.managers[manager] ?? [],
-                    query: searchQuery
-                )
-                if !pkgs.isEmpty {
-                    Section(manager.displayName) {
-                        ForEach(pkgs) { pkg in
-                            SnapshotPackageRowView(package: pkg, manager: manager)
+            if activeTab == .contents {
+                ForEach(managers, id: \.self) { manager in
+                    let pkgs = filteredPackages(
+                        snapshot.payload.managers[manager] ?? [],
+                        query: searchQuery
+                    )
+                    if !pkgs.isEmpty {
+                        Section(manager.displayName) {
+                            ForEach(pkgs) { pkg in
+                                SnapshotPackageRowView(package: pkg, manager: manager)
+                            }
                         }
                     }
                 }
+            } else {
+                changesSections(snapshot)
             }
         }
         .listStyle(.inset)
@@ -65,6 +88,86 @@ struct SnapshotContentView: View {
         }
     }
 
+    // MARK: - Changes sections
+
+    @ViewBuilder
+    private func changesSections(_ snapshot: Snapshot) -> some View {
+        let changes = snapshotChanges(from: snapshot, to: coordinator.packages)
+
+        if changes.isEmpty {
+            Section {
+                HStack {
+                    Image(systemName: "checkmark.circle")
+                        .foregroundStyle(.green)
+                    Text("No changes since this snapshot.")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout)
+            }
+            .selectionDisabled()
+        } else {
+            Section {
+                changesSummaryRow(snapshot: snapshot, changes: changes)
+            }
+            .selectionDisabled()
+
+            if !changes.added.isEmpty {
+                Section("Added (\(changes.added.count))") {
+                    ForEach(changes.added) { pkg in
+                        AddedPackageRowView(package: pkg)
+                    }
+                }
+            }
+
+            if !changes.removed.isEmpty {
+                Section("Removed (\(changes.removed.count))") {
+                    ForEach(changes.removed) { mp in
+                        SnapshotPackageRowView(package: mp.package, manager: mp.manager)
+                    }
+                }
+            }
+
+            if !changes.versionChanged.isEmpty {
+                Section("Updated (\(changes.versionChanged.count))") {
+                    ForEach(changes.versionChanged) { vc in
+                        VersionChangeRowView(change: vc)
+                    }
+                }
+            }
+        }
+    }
+
+    private func changesSummaryRow(snapshot: Snapshot, changes: SnapshotChangeSet) -> some View {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        let relDate = formatter.localizedString(for: snapshot.createdAt, relativeTo: Date())
+
+        var parts: [String] = []
+        if !changes.added.isEmpty {
+            let w = changes.added.count == 1 ? "package" : "packages"
+            parts.append("\(changes.added.count) \(w) added")
+        }
+        if !changes.removed.isEmpty {
+            let w = changes.removed.count == 1 ? "package" : "packages"
+            parts.append("\(changes.removed.count) \(w) removed")
+        }
+        if !changes.versionChanged.isEmpty {
+            let w = changes.versionChanged.count == 1 ? "package" : "packages"
+            parts.append("\(changes.versionChanged.count) \(w) updated")
+        }
+
+        let summary = parts.joined(separator: ", ")
+        return VStack(alignment: .leading, spacing: 2) {
+            Text("Since \(relDate)")
+                .font(.callout)
+                .foregroundStyle(.primary)
+            Text(summary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
     // MARK: - Metadata header
 
     private func metadataHeader(_ snapshot: Snapshot) -> some View {
@@ -76,7 +179,7 @@ struct SnapshotContentView: View {
                 Button {
                     computeAndShowRestoreFlow(snapshot: snapshot)
                 } label: {
-                    Label("Restore Missing Packages…", systemImage: "arrow.down.circle")
+                    Label("Restore Missing Packages\u{2026}", systemImage: "arrow.down.circle")
                 }
                 .buttonStyle(.borderless)
                 .disabled(coordinator.packages.isEmpty)
@@ -168,6 +271,79 @@ private struct SnapshotPackageRowView: View {
     }
 }
 
+// MARK: - Added package row (live Package from snapshotChanges)
+
+private struct AddedPackageRowView: View {
+    let package: Package
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(package.name)
+                        .fontWeight(.semibold)
+                    ManagerBadge(manager: package.manager)
+                }
+                HStack(spacing: 8) {
+                    Text(package.version)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    if !package.isExplicit {
+                        Text("dependency")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+            if let qualifier = package.qualifier {
+                Text(URL(fileURLWithPath: qualifier).lastPathComponent)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+// MARK: - Version change row
+
+private struct VersionChangeRowView: View {
+    let change: VersionChange
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(change.name)
+                        .fontWeight(.semibold)
+                    ManagerBadge(manager: change.manager)
+                }
+                HStack(spacing: 4) {
+                    Text(change.oldVersion)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "arrow.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Text(change.newVersion)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+            if let qualifier = change.qualifier {
+                Text(URL(fileURLWithPath: qualifier).lastPathComponent)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
 // MARK: - Restore checklist sheet
 
 /// Two-step sheet: first shows a checklist of missing packages (all pre-checked);
@@ -219,7 +395,7 @@ private struct RestoreChecklistSheet: View {
                 .fontWeight(.bold)
             HStack(spacing: 6) {
                 Text(snapshotReasonLabel(snapshot.reason))
-                Text("·")
+                Text("\u{00B7}")
                 Text("Captured \(formattedDate(snapshot.createdAt))")
             }
             .font(.callout)

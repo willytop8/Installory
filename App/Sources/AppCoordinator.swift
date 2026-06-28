@@ -271,6 +271,12 @@ final class AppCoordinator {
         packages.orphanedPackages()
     }
 
+    /// Packages whose provenance evidence indicates installation during an AI assistant session.
+    /// Empty when provenance collection is off or no evidence is attributed to an AI session.
+    var aiInstalledPackages: [Package] {
+        packages.filter { wasInstalledByAIAssistant(provenanceByPackageId[$0.id]) }
+    }
+
     // MARK: - Computed: directories
 
     var grantedDirectories: [GrantedDirectory] {
@@ -441,8 +447,31 @@ final class AppCoordinator {
         NSWorkspace.shared.activateFileViewerSelecting([dir])
     }
 
-    /// Writes the current inventory to a user-chosen path as CSV or Markdown.
-    /// Returns the URL on success, nil on cancel or failure.
+    /// Renders and writes a Markdown environment report to a user-chosen path.
+    @discardableResult
+    func exportEnvironmentReport() -> URL? {
+        let panel = NSSavePanel()
+        panel.title = "Export Environment Report"
+        panel.nameFieldStringValue = "installory-environment-report.md"
+        if let type = UTType(filenameExtension: "md") {
+            panel.allowedContentTypes = [type]
+        }
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        let content = EnvironmentReportRenderer().render(
+            packages: packages,
+            duplicateGroups: duplicateGroups,
+            orphans: orphanedPackages,
+            now: Date()
+        )
+        do {
+            try content.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
     @discardableResult
     func exportInventory(format: InventoryExporter.Format) -> URL? {
         let panel = NSSavePanel()

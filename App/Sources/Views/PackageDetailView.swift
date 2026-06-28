@@ -128,6 +128,14 @@ struct PackageDetailView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if evidence.claudeCodeContext != nil {
+                    HStack(spacing: 6) {
+                        AIBadge()
+                        Text("Installed during a Claude Code session")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             } else {
                 // Provenance is on but no trace found for this package.
                 Text("No install trace found for this package.")

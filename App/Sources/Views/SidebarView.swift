@@ -63,6 +63,15 @@ struct SidebarView: View {
                     Label("Review Candidates (\(orphanCount))", systemImage: "leaf.circle")
                 }
             }
+
+            if coordinator.provenanceCollection {
+                let aiCount = coordinator.aiInstalledPackages.count
+                if aiCount > 0 {
+                    NavigationLink(value: SidebarSelection.aiInstalled) {
+                        Label("AI Installed (\(aiCount))", systemImage: "sparkles")
+                    }
+                }
+            }
         }
     }
 

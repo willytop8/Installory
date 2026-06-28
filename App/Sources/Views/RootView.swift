@@ -15,6 +15,8 @@ struct RootView: View {
                 DuplicatesView()
             } else if case .orphans = coordinator.sidebarSelection {
                 OrphansView()
+            } else if case .aiInstalled = coordinator.sidebarSelection {
+                AIInstalledView()
             } else {
                 PackageListView()
             }

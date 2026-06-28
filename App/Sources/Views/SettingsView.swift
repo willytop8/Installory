@@ -102,7 +102,12 @@ private struct ScanningTab: View {
                 }
                 .disabled(coordinator.packages.isEmpty)
 
-                Text("Saves a copy of the current inventory to a file you choose. The export never leaves your Mac.")
+                Button("Export Environment Report\u{2026}") {
+                    coordinator.exportEnvironmentReport()
+                }
+                .disabled(coordinator.packages.isEmpty)
+
+                Text("Saves a copy of the current inventory to a file you choose. The environment report includes duplicates, review candidates, and a full package table. Exports never leave your Mac.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {

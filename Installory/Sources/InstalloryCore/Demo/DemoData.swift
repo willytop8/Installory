@@ -314,15 +314,39 @@ public enum DemoData {
 
     /// Sample snapshots so the Snapshots sidebar section and restore flow are
     /// demonstrable. Snapshot payloads reference the full demo inventory.
+    ///
+    /// The 7-day snapshot is intentionally divergent from the live inventory so
+    /// `snapshotChanges()` has all three categories to display in the Changes tab:
+    /// - **Added:** prettier, httpie, eza (not in the snapshot)
+    /// - **Removed:** jq (in the snapshot, gone from live)
+    /// - **Version-changed:** ffmpeg 6.0.0 → 6.1.1
     public static func snapshots() -> [Snapshot] {
         let all = packages()
+
+        let sevenDayPayload: SnapshotPayload = {
+            let omitNames: Set<String> = ["prettier", "httpie", "eza"]
+            var managers: [PackageManager: [SnapshotPackage]] = [:]
+            for p in all {
+                guard !omitNames.contains(p.name) else { continue }
+                let version = (p.name == "ffmpeg" && p.manager == .brew) ? "6.0.0" : p.version
+                managers[p.manager, default: []].append(
+                    SnapshotPackage(name: p.name, version: version, qualifier: p.qualifier, isExplicit: p.isExplicit)
+                )
+            }
+            // jq was installed 7 days ago and has since been removed
+            managers[.brew, default: []].append(
+                SnapshotPackage(name: "jq", version: "1.7.0", qualifier: nil, isExplicit: true)
+            )
+            return SnapshotPayload(managers: managers)
+        }()
+
         return [
             Snapshot(
                 id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
                 createdAt: daysAgo(7),
                 reason: .autoFirstScan,
                 note: nil,
-                payload: snapshotPayload(from: all)
+                payload: sevenDayPayload
             ),
             Snapshot(
                 id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
