@@ -56,6 +56,13 @@ struct SidebarView: View {
                     Label("Duplicates (\(duplicateCount))", systemImage: "doc.on.doc")
                 }
             }
+
+            let orphanCount = coordinator.orphanedPackages.count
+            if orphanCount > 0 {
+                NavigationLink(value: SidebarSelection.orphans) {
+                    Label("Review Candidates (\(orphanCount))", systemImage: "leaf.circle")
+                }
+            }
         }
     }
 

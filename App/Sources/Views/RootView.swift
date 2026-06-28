@@ -13,6 +13,8 @@ struct RootView: View {
                 SnapshotContentView(snapshotID: id)
             } else if case .duplicates = coordinator.sidebarSelection {
                 DuplicatesView()
+            } else if case .orphans = coordinator.sidebarSelection {
+                OrphansView()
             } else {
                 PackageListView()
             }

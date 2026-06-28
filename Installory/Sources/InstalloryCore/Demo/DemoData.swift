@@ -156,6 +156,60 @@ public enum DemoData {
             path: "/Applications/Things3.app",
             installedDaysAgo: 310, size: 96_000_000)
 
+        // MARK: Demo: spec 01/02 — cross-manager duplicates with PATH resolution & severity
+
+        // Active conflict: brew node wins PATH, cargo node is shadowed.
+        // (Assumes /opt/homebrew/bin precedes ~/.cargo/bin on PATH, which is typical.)
+        pkg(.brew, "node", version: "20.0.0",
+            path: "/opt/homebrew/Cellar/node/20.0.0",
+            installedDaysAgo: 30, size: 84_000_000)
+        pkg(.cargo, "node", version: "20.1.0",
+            path: "/Users/demo/.cargo/bin/node",
+            installedDaysAgo: 14, confidence: .low, size: 2_100_000)
+
+        // Potential conflict: brew and pipx install a "python" tool under different managers.
+        pkg(.brew, "python", version: "3.12.3",
+            path: "/opt/homebrew/Cellar/python@3.12/3.12.3",
+            installedDaysAgo: 60, size: 72_000_000)
+        pkg(.pipx, "python", version: "3.11.7",
+            path: "/Users/demo/.local/pipx/venvs/python",
+            installedDaysAgo: 90, confidence: .medium, size: 8_000_000)
+
+        // Benign: pip library vs Mac App Store app — same lowercased name, no real CLI conflict.
+        pkg(.pip, "stripe", version: "9.0.0", qualifier: brewPython,
+            path: "/opt/homebrew/lib/python3.12/site-packages/stripe",
+            installedDaysAgo: 20, size: 3_500_000)
+        pkg(.mas, "Stripe", version: "4.1.0", qualifier: "com.stripe.stripe-macos",
+            path: "/Applications/Stripe.app",
+            installedDaysAgo: 120, size: 48_000_000)
+
+        // MARK: Demo: spec 03 — multi-location (same pip package, two interpreters)
+
+        // Combined with the existing brewPython "requests" above, this forms a
+        // two-qualifier multi-location group under the pip manager.
+        pkg(.pip, "requests", version: "2.28.0", qualifier: pyenvPython,
+            path: "/Users/demo/.pyenv/versions/3.11.7/lib/python3.11/site-packages/requests",
+            installedDaysAgo: 40, size: 470_000)
+
+        // MARK: Demo: spec 04 — orphan analysis
+
+        // demo-lib is explicit but demo-app depends on it → NOT an orphan.
+        // demo-app is explicit with no dependents → IS an orphan (good review candidate).
+        pkg(.brew, "demo-lib", version: "1.0.0",
+            path: "/opt/homebrew/Cellar/demo-lib/1.0.0",
+            installedDaysAgo: 200, size: 8_000_000, explicit: true)
+        pkg(.brew, "demo-app", version: "2.3.1",
+            path: "/opt/homebrew/Cellar/demo-app/2.3.1",
+            installedDaysAgo: 180, size: 25_000_000, explicit: true,
+            deps: ["demo-lib"])
+
+        // MARK: Demo: spec 05 — cleanup signal unknown bucket
+
+        // nil size AND nil date → .unknown bucket in cleanup scoring.
+        pkg(.cargo, "legacy-tool", version: "0.1.0",
+            installedDaysAgo: nil, confidence: .unknown,
+            size: nil, explicit: true)
+
         return result
     }
 
@@ -193,6 +247,69 @@ public enum DemoData {
             note: note,
             payload: snapshotPayload(from: packages)
         )
+    }
+
+    /// Sample provenance evidence for demo mode.
+    ///
+    /// Two packages are covered:
+    /// - `brew::ffmpeg`: attributed to a Claude Code session (provides ClaudeCodeContext for spec 09).
+    /// - `pip:<brewPython>:requests`: attributed to a shell history command only.
+    ///
+    /// Keyed by the same package IDs produced by `packages()` so `PackageDetailView` can
+    /// look up evidence by `package.id` without any filesystem access.
+    public static func demoProvenanceByPackageId() -> [String: ProvenanceEvidence] {
+        let now = Date()
+        func daysAgo(_ n: Int) -> Date {
+            Calendar.current.date(byAdding: .day, value: -n, to: now) ?? now
+        }
+
+        let ffmpegId   = id(.brew, nil, "ffmpeg")
+        let aomId      = id(.brew, nil, "aom")
+        let requestsId = id(.pip, brewPython, "requests")
+        let numpyId    = id(.pip, brewPython, "numpy")
+
+        // ffmpeg — installed by Claude Code (primary demo for spec 09 AI-session tagging).
+        let ffmpegEvidence = ProvenanceEvidence(
+            packageId: ffmpegId,
+            fsInstallTime: daysAgo(21),
+            fsInstallTimeSource: "INSTALL_RECEIPT.json",
+            installCommand: nil,
+            claudeCodeContext: ProvenanceEvidence.ClaudeCodeContext(
+                sessionId: "demo-session-abc123",
+                projectPath: "/Users/demo/Projects/my-app",
+                sessionSummary: "Setting up a video processing pipeline",
+                firstUserMessage: "I need to add video transcoding to my app",
+                bashInvocation: "brew install ffmpeg",
+                timestamp: daysAgo(21)
+            ),
+            nearbyProjects: [],
+            coInstalledWithin1h: [aomId],
+            overallConfidence: .high,
+            collectedAt: now
+        )
+
+        // requests — installed via shell history, no Claude Code context.
+        let requestsEvidence = ProvenanceEvidence(
+            packageId: requestsId,
+            fsInstallTime: daysAgo(18),
+            fsInstallTimeSource: "dist-info mtime",
+            installCommand: ProvenanceEvidence.InstallCommandRecord(
+                timestamp: daysAgo(18),
+                command: "pip install requests",
+                shell: .zsh,
+                cwd: "/Users/demo/Projects/data-fetcher"
+            ),
+            claudeCodeContext: nil,
+            nearbyProjects: [],
+            coInstalledWithin1h: [numpyId],
+            overallConfidence: .high,
+            collectedAt: now
+        )
+
+        return [
+            ffmpegId:   ffmpegEvidence,
+            requestsId: requestsEvidence,
+        ]
     }
 
     /// Sample snapshots so the Snapshots sidebar section and restore flow are
