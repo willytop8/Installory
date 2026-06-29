@@ -56,6 +56,22 @@ struct SidebarView: View {
                     Label("Duplicates (\(duplicateCount))", systemImage: "doc.on.doc")
                 }
             }
+
+            let orphanCount = coordinator.orphanedPackages.count
+            if orphanCount > 0 {
+                NavigationLink(value: SidebarSelection.orphans) {
+                    Label("Review Candidates (\(orphanCount))", systemImage: "leaf.circle")
+                }
+            }
+
+            if coordinator.provenanceCollection {
+                let aiCount = coordinator.aiInstalledPackages.count
+                if aiCount > 0 {
+                    NavigationLink(value: SidebarSelection.aiInstalled) {
+                        Label("AI Installed (\(aiCount))", systemImage: "sparkles")
+                    }
+                }
+            }
         }
     }
 

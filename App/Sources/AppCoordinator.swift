@@ -27,6 +27,7 @@ private enum DefaultsKey {
     static let scanOnLaunch          = "app.installory.settings.scanOnLaunch"
     static let firstScanTaken        = "app.installory.firstScanSnapshotTaken"
     static let migrationCompleted    = "app.installory.migration.fromBackshelf"
+    static let provenanceCollection  = "app.installory.settings.provenanceCollection"
 }
 
 @Observable
@@ -92,6 +93,13 @@ final class AppCoordinator {
     var snapshotBeforeRemoval: SnapshotPreference = .ask
     var scanOnLaunch: Bool = true
 
+    /// When true, Installory reads shell history and Claude Code session logs
+    /// during scans to build install-origin evidence per package.
+    ///
+    /// Defaults to `false`. The collectors must never be called until the user
+    /// explicitly opts in via Settings → Privacy → Provenance.
+    var provenanceCollection: Bool = false
+
     // MARK: - Removal flow (coordinator-driven "Ask" dialog)
 
     /// Non-nil when the user triggered a per-package removal and the snapshot
@@ -109,10 +117,27 @@ final class AppCoordinator {
     private(set) var database: Database?
     private var packageDAO: PackageDAO?
     private var scanRunDAO: ScanRunDAO?
+    private var provenanceDAO: ProvenanceDAO?
     private var dataDirectory: URL?
+
+    /// Provenance evidence keyed by package ID. Populated at the end of each
+    /// scan when `provenanceCollection` is true. Empty in demo mode until the
+    /// orchestrator wires `DemoData.demoProvenanceByPackageId()`.
+    private(set) var provenanceByPackageId: [String: ProvenanceEvidence] = [:]
+
     /// Minimum interval between automatic scans triggered by `autoScanIfNeeded`.
     /// Manual `refresh()` ignores this — the user pressing ⌘R always rescans.
     private static let autoScanCooldown: TimeInterval = 60
+
+    // MARK: - Computed: provenance access
+
+    /// True when a security-scoped bookmark covering the user's home directory
+    /// exists in `FolderAccessManager`, indicating the user has granted read
+    /// access for provenance collection.
+    var provenanceAccessGranted: Bool {
+        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+        return folderAccess.grantedPath(forPrefix: homePath) != nil
+    }
 
     // MARK: - Init
 
@@ -131,6 +156,7 @@ final class AppCoordinator {
                 packageDAO = PackageDAO(database: db)
                 scanRunDAO = ScanRunDAO(database: db)
                 snapshotManager = SnapshotManager(database: db)
+                provenanceDAO = ProvenanceDAO(database: db)
                 packages = (try? packageDAO!.loadAll()) ?? []
                 lastScanCompletedAt = try? scanRunDAO!.mostRecentCompletedAt()
             } else {
@@ -168,6 +194,7 @@ final class AppCoordinator {
             ("backshelf.settings.snapshotBeforeRemoval",  DefaultsKey.snapshotBeforeRemoval, .string),
             ("backshelf.settings.scanOnLaunch",           DefaultsKey.scanOnLaunch,          .bool),
             ("backshelf.firstScanSnapshotTaken",          DefaultsKey.firstScanTaken,        .bool),
+            ("backshelf.settings.provenanceCollection",   DefaultsKey.provenanceCollection,  .bool),
         ]
         for pair in pairs {
             guard defaults.object(forKey: pair.legacy) != nil,
@@ -202,6 +229,7 @@ final class AppCoordinator {
         snapshots = DemoData.snapshots()
         scanStatuses = [:]
         lastScanCompletedAt = Date()
+        provenanceByPackageId = DemoData.demoProvenanceByPackageId()
         // Dismiss onboarding for the demo session without persisting the flag —
         // a developer who runs `-demo` once shouldn't permanently skip onboarding.
         onboardingCompleted = true
@@ -219,6 +247,7 @@ final class AppCoordinator {
         selectedForCleanup = []
         searchQuery = ""
         sidebarSelection = .all
+        provenanceByPackageId = [:]
         onboardingCompleted = UserDefaults.standard.bool(forKey: DefaultsKey.onboardingCompleted)
         Task {
             await refreshSnapshots()
@@ -234,6 +263,18 @@ final class AppCoordinator {
 
     var duplicateGroups: [DuplicateGroup] {
         packages.crossManagerDuplicates()
+    }
+
+    /// Explicitly-installed packages that have no in-inventory dependents within
+    /// their own package manager. See ``DependencyAnalysis`` for caveats.
+    var orphanedPackages: [Package] {
+        packages.orphanedPackages()
+    }
+
+    /// Packages whose provenance evidence indicates installation during an AI assistant session.
+    /// Empty when provenance collection is off or no evidence is attributed to an AI session.
+    var aiInstalledPackages: [Package] {
+        packages.filter { wasInstalledByAIAssistant(provenanceByPackageId[$0.id]) }
     }
 
     // MARK: - Computed: directories
@@ -382,6 +423,7 @@ final class AppCoordinator {
             forKey: DefaultsKey.snapshotBeforeRemoval
         )
         UserDefaults.standard.set(scanOnLaunch, forKey: DefaultsKey.scanOnLaunch)
+        UserDefaults.standard.set(provenanceCollection, forKey: DefaultsKey.provenanceCollection)
     }
 
     func completeOnboarding() {
@@ -405,8 +447,31 @@ final class AppCoordinator {
         NSWorkspace.shared.activateFileViewerSelecting([dir])
     }
 
-    /// Writes the current inventory to a user-chosen path as CSV or Markdown.
-    /// Returns the URL on success, nil on cancel or failure.
+    /// Renders and writes a Markdown environment report to a user-chosen path.
+    @discardableResult
+    func exportEnvironmentReport() -> URL? {
+        let panel = NSSavePanel()
+        panel.title = "Export Environment Report"
+        panel.nameFieldStringValue = "installory-environment-report.md"
+        if let type = UTType(filenameExtension: "md") {
+            panel.allowedContentTypes = [type]
+        }
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        let content = EnvironmentReportRenderer().render(
+            packages: packages,
+            duplicateGroups: duplicateGroups,
+            orphans: orphanedPackages,
+            now: Date()
+        )
+        do {
+            try content.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
     @discardableResult
     func exportInventory(format: InventoryExporter.Format) -> URL? {
         let panel = NSSavePanel()
@@ -512,6 +577,48 @@ final class AppCoordinator {
         )
     }
 
+    // MARK: - Provenance actions
+
+    /// Presents an `NSOpenPanel` pre-navigated to the user's home directory so
+    /// the user can grant Installory read access to their shell history and Claude
+    /// Code session logs. The resulting security-scoped bookmark is stored in
+    /// `FolderAccessManager` and persisted to UserDefaults.
+    ///
+    /// The open panel title and surrounding Settings UI copy explicitly name what
+    /// will be read: `~/.zsh_history`, `~/.bash_history`,
+    /// `~/.local/share/fish/fish_history`, and `~/.claude/projects/`.
+    func requestProvenanceAccess() async {
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        _ = await folderAccess.requestAccess(to: homeDir)
+    }
+
+    /// Removes the home-directory security-scoped bookmark used by provenance
+    /// collection. Clears it from UserDefaults and reloads `FolderAccessManager`'s
+    /// in-memory bookmark cache so `provenanceAccessGranted` updates immediately.
+    ///
+    /// Safe to call outside of an active scan (the Revoke button is shown only
+    /// when the toggle is ON and the toggle is disabled while scanning).
+    func revokeProvenanceAccess() {
+        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+        guard let storedPath = folderAccess.grantedPath(forPrefix: homePath) else { return }
+        // "app.installory.bookmarks" is the UserDefaults key used by FolderAccessManager.
+        var bookmarks = UserDefaults.standard.dictionary(
+            forKey: "app.installory.bookmarks"
+        ) as? [String: Data] ?? [:]
+        bookmarks.removeValue(forKey: storedPath)
+        UserDefaults.standard.set(bookmarks, forKey: "app.installory.bookmarks")
+        // Reload FolderAccessManager's in-memory state to reflect the removal.
+        folderAccess.loadPersistedBookmarks()
+    }
+
+    /// Deletes all rows from `provenance_evidence` and clears the in-memory cache.
+    /// Called when the user turns off provenance collection and confirms they want
+    /// to erase stored install history.
+    func clearProvenanceEvidence() async {
+        try? await provenanceDAO?.deleteAll()
+        provenanceByPackageId = [:]
+    }
+
     // MARK: - Private
 
     private func restoreUIPreferences() {
@@ -535,6 +642,9 @@ final class AppCoordinator {
         // from the raw UserDefaults default.
         if UserDefaults.standard.object(forKey: DefaultsKey.scanOnLaunch) != nil {
             scanOnLaunch = UserDefaults.standard.bool(forKey: DefaultsKey.scanOnLaunch)
+        }
+        if UserDefaults.standard.object(forKey: DefaultsKey.provenanceCollection) != nil {
+            provenanceCollection = UserDefaults.standard.bool(forKey: DefaultsKey.provenanceCollection)
         }
     }
 
@@ -645,10 +755,52 @@ final class AppCoordinator {
             try? dao.save(scanRun)
         }
 
-        // Provenance collection is intentionally disabled for App Store v1.
-        // The core collectors remain tested library code, but the app must not
-        // read shell history or assistant transcripts until a dedicated consent
-        // and per-source permission UI exists.
+        // MARK: Provenance collection (gated by user opt-in)
+        //
+        // This block must remain at the very end of scan(), after packageDAO.replaceAll,
+        // so the FK constraint (provenance_evidence.package_id → packages.id) is satisfied.
+        //
+        // Critical: the guard below is the primary enforcement of "provenance defaults OFF".
+        // Nothing outside this block should call the collectors.
+        guard provenanceCollection else { return }
+
+        // Require a security-scoped bookmark covering the home directory.
+        // The user grants this via "Grant read access…" in Settings → Privacy.
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        guard
+            let homePath = folderAccess.grantedPath(forPrefix: homeDir.path),
+            let homeBookmarkPair = folderAccess.grantedBookmarks().first(where: { $0.path == homePath })
+        else { return }
+
+        // Start security-scoped access for the home directory grant.
+        // `startAccessingSecurityScopedResource` is reference-counted: if the
+        // same URL was already started in the main scan loop above (because the
+        // user also uses the home directory for regular scanning), the count
+        // increments to 2 and both `defer` blocks decrement it correctly.
+        guard let homeURL = folderAccess.startAccessing(homeBookmarkPair.bookmark) else { return }
+        defer { folderAccess.stopAccessing(homeURL) }
+
+        // Run collectors on a background executor. File I/O must stay off the
+        // main actor. All captured values are Sendable (URL, [Package]).
+        let capturedPackages = packages
+        let capturedHomeURL = homeURL
+        let evidenceList: [ProvenanceEvidence] = await Task.detached(priority: .utility) {
+            ProvenanceCollector(
+                shellCollector: ShellHistoryCollector(homeDirectory: capturedHomeURL),
+                claudeCodeCollector: ClaudeCodeLogCollector(homeDirectory: capturedHomeURL)
+            ).collect(packages: capturedPackages)
+        }.value
+
+        // Persist evidence and refresh the in-memory cache. packageDAO.replaceAll
+        // already ran above, so FK constraints are satisfied.
+        if let dao = provenanceDAO {
+            var byId: [String: ProvenanceEvidence] = [:]
+            for evidence in evidenceList {
+                try? await dao.upsert(evidence)
+                byId[evidence.packageId] = evidence
+            }
+            provenanceByPackageId = byId
+        }
     }
 
     private func scanner(for manager: PackageManager, grantedURLs: [URL]) -> (any PackageScanner)? {

@@ -102,7 +102,12 @@ private struct ScanningTab: View {
                 }
                 .disabled(coordinator.packages.isEmpty)
 
-                Text("Saves a copy of the current inventory to a file you choose. The export never leaves your Mac.")
+                Button("Export Environment Report\u{2026}") {
+                    coordinator.exportEnvironmentReport()
+                }
+                .disabled(coordinator.packages.isEmpty)
+
+                Text("Saves a copy of the current inventory to a file you choose. The environment report includes duplicates, review candidates, and a full package table. Exports never leave your Mac.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
@@ -118,8 +123,10 @@ private struct ScanningTab: View {
 
 private struct PrivacyTab: View {
     @Environment(AppCoordinator.self) private var coordinator
+    @State private var showClearEvidenceConfirmation = false
 
     var body: some View {
+        @Bindable var coordinator = coordinator
         Form {
             Section {
                 Label("Installory makes no network connections.", systemImage: "network.slash")
@@ -128,6 +135,55 @@ private struct PrivacyTab: View {
                 Label("Cleanup scripts are generated, never executed.", systemImage: "terminal")
             } header: {
                 Text("How Installory handles your data")
+            }
+
+            // MARK: Provenance section
+
+            Section {
+                Toggle("Trace how packages were installed", isOn: $coordinator.provenanceCollection)
+                    .disabled(coordinator.isScanning)
+
+                Text("When enabled, Installory reads your shell history and Claude Code session logs to identify which packages were installed when, and by what. Everything stays on your Mac \u{2014} nothing is sent anywhere.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Files that will be read:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Group {
+                        Text("\u{2022} ~/.zsh_history")
+                        Text("\u{2022} ~/.bash_history")
+                        Text("\u{2022} ~/.local/share/fish/fish_history")
+                        Text("\u{2022} ~/.claude/projects/")
+                    }
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                }
+
+                if coordinator.provenanceCollection {
+                    if coordinator.provenanceAccessGranted {
+                        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+                        let grantedPath = coordinator.folderAccess.grantedPath(forPrefix: homePath) ?? homePath
+                        Label("Access granted to \(grantedPath)", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.callout)
+                        Button("Revoke Access", role: .destructive) {
+                            coordinator.revokeProvenanceAccess()
+                        }
+                        .disabled(coordinator.isScanning)
+                    } else {
+                        Button("Grant read access\u{2026}") {
+                            Task { await coordinator.requestProvenanceAccess() }
+                        }
+                        .disabled(coordinator.isScanning)
+                        Text("Installory will ask you to select your home folder so it can read shell history and Claude Code logs. You can revoke access at any time.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Provenance")
             }
 
             Section {
@@ -148,6 +204,25 @@ private struct PrivacyTab: View {
             }
         }
         .formStyle(.grouped)
+        .onChange(of: coordinator.provenanceCollection) { _, newValue in
+            coordinator.persistSettings()
+            if !newValue {
+                // User turned off provenance — offer to erase stored evidence.
+                showClearEvidenceConfirmation = true
+            }
+        }
+        .confirmationDialog(
+            "Clear stored install history?",
+            isPresented: $showClearEvidenceConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clear History", role: .destructive) {
+                Task { await coordinator.clearProvenanceEvidence() }
+            }
+            Button("Keep History", role: .cancel) {}
+        } message: {
+            Text("Installory will no longer trace how packages were installed. Stored evidence will be deleted from the local cache.")
+        }
     }
 }
 

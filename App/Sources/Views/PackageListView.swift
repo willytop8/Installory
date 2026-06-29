@@ -321,12 +321,7 @@ private struct PackageRowView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
-            if let date = package.installedAt {
-                Text(installDateText(date))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
+            CleanupAnnotationView(package: package)
         }
         .padding(.vertical, 2)
         .contextMenu {
@@ -368,6 +363,39 @@ private struct PackageRowView: View {
             formatter.dateStyle = .medium
             formatter.timeStyle = .none
             return formatter.string(from: date)
+        }
+    }
+}
+
+private struct CleanupAnnotationView: View {
+    let package: Package
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            if let size = package.sizeBytes {
+                Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            if let date = package.installedAt {
+                Text(ageLabel(date: date, confidence: package.installedAtConfidence))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private func ageLabel(date: Date, confidence: Confidence) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        let relative = formatter.localizedString(for: date, relativeTo: .now)
+        switch confidence {
+        case .low, .unknown:
+            return "\(relative) (est.)"
+        case .medium, .high:
+            return relative
         }
     }
 }

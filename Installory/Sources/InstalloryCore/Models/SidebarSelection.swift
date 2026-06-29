@@ -5,6 +5,8 @@ public enum SidebarSelection: Hashable, Sendable {
     case manager(PackageManager)
     case readOnly
     case duplicates
+    case orphans
+    case aiInstalled
     case snapshot(UUID)
 }
 
@@ -15,6 +17,8 @@ extension SidebarSelection {
         case .manager(let m): "manager.\(m.rawValue)"
         case .readOnly: "readOnly"
         case .duplicates: "duplicates"
+        case .orphans: "orphans"
+        case .aiInstalled: "aiInstalled"
         case .snapshot: ""  // snapshot selections are never persisted
         }
     }
@@ -24,6 +28,8 @@ extension SidebarSelection {
         case "all": self = .all
         case "readOnly": self = .readOnly
         case "duplicates": self = .duplicates
+        case "orphans": self = .orphans
+        case "aiInstalled": self = .aiInstalled
         default:
             guard userDefaultsKey.hasPrefix("manager.") else { return nil }
             let raw = String(userDefaultsKey.dropFirst("manager.".count))
@@ -47,6 +53,12 @@ extension [Package] {
             result = result.filter(\.isReadOnly)
         case .duplicates:
             // DuplicatesView reads crossManagerDuplicates() directly; filteredPackages is not consulted.
+            return []
+        case .orphans:
+            // OrphansView reads coordinator.orphanedPackages directly; filteredPackages is not consulted.
+            return []
+        case .aiInstalled:
+            // AIInstalledView reads coordinator.aiInstalledPackages directly; filteredPackages is not consulted.
             return []
         case .snapshot(_):
             // Snapshot content is rendered by SnapshotContentView, not this filter.

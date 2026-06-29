@@ -16,6 +16,8 @@ struct PackageDetailView: View {
                 Divider()
                 fieldsSection
                 Divider()
+                provenanceSection
+                Divider()
                 removalSection
                 Divider()
                 rawRecordSection
@@ -101,6 +103,48 @@ struct PackageDetailView: View {
                         .foregroundStyle(.secondary)
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
+            }
+        }
+    }
+
+    // MARK: - Provenance section
+
+    private var provenanceSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("How it was installed")
+                .font(.headline)
+
+            if !coordinator.provenanceCollection {
+                // Provenance is off — show a subtle nudge rather than an empty section.
+                Text("Turn on provenance tracing in Settings \u{2192} Privacy to see how this was installed.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else if let evidence = coordinator.provenanceByPackageId[package.id] {
+                // Evidence found — render the narrative sentence.
+                let nameByPackageId = Dictionary(
+                    uniqueKeysWithValues: coordinator.packages.map { ($0.id, $0.name) }
+                )
+                Text(NarrativeRenderer().render(evidence, package: package, nameByPackageId: nameByPackageId))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if evidence.claudeCodeContext != nil {
+                    HStack(spacing: 6) {
+                        AIBadge()
+                        Text("Installed during a Claude Code session")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                // Provenance is on but no trace found for this package.
+                Text("No install trace found for this package.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Text("Shell history may be truncated, or this package was installed before your history began.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

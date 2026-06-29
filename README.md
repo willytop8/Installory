@@ -14,13 +14,19 @@ It's built for people — especially those working with AI coding tools like Cla
 
 **Unified inventory.** One window showing every package across Homebrew, pip, pipx, npm, Cargo, RubyGems, and Mac App Store apps — name, version, install location, dependencies, and a plain-language description of what each package actually is.
 
-**Provenance _(in development)_.** A future release will cross-reference your shell history and Claude Code logs — behind an explicit per-source consent toggle — to answer the question package managers never do: *why is this here?* The collectors and tests already live in the codebase under `InstalloryCore/Provenance`; the v1.x app deliberately keeps the feature off until the consent UI ships.
+**Provenance _(opt-in)_.** Cross-references your shell history and Claude Code session logs — behind an explicit consent toggle in Settings → Privacy — to answer the question package managers never do: *why is this here?* Everything stays on your Mac; nothing is sent anywhere. Enable it to see plain-language install traces in each package's detail view, and to filter to packages installed during an AI coding session.
+
+**Duplicate analysis.** Cross-manager duplicates (e.g. `node` in both Homebrew and npm) are classified by severity: *active conflict* (two versions fighting over `$PATH` with a clear winner and shadowed losers), *potential conflict*, or *benign*. Same-manager multi-location installs (the same pip package across multiple Python interpreters) are surfaced separately as informational context.
+
+**Orphan detection.** "Review Candidates" lists explicitly-installed packages that nothing else in your inventory depends on — the lowest-risk first candidates to review for removal. System essentials are excluded.
+
+**Cleanup signals.** Sort the package list by largest, oldest, or combined cleanup score. Each row shows size and estimated install age so you can triage at a glance.
 
 **Safe removal.** When you want to clean up, Installory helps — but it **never deletes anything itself.** It generates the exact uninstall command or a reviewable shell script, which you run yourself in your terminal. You stay in control; nothing is destructive without your hand on it.
 
-**Snapshots.** Before generating a removal script, Installory can save a snapshot of what was installed. If a removal causes a problem, you can generate a reinstall script from that snapshot and put things back.
+**Snapshots and timeline.** Before generating a removal script, Installory saves a snapshot. If a removal causes a problem, you can generate a reinstall script from that snapshot. The Changes tab on any snapshot shows what was added, removed, or version-bumped since that point — turning snapshots from a recovery tool into an ongoing awareness tool.
 
-**Duplicate detection.** Installory flags tools installed by more than one package manager — the classic cause of "why am I running the wrong version?" — so you can resolve the conflict.
+**Environment report.** Export a shareable Markdown summary — per-manager counts, duplicate groups, orphan candidates, and the full inventory table — sized for pasting into an AI assistant or forum post.
 
 ## Screenshots
 
@@ -40,7 +46,7 @@ It's built for people — especially those working with AI coding tools like Cla
 
 ## Project status
 
-Installory is **live on the Mac App Store** and free. The core scanning/provenance/script-generation library has 336 passing tests. Issues and pull requests are welcome — I'm still fairly new to this, so feedback on which package managers or workflows to support next is especially appreciated.
+Installory is **live on the Mac App Store** and free. The core scanning/provenance/script-generation library has 421 passing tests. Issues and pull requests are welcome — I'm still fairly new to this, so feedback on which package managers or workflows to support next is especially appreciated.
 
 ## Building
 
@@ -74,7 +80,7 @@ swift test
 
 Installory is split into a pure Swift library and a thin app shell:
 
-- **`InstalloryCore`** — all the real logic: package scanners, provenance collection, snapshot management, script generation. No UI, no AppKit, fully unit-tested. This is where the 336 tests live.
+- **`InstalloryCore`** — all the real logic: package scanners, provenance collection, snapshot management, script generation. No UI, no AppKit, fully unit-tested. This is where the 421 tests live.
 - **App layer (`App/Sources/`)** — the SwiftUI interface and the coordinator that wires the library to the screen.
 
 The library is deliberately UI-free so it can be tested in isolation and reasoned about independently of the interface.
