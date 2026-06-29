@@ -113,3 +113,45 @@ When all workstreams are complete, produce a short summary: features shipped, ne
 - Export (exists): `Installory/Sources/InstalloryCore/Export/InventoryExporter.swift` (CSV + Markdown), wired via `AppCoordinator.exportInventory(format:)` and the Scanning settings tab.
 - Snapshots: `Snapshots/SnapshotManager.swift`, `Snapshots/SnapshotDiff.swift` (`snapshotDiff(snapshot:livePackages:)` already returns missing packages).
 - Cleanup safety: `Cleanup/ScriptGenerator.swift`, `Cleanup/Denylist.swift` (hardcoded essentials rendered as commented-out warnings).
+
+---
+
+## Decision log
+
+### 2026-06-28 — 9-spec implementation handoff (Wave 1 + Wave 2)
+
+**Features shipped:** All nine specs.
+
+**Test count:** 336 → 421 (+85 net new tests across 7 new test files)
+
+**Commits:**
+- `cb2acc3` — Wave 1: specs 01–05 + spec 08 (provenance)
+- `5665480` — Wave 2: specs 06, 07, 09
+- `cf285bf` — README docs refresh
+
+**Files added (11 new source files, 7 new test files):**
+- `Models/DuplicateResolution.swift` — PathStanding, DuplicateSeverity, resolvePathStandings()
+- `Models/DependencyAnalysis.swift` — orphanedPackages()
+- `Models/CleanupSignals.swift` — CleanupScore, ScoreBucket, cleanupScores(for:now:)
+- `Models/AIAttribution.swift` — wasInstalledByAIAssistant()
+- `Export/EnvironmentReportRenderer.swift` — pure Markdown report renderer
+- `Snapshots/SnapshotDiff.swift` — extended with snapshotChanges(), SnapshotChangeSet, VersionChange
+- `App/Views/OrphansView.swift`, `AIInstalledView.swift`
+- Tests: DuplicateResolutionTests, DependencyAnalysisTests, CleanupSignalsTests,
+  AIAttributionTests, EnvironmentReportTests, SnapshotChangesTests
+
+**Decisions made during implementation:**
+- Spec 02 sidebar: total count only, no red-dot severity indicator (keep sidebar calm)
+- Spec 03 surfacing: in-view section in DuplicatesView, no new sidebar entry
+- Spec 05 surfacing: sort options extension (largestFirst/oldestFirst/cleanupCandidates), not a new pane
+- Spec 08 access grant: single home-dir NSOpenPanel; scope minimization enforced in code
+- Spec 09 sidebar: hidden when provenanceCollection == false or count == 0
+- DemoData.swift added to hot-file list (was missing from README §5)
+
+**Guarantee flags raised:** None. All four guarantees preserved across all nine specs.
+**Deferred items:** None. All nine specs shipped completely.
+
+**Orchestration pattern used:** 4-subagent / 2-wave with worktree isolation + App Wiring Manifest
+handoff. Core logic + tests implemented in parallel; hot files (SidebarSelection, AppCoordinator,
+SidebarView, RootView, SettingsView, DemoData) applied by orchestrator in coordinated serial passes
+after each wave. swift test run immediately after each SidebarSelection edit.
