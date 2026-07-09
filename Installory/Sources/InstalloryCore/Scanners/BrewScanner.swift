@@ -26,10 +26,17 @@ public struct BrewScanner: PackageScanner, Sendable {
     }
 
     public func scan() async throws -> [Package] {
+        // `Package.id` carries no prefix component, so a formula installed under
+        // both `/opt/homebrew` and `/usr/local` (common on Apple Silicon Macs
+        // running Rosetta workloads) would otherwise yield two packages sharing
+        // one id — and `PackageDAO.replaceAll` would fail the UNIQUE constraint.
+        // Prefixes are ordered Apple Silicon first, so first-wins is correct.
+        var seen: Set<String> = []
         var packages: [Package] = []
         for prefix in pathDiscovery.homebrewPrefixes {
-            packages += try packagesIn(subdirectory: "Cellar", of: prefix, manager: .brew)
-            packages += try packagesIn(subdirectory: "Caskroom", of: prefix, manager: .brewCask)
+            let found = try packagesIn(subdirectory: "Cellar", of: prefix, manager: .brew)
+                + packagesIn(subdirectory: "Caskroom", of: prefix, manager: .brewCask)
+            packages += found.filter { seen.insert($0.id).inserted }
         }
         return packages
     }

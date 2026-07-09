@@ -326,4 +326,69 @@ struct BrewScannerTests {
         #expect(pkg.version == "1.1.0")
         #expect(pkg.manager == .brewCask)
     }
+
+    // MARK: - CORE-01: dual-prefix deduplication
+
+    private let intelPrefix = URL(fileURLWithPath: "/usr/local")
+
+    /// Both Homebrew prefixes present, as on an Apple Silicon Mac that also runs
+    /// Rosetta workloads. `PathDiscovery` reports them Apple Silicon first.
+    private func dualPrefixDiscovery() -> PathDiscovery {
+        PathDiscovery(checkExists: { $0 == "/opt/homebrew" || $0 == "/usr/local" })
+    }
+
+    @Test("CORE-01: a formula under both prefixes emits one Package, not a duplicate id")
+    func dualPrefixFormulaDeduplicates() async throws {
+        let receipt = minimalReceiptData()
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: fakePrefix.appendingPathComponent("Cellar/openssl@3/3.3.0/INSTALL_RECEIPT.json"), data: receipt)
+            builder.addFile(at: intelPrefix.appendingPathComponent("Cellar/openssl@3/3.1.0/INSTALL_RECEIPT.json"), data: receipt)
+        }
+        let scanner = BrewScanner(pathDiscovery: dualPrefixDiscovery(), directoryAccess: provider)
+        let packages = try await scanner.scan()
+
+        #expect(packages.count == 1)
+        #expect(Set(packages.map(\.id)).count == packages.count)
+    }
+
+    @Test("CORE-01: dual-prefix dedup keeps the Apple Silicon (/opt/homebrew) copy")
+    func dualPrefixPrefersAppleSiliconPrefix() async throws {
+        let receipt = minimalReceiptData()
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: fakePrefix.appendingPathComponent("Cellar/openssl@3/3.3.0/INSTALL_RECEIPT.json"), data: receipt)
+            builder.addFile(at: intelPrefix.appendingPathComponent("Cellar/openssl@3/3.1.0/INSTALL_RECEIPT.json"), data: receipt)
+        }
+        let scanner = BrewScanner(pathDiscovery: dualPrefixDiscovery(), directoryAccess: provider)
+        let pkg = try #require(try await scanner.scan().first)
+
+        #expect(pkg.version == "3.3.0")
+        #expect(pkg.installPath?.path.hasPrefix("/opt/homebrew") == true)
+    }
+
+    @Test("CORE-01: a cask under both prefixes emits one Package")
+    func dualPrefixCaskDeduplicates() async throws {
+        let receipt = minimalReceiptData()
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: fakePrefix.appendingPathComponent("Caskroom/my-cask/1.0.0/INSTALL_RECEIPT.json"), data: receipt)
+            builder.addFile(at: intelPrefix.appendingPathComponent("Caskroom/my-cask/1.0.0/INSTALL_RECEIPT.json"), data: receipt)
+        }
+        let scanner = BrewScanner(pathDiscovery: dualPrefixDiscovery(), directoryAccess: provider)
+        let packages = try await scanner.scan()
+
+        #expect(packages.count == 1)
+        #expect(packages.first?.manager == .brewCask)
+    }
+
+    @Test("CORE-01: prefix-only packages from both prefixes are all retained")
+    func dualPrefixDisjointPackagesAllSurvive() async throws {
+        let receipt = minimalReceiptData()
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: fakePrefix.appendingPathComponent("Cellar/arm-only/1.0.0/INSTALL_RECEIPT.json"), data: receipt)
+            builder.addFile(at: intelPrefix.appendingPathComponent("Cellar/intel-only/1.0.0/INSTALL_RECEIPT.json"), data: receipt)
+        }
+        let scanner = BrewScanner(pathDiscovery: dualPrefixDiscovery(), directoryAccess: provider)
+        let packages = try await scanner.scan()
+
+        #expect(Set(packages.map(\.name)) == ["arm-only", "intel-only"])
+    }
 }
