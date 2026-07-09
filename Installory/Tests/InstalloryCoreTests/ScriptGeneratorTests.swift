@@ -394,3 +394,118 @@ struct ScriptGeneratorTests {
         #expect(cmd == #"'/Users/my user/.pyenv/versions/3.12.0/bin/python' -m pip uninstall -y flask"#)
     }
 }
+
+// MARK: - CORE-03: npm/gem commands must target the recorded qualifier
+
+@Suite("ScriptGenerator multi-qualifier targeting")
+struct ScriptGeneratorQualifierTests {
+
+    private let generator = ScriptGenerator(denylist: Denylist(entries: []))
+
+    private func makePackage(manager: PackageManager, name: String, qualifier: String?) -> Package {
+        Package(
+            id: "\(manager.rawValue):\(qualifier ?? ""):\(name)",
+            manager: manager,
+            qualifier: qualifier,
+            name: name,
+            version: "1.0.0",
+            installPath: nil,
+            installedAt: nil,
+            installedAtConfidence: .low,
+            sizeBytes: nil,
+            isExplicit: true,
+            isReadOnly: false,
+            dependencies: [],
+            lastSeen: Date()
+        )
+    }
+
+    private func commandLines(_ script: String, containing needle: String) -> [String] {
+        script.components(separatedBy: "\n")
+            .filter { $0.contains(needle) && !$0.hasPrefix("#") && !$0.hasPrefix("echo") }
+    }
+
+    private let node18 = "/Users/w/.nvm/versions/node/v18.19.1/lib/node_modules"
+    private let node20 = "/Users/w/.nvm/versions/node/v20.11.0/lib/node_modules"
+    private let ruby31 = "/Users/w/.rbenv/versions/3.1.4/lib/ruby/gems/3.1.0/specifications"
+    private let ruby32 = "/Users/w/.rbenv/versions/3.2.2/lib/ruby/gems/3.2.0/specifications"
+
+    @Test("CORE-03: the same npm package under two Node installs emits two distinct commands")
+    func npmTwoNodeInstallsEmitDistinctCommands() {
+        let script = generator.generate(packages: [
+            makePackage(manager: .npm, name: "typescript", qualifier: node18),
+            makePackage(manager: .npm, name: "typescript", qualifier: node20),
+        ]).scriptText
+
+        let commands = commandLines(script, containing: "uninstall -g typescript")
+        #expect(commands.count == 2)
+        #expect(Set(commands).count == 2)
+        #expect(commands.contains("/Users/w/.nvm/versions/node/v18.19.1/bin/npm uninstall -g typescript"))
+        #expect(commands.contains("/Users/w/.nvm/versions/node/v20.11.0/bin/npm uninstall -g typescript"))
+    }
+
+    @Test("CORE-03: the same gem under two Ruby installs emits two distinct commands")
+    func gemTwoRubyInstallsEmitDistinctCommands() {
+        let script = generator.generate(packages: [
+            makePackage(manager: .gem, name: "bundler", qualifier: ruby31),
+            makePackage(manager: .gem, name: "bundler", qualifier: ruby32),
+        ]).scriptText
+
+        let commands = commandLines(script, containing: "uninstall bundler")
+        #expect(commands.count == 2)
+        #expect(Set(commands).count == 2)
+        #expect(commands.contains("/Users/w/.rbenv/versions/3.1.4/bin/gem uninstall bundler"))
+        #expect(commands.contains("/Users/w/.rbenv/versions/3.2.2/bin/gem uninstall bundler"))
+    }
+
+    @Test("CORE-03: npm sections are grouped per Node install")
+    func npmSectionsGroupedByQualifier() {
+        let script = generator.generate(packages: [
+            makePackage(manager: .npm, name: "typescript", qualifier: node18),
+            makePackage(manager: .npm, name: "prettier", qualifier: node20),
+        ]).scriptText
+
+        #expect(script.contains("# === npm (global: \(node18)) ==="))
+        #expect(script.contains("# === npm (global: \(node20)) ==="))
+    }
+
+    @Test("CORE-03: gem sections are grouped per Ruby install")
+    func gemSectionsGroupedByQualifier() {
+        let script = generator.generate(packages: [
+            makePackage(manager: .gem, name: "bundler", qualifier: ruby31),
+            makePackage(manager: .gem, name: "rake", qualifier: ruby32),
+        ]).scriptText
+
+        #expect(script.contains("# === Ruby Gems (\(ruby31)) ==="))
+        #expect(script.contains("# === Ruby Gems (\(ruby32)) ==="))
+    }
+
+    @Test("CORE-03: a gem with no colocated client is scoped with --install-dir")
+    func gemWithoutColocatedClientUsesInstallDir() {
+        let script = generator.generate(packages: [
+            makePackage(manager: .gem, name: "bundler", qualifier: "/Users/w/.gem/ruby/3.2.0/specifications"),
+        ]).scriptText
+
+        #expect(script.contains("gem uninstall --install-dir /Users/w/.gem/ruby/3.2.0 bundler"))
+    }
+
+    @Test("CORE-03: removalCommand honours the qualifier, matching the generated script")
+    func removalCommandHonoursQualifier() {
+        let pkg = makePackage(manager: .npm, name: "typescript", qualifier: node20)
+        #expect(generator.removalCommand(for: pkg)
+            == "/Users/w/.nvm/versions/node/v20.11.0/bin/npm uninstall -g typescript")
+    }
+
+    @Test("CORE-03: unqualified npm and gem packages keep the ambient commands")
+    func unqualifiedPackagesUseAmbientCommands() {
+        let script = generator.generate(packages: [
+            makePackage(manager: .npm, name: "typescript", qualifier: nil),
+            makePackage(manager: .gem, name: "bundler", qualifier: nil),
+        ]).scriptText
+
+        #expect(script.contains("npm uninstall -g typescript"))
+        #expect(script.contains("gem uninstall bundler"))
+        #expect(script.contains("# === npm (global) ==="))
+        #expect(script.contains("# === Ruby Gems ==="))
+    }
+}

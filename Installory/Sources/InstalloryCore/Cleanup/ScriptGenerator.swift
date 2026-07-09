@@ -58,27 +58,8 @@ public struct ScriptGenerator: Sendable {
     /// dependency sorting, or script-header generation. `renderCommand` remains
     /// private and script-oriented; this method owns the nil cases cleanly.
     public func removalCommand(for package: Package) -> String? {
-        guard !package.isReadOnly else { return nil }
-        let name = shellArgument(package.name)
-        switch package.manager {
-        case .brew:
-            return "brew uninstall \(name)"
-        case .brewCask:
-            return "brew uninstall --cask \(name)"
-        case .pip:
-            let interpreter = package.qualifier ?? "python3"
-            return "\(shellArgument(interpreter)) -m pip uninstall -y \(name)"
-        case .npm:
-            return "npm uninstall -g \(name)"
-        case .pipx:
-            return "pipx uninstall \(name)"
-        case .cargo:
-            return "cargo uninstall \(name)"
-        case .gem:
-            return "gem uninstall \(name)"
-        case .mas:
-            return nil
-        }
+        guard !package.isReadOnly, package.manager != .mas else { return nil }
+        return renderCommand(for: package)
     }
 
     public func generate(packages: [Package], snapshot: SnapshotContext? = nil) -> GeneratedScript {
@@ -165,14 +146,16 @@ public struct ScriptGenerator: Sendable {
     }
 
     private func appendSection(manager: PackageManager, packages: [Package], to out: inout [String]) {
-        if manager == .pip {
-            // Pip packages are grouped per interpreter; each gets its own sub-section header.
-            let byInterpreter = Dictionary(grouping: packages) { $0.qualifier ?? "" }
-            for interpreter in byInterpreter.keys.sorted() {
-                let pkgs = byInterpreter[interpreter]!
+        if manager.groupsByQualifier {
+            // pip, npm and gem emit one row per qualifier (interpreter, Node install,
+            // Ruby install). Each qualifier gets its own sub-section so the reader can
+            // see which installation a block of commands targets.
+            let byQualifier = Dictionary(grouping: packages) { $0.qualifier ?? "" }
+            for qualifier in byQualifier.keys.sorted() {
+                let pkgs = byQualifier[qualifier]!
                 let sorted = topologicalSort(pkgs)
                 out.append("")
-                out.append(pipSectionHeader(interpreter: interpreter))
+                out.append(qualifiedSectionHeader(for: manager, qualifier: qualifier))
                 appendCommandLines(sorted: sorted.sorted, cyclePackages: sorted.cyclePackages, to: &out)
             }
         } else {
@@ -251,13 +234,20 @@ public struct ScriptGenerator: Sendable {
             let interpreter = pkg.qualifier ?? "python3"
             return "\(shellArgument(interpreter)) -m pip uninstall -y \(name)"
         case .npm:
-            return "npm uninstall -g \(name)"
+            // Bare `npm` resolves via PATH, which silently targets the wrong Node
+            // install when the same package exists under several. See ManagerBinaryResolver.
+            let npm = ManagerBinaryResolver.npm(forQualifier: pkg.qualifier)
+            return "\(shellArgument(npm)) uninstall -g \(name)"
         case .pipx:
             return "pipx uninstall \(name)"
         case .cargo:
             return "cargo uninstall \(name)"
         case .gem:
-            return "gem uninstall \(name)"
+            let gem = ManagerBinaryResolver.gem(forQualifier: pkg.qualifier)
+            if let installDir = gem.installDir {
+                return "\(shellArgument(gem.binary)) uninstall --install-dir \(shellArgument(installDir)) \(name)"
+            }
+            return "\(shellArgument(gem.binary)) uninstall \(name)"
         case .mas:
             // mas has no CLI uninstall; caller handles this case before reaching renderCommand
             return "\(pkg.name)  # remove manually from /Applications"
@@ -277,10 +267,16 @@ public struct ScriptGenerator: Sendable {
         }
     }
 
-    private func pipSectionHeader(interpreter: String) -> String {
-        interpreter.isEmpty
-            ? "# === pip ==="
-            : "# === pip (interpreter: \(interpreter)) ==="
+    /// Section header for a manager that groups by qualifier. An empty qualifier means
+    /// the scanner recorded no installation, so the plain header is used.
+    private func qualifiedSectionHeader(for manager: PackageManager, qualifier: String) -> String {
+        guard !qualifier.isEmpty else { return sectionHeader(for: manager) }
+        switch manager {
+        case .pip: return "# === pip (interpreter: \(qualifier)) ==="
+        case .npm: return "# === npm (global: \(qualifier)) ==="
+        case .gem: return "# === Ruby Gems (\(qualifier)) ==="
+        default:   return sectionHeader(for: manager)
+        }
     }
 
     // MARK: - Topological sort

@@ -192,3 +192,93 @@ struct ReinstallScriptGeneratorTests {
         #expect(gs.scriptText == "#!/usr/bin/env bash\n")
     }
 }
+
+// MARK: - CORE-03: npm/gem reinstall commands must target the recorded qualifier
+
+@Suite("ReinstallScriptGenerator multi-qualifier targeting")
+struct ReinstallScriptGeneratorQualifierTests {
+
+    private let generator = ReinstallScriptGenerator()
+
+    private func makeMissing(
+        manager: PackageManager,
+        name: String,
+        version: String = "1.0.0",
+        qualifier: String? = nil
+    ) -> MissingPackage {
+        MissingPackage(
+            manager: manager,
+            package: SnapshotPackage(name: name, version: version, qualifier: qualifier, isExplicit: true)
+        )
+    }
+
+    private func commandLines(_ script: String, containing needle: String) -> [String] {
+        script.components(separatedBy: "\n")
+            .filter { $0.contains(needle) && !$0.hasPrefix("#") && !$0.hasPrefix("echo") }
+    }
+
+    private let node18 = "/Users/w/.nvm/versions/node/v18.19.1/lib/node_modules"
+    private let node20 = "/Users/w/.nvm/versions/node/v20.11.0/lib/node_modules"
+    private let ruby31 = "/Users/w/.rbenv/versions/3.1.4/lib/ruby/gems/3.1.0/specifications"
+    private let ruby32 = "/Users/w/.rbenv/versions/3.2.2/lib/ruby/gems/3.2.0/specifications"
+
+    @Test("CORE-03: npm reinstall targets each Node install separately")
+    func npmReinstallPerNodeInstall() {
+        let script = generator.generate(missing: [
+            makeMissing(manager: .npm, name: "typescript", version: "5.4.5", qualifier: node18),
+            makeMissing(manager: .npm, name: "typescript", version: "5.4.5", qualifier: node20),
+        ]).scriptText
+
+        let commands = commandLines(script, containing: "install -g typescript@5.4.5")
+        #expect(commands.count == 2)
+        #expect(Set(commands).count == 2)
+        #expect(commands.contains("/Users/w/.nvm/versions/node/v18.19.1/bin/npm install -g typescript@5.4.5"))
+        #expect(commands.contains("/Users/w/.nvm/versions/node/v20.11.0/bin/npm install -g typescript@5.4.5"))
+    }
+
+    @Test("CORE-03: gem reinstall targets each Ruby install separately")
+    func gemReinstallPerRubyInstall() {
+        let script = generator.generate(missing: [
+            makeMissing(manager: .gem, name: "bundler", version: "2.5.7", qualifier: ruby31),
+            makeMissing(manager: .gem, name: "bundler", version: "2.5.7", qualifier: ruby32),
+        ]).scriptText
+
+        let commands = commandLines(script, containing: "install bundler -v 2.5.7")
+        #expect(commands.count == 2)
+        #expect(Set(commands).count == 2)
+        #expect(commands.contains("/Users/w/.rbenv/versions/3.1.4/bin/gem install bundler -v 2.5.7"))
+        #expect(commands.contains("/Users/w/.rbenv/versions/3.2.2/bin/gem install bundler -v 2.5.7"))
+    }
+
+    @Test("CORE-03: gem reinstall without a colocated client is scoped with --install-dir")
+    func gemReinstallUsesInstallDirFallback() {
+        let script = generator.generate(missing: [
+            makeMissing(manager: .gem, name: "bundler", version: "2.5.7",
+                        qualifier: "/Users/w/.gem/ruby/3.2.0/specifications"),
+        ]).scriptText
+
+        #expect(script.contains("gem install bundler -v 2.5.7 --install-dir /Users/w/.gem/ruby/3.2.0"))
+    }
+
+    @Test("CORE-03: reinstall sections are grouped per npm and gem qualifier")
+    func reinstallSectionsGroupedByQualifier() {
+        let script = generator.generate(missing: [
+            makeMissing(manager: .npm, name: "typescript", qualifier: node18),
+            makeMissing(manager: .gem, name: "bundler", qualifier: ruby32),
+        ]).scriptText
+
+        #expect(script.contains("# === npm (global: \(node18)) ==="))
+        #expect(script.contains("# === Ruby Gems (\(ruby32)) ==="))
+    }
+
+    @Test("CORE-03: unqualified npm and gem reinstalls keep the ambient commands")
+    func unqualifiedReinstallsUseAmbientCommands() {
+        let script = generator.generate(missing: [
+            makeMissing(manager: .npm, name: "typescript", version: "5.4.5"),
+            makeMissing(manager: .gem, name: "bundler", version: "2.5.7"),
+        ]).scriptText
+
+        #expect(script.contains("npm install -g typescript@5.4.5"))
+        #expect(script.contains("gem install bundler -v 2.5.7"))
+    }
+}

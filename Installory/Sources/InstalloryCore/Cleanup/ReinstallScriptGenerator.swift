@@ -77,20 +77,28 @@ public struct ReinstallScriptGenerator: Sendable {
     }
 
     private func appendSection(manager: PackageManager, packages: [MissingPackage], to out: inout [String]) {
-        if manager == .pip {
-            let byInterpreter = Dictionary(grouping: packages) { $0.package.qualifier ?? "" }
-            for interpreter in byInterpreter.keys.sorted() {
-                let pkgs = byInterpreter[interpreter]!
+        if manager.groupsByQualifier {
+            let byQualifier = Dictionary(grouping: packages) { $0.package.qualifier ?? "" }
+            for qualifier in byQualifier.keys.sorted() {
+                let pkgs = byQualifier[qualifier]!
                 out.append("")
-                out.append(interpreter.isEmpty
-                    ? "# === pip ==="
-                    : "# === pip (interpreter: \(interpreter)) ===")
+                out.append(qualifiedSectionHeader(for: manager, qualifier: qualifier))
                 for mp in pkgs { appendInstallLine(for: mp, to: &out) }
             }
         } else {
             out.append("")
             out.append(sectionHeader(for: manager))
             for mp in packages { appendInstallLine(for: mp, to: &out) }
+        }
+    }
+
+    private func qualifiedSectionHeader(for manager: PackageManager, qualifier: String) -> String {
+        guard !qualifier.isEmpty else { return sectionHeader(for: manager) }
+        switch manager {
+        case .pip: return "# === pip (interpreter: \(qualifier)) ==="
+        case .npm: return "# === npm (global: \(qualifier)) ==="
+        case .gem: return "# === Ruby Gems (\(qualifier)) ==="
+        default:   return sectionHeader(for: manager)
         }
     }
 
@@ -120,7 +128,8 @@ public struct ReinstallScriptGenerator: Sendable {
 
         case .npm:
             let spec = "\(mp.package.name)@\(mp.package.version)"
-            let cmd = "npm install -g \(shellArgument(spec))"
+            let npm = ManagerBinaryResolver.npm(forQualifier: mp.package.qualifier)
+            let cmd = "\(shellArgument(npm)) install -g \(shellArgument(spec))"
             out.append(shellEchoLine(for: cmd))
             out.append(cmd)
 
@@ -136,7 +145,12 @@ public struct ReinstallScriptGenerator: Sendable {
             out.append(cmd)
 
         case .gem:
-            let cmd = "gem install \(shellArgument(mp.package.name)) -v \(shellArgument(mp.package.version))"
+            let gem = ManagerBinaryResolver.gem(forQualifier: mp.package.qualifier)
+            var cmd = "\(shellArgument(gem.binary)) install \(shellArgument(mp.package.name))"
+                + " -v \(shellArgument(mp.package.version))"
+            if let installDir = gem.installDir {
+                cmd += " --install-dir \(shellArgument(installDir))"
+            }
             out.append(shellEchoLine(for: cmd))
             out.append(cmd)
         }
