@@ -85,10 +85,14 @@ public struct GemScanner: PackageScanner, Sendable {
 
     private func makePackage(gemspec: URL, specificationsDir: URL) -> Package? {
         guard let parsed = parseGemspecFilename(gemspec.lastPathComponent) else { return nil }
+        // The unpacked gem directory keeps the platform suffix that `version` drops.
+        let gemDirName = [parsed.name, parsed.version, parsed.platform]
+            .compactMap { $0 }
+            .joined(separator: "-")
         let gemDir = specificationsDir
             .deletingLastPathComponent()
             .appendingPathComponent("gems")
-            .appendingPathComponent("\(parsed.name)-\(parsed.version)")
+            .appendingPathComponent(gemDirName)
         let installPath = directoryAccess.fileExists(at: gemDir) ? gemDir : gemspec
 
         return Package(
@@ -108,22 +112,47 @@ public struct GemScanner: PackageScanner, Sendable {
         )
     }
 
-    private func parseGemspecFilename(_ filename: String) -> (name: String, version: String)? {
+    /// Splits `nokogiri-1.15.4-arm64-darwin.gemspec` into name, version, and the
+    /// optional platform suffix that binary gems carry.
+    ///
+    /// The version is the first hyphen-separated segment that is a real gem version;
+    /// everything after it is the platform. A backward walk would instead fold the
+    /// platform into the version and emit `gem install nokogiri -v 1.15.4-arm64-darwin`,
+    /// which fails.
+    private func parseGemspecFilename(
+        _ filename: String
+    ) -> (name: String, version: String, platform: String?)? {
         guard filename.hasSuffix(".gemspec") else { return nil }
         let basename = String(filename.dropLast(".gemspec".count))
         let parts = basename.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count >= 2 else { return nil }
 
-        for index in parts.indices.dropFirst().reversed() {
-            guard let first = parts[index].unicodeScalars.first,
-                  CharacterSet.decimalDigits.contains(first) else { continue }
+        for index in parts.indices.dropFirst() where isGemVersion(parts[index]) {
             let name = parts[..<index].joined(separator: "-")
-            let version = parts[index...].joined(separator: "-")
-            guard !name.isEmpty, !version.isEmpty else { return nil }
-            return (name, version)
+            guard !name.isEmpty else { return nil }
+            let platform = parts[(index + 1)...].joined(separator: "-")
+            return (name, String(parts[index]), platform.isEmpty ? nil : platform)
         }
 
         return nil
+    }
+
+    /// A gem version is a dot-separated sequence whose first component is numeric and
+    /// whose remaining components are alphanumeric — `1.15.4`, `7.1.0.beta1`, `60`.
+    ///
+    /// Platform segments never match: `arm64` and `darwin` don't start with a digit,
+    /// `x86_64` contains an underscore. Neither does a name segment like `2captcha`,
+    /// which is numeric-led but has no dotted structure.
+    private func isGemVersion(_ segment: Substring) -> Bool {
+        let components = segment.split(separator: ".", omittingEmptySubsequences: false)
+        guard let first = components.first, !first.isEmpty,
+              first.unicodeScalars.allSatisfy({ CharacterSet.decimalDigits.contains($0) })
+        else { return false }
+
+        return components.dropFirst().allSatisfy { component in
+            !component.isEmpty
+                && component.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) }
+        }
     }
 
     private func parseRuntimeDependencies(in gemspec: URL) -> [String] {

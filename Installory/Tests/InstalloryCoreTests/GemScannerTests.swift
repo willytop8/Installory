@@ -71,4 +71,111 @@ struct GemScannerTests {
         }
         #expect(await GemScanner(directoryAccess: present, homeDirectory: home).isAvailable() == true)
     }
+
+    // MARK: - CORE-04: platform gems
+
+    /// Builds a scanner over a single gemspec (plus its unpacked gem directory)
+    /// under an rbenv Ruby, and returns the one package it finds.
+    private func scanSingleGem(
+        gemspecFilename: String,
+        gemDirName: String? = nil
+    ) async throws -> Package {
+        let specs = home.appendingPathComponent(".rbenv/versions/3.2.2/lib/ruby/gems/3.2.0/specifications")
+        let gems = specs.deletingLastPathComponent().appendingPathComponent("gems")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: specs.appendingPathComponent(gemspecFilename),
+                data: Data("Gem::Specification.new\n".utf8)
+            )
+            if let gemDirName {
+                builder.addFile(
+                    at: gems.appendingPathComponent(gemDirName).appendingPathComponent("README.md"),
+                    data: Data()
+                )
+            }
+        }
+        let packages = try await GemScanner(directoryAccess: provider, homeDirectory: home).scan()
+        return try #require(packages.first)
+    }
+
+    @Test("CORE-04: a platform gem's version excludes the platform suffix")
+    func platformGemVersionExcludesPlatform() async throws {
+        let gem = try await scanSingleGem(gemspecFilename: "nokogiri-1.15.4-arm64-darwin.gemspec")
+        #expect(gem.name == "nokogiri")
+        #expect(gem.version == "1.15.4")
+    }
+
+    @Test("CORE-04: a platform gem's installPath keeps the platform-suffixed directory")
+    func platformGemInstallPathKeepsPlatformSuffix() async throws {
+        let gem = try await scanSingleGem(
+            gemspecFilename: "nokogiri-1.15.4-arm64-darwin.gemspec",
+            gemDirName: "nokogiri-1.15.4-arm64-darwin"
+        )
+        #expect(gem.installPath?.lastPathComponent == "nokogiri-1.15.4-arm64-darwin")
+    }
+
+    @Test("CORE-04: an x86_64 platform gem parses correctly")
+    func x86PlatformGemParses() async throws {
+        let gem = try await scanSingleGem(gemspecFilename: "nokogiri-1.15.4-x86_64-linux.gemspec")
+        #expect(gem.name == "nokogiri")
+        #expect(gem.version == "1.15.4")
+    }
+
+    @Test("CORE-04: a java platform gem parses correctly")
+    func javaPlatformGemParses() async throws {
+        let gem = try await scanSingleGem(gemspecFilename: "psych-5.1.2-java.gemspec")
+        #expect(gem.name == "psych")
+        #expect(gem.version == "5.1.2")
+    }
+
+    @Test("CORE-04: a hyphenated name with a platform suffix parses correctly")
+    func hyphenatedNameWithPlatformParses() async throws {
+        let gem = try await scanSingleGem(gemspecFilename: "libv8-node-18.16.0.0-arm64-darwin.gemspec")
+        #expect(gem.name == "libv8-node")
+        #expect(gem.version == "18.16.0.0")
+    }
+
+    @Test("CORE-04: a trailing numeric platform component is not mistaken for the version")
+    func trailingNumericPlatformComponentIsNotTheVersion() async throws {
+        let gem = try await scanSingleGem(gemspecFilename: "mygem-1.0.0-x86-mswin32-60.gemspec")
+        #expect(gem.name == "mygem")
+        #expect(gem.version == "1.0.0")
+    }
+
+    @Test("CORE-04: a prerelease version survives intact")
+    func prereleaseVersionSurvives() async throws {
+        let gem = try await scanSingleGem(gemspecFilename: "rails-7.1.0.beta1.gemspec")
+        #expect(gem.name == "rails")
+        #expect(gem.version == "7.1.0.beta1")
+    }
+
+    @Test("CORE-04: a numeric-led name segment is not mistaken for the version")
+    func numericLedNameSegmentIsNotTheVersion() async throws {
+        let gem = try await scanSingleGem(gemspecFilename: "ruby-2captcha-1.2.0.gemspec")
+        #expect(gem.name == "ruby-2captcha")
+        #expect(gem.version == "1.2.0")
+    }
+
+    @Test("CORE-04: a plain gem still parses with no platform suffix")
+    func plainGemStillParses() async throws {
+        let gem = try await scanSingleGem(gemspecFilename: "bundler-2.5.7.gemspec")
+        #expect(gem.name == "bundler")
+        #expect(gem.version == "2.5.7")
+    }
+
+    @Test("CORE-04: a platform gem yields a runnable reinstall command")
+    func platformGemProducesRunnableReinstallCommand() async throws {
+        let gem = try await scanSingleGem(gemspecFilename: "nokogiri-1.15.4-arm64-darwin.gemspec")
+        let missing = MissingPackage(
+            manager: .gem,
+            package: SnapshotPackage(
+                name: gem.name, version: gem.version, qualifier: gem.qualifier, isExplicit: true
+            )
+        )
+        let script = ReinstallScriptGenerator().generate(missing: [missing]).scriptText
+
+        #expect(script.contains("gem install nokogiri -v 1.15.4"))
+        #expect(!script.contains("1.15.4-arm64-darwin"))
+    }
 }
+
