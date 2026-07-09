@@ -116,6 +116,7 @@ private struct ScanningTab: View {
         }
         .formStyle(.grouped)
         .onChange(of: coordinator.scanOnLaunch) { _, _ in coordinator.persistSettings() }
+        .actionErrorAlert(coordinator: coordinator)
     }
 }
 

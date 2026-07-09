@@ -68,7 +68,10 @@ struct ScriptSheetView<Warning: View>: View {
                     systemImage: copied ? "checkmark" : "doc.on.doc"
                 )
             }
-            .keyboardShortcut("c", modifiers: .command)
+            // Not plain ⌘C: the script text is selectable, and binding ⌘C here would
+            // silently copy the whole script when the user meant to copy their selection.
+            .keyboardShortcut("c", modifiers: [.command, .shift])
+            .help("Copy the whole script (\u{21E7}\u{2318}C)")
 
             Button {
                 saveScript()

@@ -56,6 +56,16 @@ final class AppCoordinator {
     var sortOrder: PackageSortOrder = .recentlyInstalled
     var selectedPackage: Package?
 
+    /// A user-initiated action failed. Presented as an alert and cleared on dismiss.
+    ///
+    /// Distinct from `storageWarning`, which is an ambient banner about the local cache:
+    /// this reports that the thing the user just asked for did not happen.
+    private(set) var actionError: String?
+
+    func dismissActionError() {
+        actionError = nil
+    }
+
     // MARK: - Snapshot state
 
     private(set) var snapshots: [Snapshot] = []
@@ -472,8 +482,10 @@ final class AppCoordinator {
         )
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
+            actionError = nil
             return url
         } catch {
+            actionError = "Couldn't write the environment report to \(url.lastPathComponent). \(error.localizedDescription)"
             return nil
         }
     }
@@ -491,8 +503,10 @@ final class AppCoordinator {
         let content = InventoryExporter().export(packages, format: format)
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
+            actionError = nil
             return url
         } catch {
+            actionError = "Couldn't write the inventory to \(url.lastPathComponent). \(error.localizedDescription)"
             return nil
         }
     }
@@ -511,8 +525,16 @@ final class AppCoordinator {
             snapshots.insert(DemoData.makeSnapshot(reason: .manual, from: packages), at: 0)
             return
         }
-        guard let sm = snapshotManager else { return }
-        _ = try? await sm.capture(packages: packages, reason: .manual, note: nil)
+        guard let sm = snapshotManager else {
+            actionError = "Couldn't take a snapshot: the local cache isn't available."
+            return
+        }
+        do {
+            _ = try await sm.capture(packages: packages, reason: .manual, note: nil)
+            actionError = nil
+        } catch {
+            actionError = "Couldn't take a snapshot. \(error.localizedDescription)"
+        }
         await refreshSnapshots()
     }
 

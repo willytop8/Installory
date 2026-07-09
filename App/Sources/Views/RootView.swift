@@ -95,6 +95,11 @@ struct RootView: View {
         .task {
             await coordinator.autoScanIfNeeded()
         }
+        // Persisted here rather than in PackageListView, which unmounts whenever the
+        // user navigates to one of the dedicated sections above.
+        .onChange(of: coordinator.sidebarSelection) { _, _ in
+            coordinator.persistUIPreferences()
+        }
         .sheet(isPresented: Binding(
             get: { coordinator.cleanupResult != nil },
             set: { if !$0 { coordinator.cleanupResult = nil } }
@@ -119,6 +124,27 @@ struct RootView: View {
         )) {
             OnboardingView()
                 .environment(coordinator)
+        }
+        .actionErrorAlert(coordinator: coordinator)
+    }
+}
+
+extension View {
+    /// Surfaces a failed user-initiated action (export, manual snapshot) as an alert.
+    /// Applied wherever those actions can be triggered — the main window and Settings.
+    func actionErrorAlert(coordinator: AppCoordinator) -> some View {
+        alert(
+            "Something didn\u{2019}t work",
+            isPresented: Binding(
+                get: { coordinator.actionError != nil },
+                set: { if !$0 { coordinator.dismissActionError() } }
+            )
+        ) {
+            Button("OK", role: .cancel) { coordinator.dismissActionError() }
+        } message: {
+            if let message = coordinator.actionError {
+                Text(message)
+            }
         }
     }
 }
