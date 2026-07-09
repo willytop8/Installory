@@ -6,9 +6,10 @@ import GRDB
 /// `Package` already conforms to `FetchableRecord` and `PersistableRecord`; this
 /// DAO is a thin coordination layer that exposes a GRDB-free API to the app layer.
 ///
-/// **Provenance cascade:** `replaceAll(with:)` deletes all package rows first.
-/// Because `provenance_evidence` has `ON DELETE CASCADE`, this also removes all
-/// evidence rows. Phase 5c does not collect provenance at scan time; this is acceptable.
+/// **Provenance cascade:** `replaceAll(with:)` deletes only the package rows that
+/// have disappeared from the inventory, so `provenance_evidence`'s `ON DELETE
+/// CASCADE` fires only for genuinely removed packages. Evidence for surviving
+/// packages is preserved across rescans.
 public struct PackageDAO: Sendable {
     private let database: Database
 
@@ -23,14 +24,25 @@ public struct PackageDAO: Sendable {
         }
     }
 
-    /// Replaces every row in the `packages` table with `packages` in a single transaction.
+    /// Replaces the contents of the `packages` table with `packages` in a single transaction.
     ///
     /// The replacement is atomic: either all rows are replaced or none are.
+    ///
+    /// Rows are reconciled rather than wiped: ids absent from `packages` are deleted,
+    /// and the rest are upserted in place. This matters because `provenance_evidence`
+    /// cascades on package deletion, and provenance collection is expensive and opt-in —
+    /// a blanket `DELETE FROM packages` would discard evidence for unchanged packages
+    /// on every rescan.
+    ///
+    /// `upsert` is deliberate: `INSERT OR REPLACE` resolves a conflict by *deleting*
+    /// the existing row, which fires the same cascade this method exists to avoid.
     public func replaceAll(with packages: [Package]) throws {
         try database.pool.write { db in
-            try db.execute(sql: "DELETE FROM packages")
+            let incomingIDs = Set(packages.map(\.id))
+            let existingIDs = try String.fetchSet(db, sql: "SELECT id FROM packages")
+            try Package.deleteAll(db, keys: existingIDs.subtracting(incomingIDs))
             for pkg in packages {
-                try pkg.insert(db)
+                try pkg.upsert(db)
             }
         }
     }

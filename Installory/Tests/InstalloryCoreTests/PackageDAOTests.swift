@@ -170,3 +170,118 @@ struct ScanRunDAOTests {
         #expect(diff < 1.0)
     }
 }
+
+// MARK: - CORE-02: rescans must not cascade away provenance evidence
+
+@Suite("PackageDAO provenance preservation")
+struct PackageDAOProvenanceTests {
+
+    private func makeTempDatabase() throws -> (InstalloryCore.Database, URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("InstalloryPackageDAOProvenanceTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return (try InstalloryCore.Database(directory: dir), dir)
+    }
+
+    private func makePackage(id: String, name: String, version: String = "1.0.0") -> Package {
+        Package(
+            id: id,
+            manager: .brew,
+            qualifier: nil,
+            name: name,
+            version: version,
+            installPath: nil,
+            installedAt: nil,
+            installedAtConfidence: .low,
+            sizeBytes: nil,
+            isExplicit: true,
+            isReadOnly: false,
+            dependencies: [],
+            lastSeen: Date()
+        )
+    }
+
+    private func makeEvidence(packageId: String) -> ProvenanceEvidence {
+        ProvenanceEvidence(
+            packageId: packageId,
+            fsInstallTime: Date(timeIntervalSince1970: 1_723_000_000),
+            fsInstallTimeSource: "INSTALL_RECEIPT.json",
+            installCommand: nil,
+            claudeCodeContext: nil,
+            nearbyProjects: [],
+            coInstalledWithin1h: [],
+            overallConfidence: .low,
+            collectedAt: Date(timeIntervalSince1970: 1_723_100_000)
+        )
+    }
+
+    @Test("CORE-02: replaceAll preserves provenance evidence for an unchanged package")
+    func replaceAllPreservesEvidenceForUnchangedPackage() async throws {
+        let (db, dir) = try makeTempDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let packages = PackageDAO(database: db)
+        let provenance = ProvenanceDAO(database: db)
+
+        let ffmpeg = makePackage(id: "brew::ffmpeg", name: "ffmpeg")
+        try packages.replaceAll(with: [ffmpeg])
+        try await provenance.upsert(makeEvidence(packageId: ffmpeg.id))
+
+        try packages.replaceAll(with: [ffmpeg])
+
+        let survived = try await provenance.fetch(packageId: ffmpeg.id)
+        #expect(survived != nil)
+    }
+
+    @Test("CORE-02: replaceAll preserves evidence when the package version changes")
+    func replaceAllPreservesEvidenceAcrossVersionBump() async throws {
+        let (db, dir) = try makeTempDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let packages = PackageDAO(database: db)
+        let provenance = ProvenanceDAO(database: db)
+
+        try packages.replaceAll(with: [makePackage(id: "brew::ffmpeg", name: "ffmpeg", version: "6.0")])
+        try await provenance.upsert(makeEvidence(packageId: "brew::ffmpeg"))
+
+        try packages.replaceAll(with: [makePackage(id: "brew::ffmpeg", name: "ffmpeg", version: "7.1")])
+
+        let survived = try await provenance.fetch(packageId: "brew::ffmpeg")
+        #expect(survived != nil)
+        #expect(try packages.loadAll().first?.version == "7.1")
+    }
+
+    @Test("CORE-02: replaceAll cascades evidence away only for packages that vanished")
+    func replaceAllDropsEvidenceForRemovedPackageOnly() async throws {
+        let (db, dir) = try makeTempDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let packages = PackageDAO(database: db)
+        let provenance = ProvenanceDAO(database: db)
+
+        let kept = makePackage(id: "brew::ffmpeg", name: "ffmpeg")
+        let removed = makePackage(id: "brew::wget", name: "wget")
+        try packages.replaceAll(with: [kept, removed])
+        try await provenance.upsert(makeEvidence(packageId: kept.id))
+        try await provenance.upsert(makeEvidence(packageId: removed.id))
+
+        try packages.replaceAll(with: [kept])
+
+        let keptEvidence = try await provenance.fetch(packageId: kept.id)
+        let removedEvidence = try await provenance.fetch(packageId: removed.id)
+        #expect(keptEvidence != nil)
+        #expect(removedEvidence == nil)
+        #expect(try packages.loadAll().map(\.id) == ["brew::ffmpeg"])
+    }
+
+    @Test("CORE-02: replaceAll upserts rather than duplicating on repeated calls")
+    func replaceAllIsIdempotent() throws {
+        let (db, dir) = try makeTempDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let packages = PackageDAO(database: db)
+
+        let ffmpeg = makePackage(id: "brew::ffmpeg", name: "ffmpeg")
+        try packages.replaceAll(with: [ffmpeg])
+        try packages.replaceAll(with: [ffmpeg])
+        try packages.replaceAll(with: [ffmpeg])
+
+        #expect(try packages.loadAll().count == 1)
+    }
+}
