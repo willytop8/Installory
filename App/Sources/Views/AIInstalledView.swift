@@ -31,7 +31,18 @@ struct AIInstalledView: View {
     // MARK: - Package list
 
     private var packageList: some View {
-        List {
+        @Bindable var coordinator = coordinator
+
+        return List(
+            selection: Binding(
+                get: { coordinator.selectedPackage?.id },
+                set: { id in
+                    coordinator.selectedPackage = id.flatMap { target in
+                        coordinator.packages.first { $0.id == target }
+                    }
+                }
+            )
+        ) {
             Section {
                 explanationHeader
             }
@@ -43,6 +54,7 @@ struct AIInstalledView: View {
                         package: pkg,
                         context: coordinator.provenanceByPackageId[pkg.id]?.claudeCodeContext
                     )
+                    .tag(pkg.id)
                 }
             }
         }

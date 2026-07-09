@@ -384,13 +384,19 @@ final class AppCoordinator {
 
         guard let scanner = scanner(for: manager, grantedURLs: accessedURLs) else { return }
         let coordinator = ScanCoordinator(scanners: [scanner])
+
+        // Build into a local array so `packages` changes exactly once, as `scan()`
+        // does. Mutating it twice inside the event loop flickers the list.
+        var updated = packages
         for await event in await coordinator.scan() {
             if case let .scannerFinished(mgr, status, pkgs) = event {
                 scanStatuses[mgr] = status
-                packages.removeAll { $0.manager == mgr }
-                packages += pkgs
+                updated.removeAll { $0.manager == mgr }
+                updated += pkgs
             }
         }
+        packages = updated
+        selectedPackage = PackageSelection.resolve(selectedPackage, in: packages)
         lastScanCompletedAt = Date()
         if let dao = packageDAO {
             try? dao.replaceAll(with: packages)
@@ -725,6 +731,9 @@ final class AppCoordinator {
         // where `packages` and `scanStatuses` change during a scan.
         packages = buildPackages
         scanStatuses = buildStatuses
+        // The selection holds a value type captured before the scan; re-resolve it
+        // against the new inventory so the detail pane isn't showing a stale struct.
+        selectedPackage = PackageSelection.resolve(selectedPackage, in: packages)
         inFlightManagers = []
         lastScanCompletedAt = Date()
 
