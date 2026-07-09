@@ -239,4 +239,61 @@ struct InstallCommandDetectorTests {
     func whitespaceOnly() {
         #expect(detector.detect("   ").isEmpty)
     }
+
+    // MARK: - CORE-06: editable installs, directory args, npm --global
+
+    @Test("CORE-06: pip install -e . produces no records")
+    func pipEditableCurrentDirectory() {
+        #expect(detector.detect("pip install -e .").isEmpty)
+    }
+
+    @Test("CORE-06: pip install --editable . produces no records")
+    func pipEditableLongFormCurrentDirectory() {
+        #expect(detector.detect("pip install --editable .").isEmpty)
+    }
+
+    @Test("CORE-06: pip install -e .. produces no records")
+    func pipEditableParentDirectory() {
+        #expect(detector.detect("pip install -e ..").isEmpty)
+    }
+
+    @Test("CORE-06: pip install . produces no records")
+    func pipInstallCurrentDirectory() {
+        #expect(detector.detect("pip install .").isEmpty)
+    }
+
+    @Test("CORE-06: pip install -e ./pkg produces no records")
+    func pipEditableRelativePath() {
+        #expect(detector.detect("pip install -e ./pkg").isEmpty)
+    }
+
+    @Test("CORE-06: an editable install alongside a real package detects only the package")
+    func pipEditableAlongsideRealPackage() {
+        let results = detector.detect("pip install -e . requests")
+        #expect(results.count == 1)
+        #expect(results[0].name == "requests")
+        #expect(results[0].manager == .pip)
+    }
+
+    @Test("CORE-06: npm install --global detects the package")
+    func npmInstallGlobalLongForm() {
+        let results = detector.detect("npm install --global typescript")
+        #expect(results.count == 1)
+        #expect(results[0].name == "typescript")
+        #expect(results[0].manager == .npm)
+    }
+
+    @Test("CORE-06: npm i --global detects the package")
+    func npmIGlobalLongForm() {
+        let results = detector.detect("npm i --global prettier")
+        #expect(results.count == 1)
+        #expect(results[0].name == "prettier")
+        #expect(results[0].manager == .npm)
+    }
+
+    @Test("CORE-06: npm install --global still requires the install verb")
+    func npmGlobalWithoutInstallVerb() {
+        #expect(detector.detect("npm ls --global").isEmpty)
+    }
 }
+

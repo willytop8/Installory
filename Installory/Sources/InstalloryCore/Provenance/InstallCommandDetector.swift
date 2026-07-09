@@ -65,7 +65,7 @@ public struct InstallCommandDetector: Sendable {
         case "npm":
             guard tokens.count >= 3,
                   tokens[1] == "install" || tokens[1] == "i",
-                  let gIdx = tokens.firstIndex(of: "-g"),
+                  let gIdx = tokens.firstIndex(where: { $0 == "-g" || $0 == "--global" }),
                   gIdx >= 2 else { return [] }
             manager = .npm
             argStartIndex = gIdx + 1
@@ -108,13 +108,17 @@ public struct InstallCommandDetector: Sendable {
                 skipNext = false
                 continue
             }
-            // Skip flags; -r skips the following requirement-file argument too.
+            // Skip flags. -r takes a requirement file; -e/--editable takes a project
+            // path — both consume the following argument.
             if token.hasPrefix("-") {
-                if token == "-r" { skipNext = true }
+                if token == "-r" || token == "-e" || token == "--editable" { skipNext = true }
                 continue
             }
             // Skip plain requirement-file references (e.g. requirements.txt as positional arg).
             if token.hasSuffix("requirements.txt") { continue }
+            // Skip directory references. `pip install .` and `pip install -e .` install
+            // the current project, not a package named ".".
+            if token == "." || token == ".." { continue }
             // Skip path-like tokens (local wheel files, editable installs, absolute paths).
             if token.contains("/") || token.hasSuffix(".whl") { continue }
 
