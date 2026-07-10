@@ -33,9 +33,14 @@ Installory.xcodeproj/
 # Personal/project-tool artifacts
 .claude/settings.local.json
 
+# AI-agent orchestration scaffolding (implementation specs, audits, handoff notes).
+# Working material, not user-facing documentation — this repo stays public-facing.
+handoff/
+
 # Local Netlify folder
 .netlify
 
-# Marketing site — deployed separately via Netlify CLI, not part of the app repo
+# Marketing site — lives in its own git repo at website/, deployed via Netlify CLI.
+# Kept out of the app repo so this one stays purely about the app.
 website/
 netlify.toml
