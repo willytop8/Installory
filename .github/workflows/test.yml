@@ -1,0 +1,31 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: InstalloryCore
+    # Package.swift declares swift-tools-version 6.1, which needs Xcode 16.3+.
+    # The macos-14 image ships an older toolchain and cannot resolve the manifest.
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Build
+        working-directory: Installory
+        run: swift build
+
+      - name: Test
+        working-directory: Installory
+        run: swift test
