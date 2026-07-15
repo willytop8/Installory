@@ -15,6 +15,27 @@ struct CleanupResult: Identifiable {
     let snapshotFailed: Bool
 }
 
+typealias SnapshotCaptureOperation = @Sendable (
+    _ packages: [Package],
+    _ reason: SnapshotReason,
+    _ note: String?
+) async throws -> Snapshot
+
+typealias SnapshotListOperation = @Sendable () async throws -> [SnapshotSummary]
+
+private struct PersistenceResources: Sendable {
+    let database: Database
+    let packageDAO: PackageDAO
+    let scanRunDAO: ScanRunDAO
+    let snapshotManager: SnapshotManager
+    let provenanceDAO: ProvenanceDAO
+}
+
+private enum PersistenceInitializationResult: Sendable {
+    case ready(PersistenceResources)
+    case failed(String)
+}
+
 /// Canonical UserDefaults key names. The original product was named "Backshelf";
 /// keys carry an `app.installory.` prefix today and a one-time migration in
 /// `init` copies any pre-existing `backshelf.` keys forward so settings survive
@@ -35,7 +56,9 @@ private enum DefaultsKey {
 final class AppCoordinator {
     // MARK: - Scan state
 
-    private(set) var packages: [Package] = []
+    private(set) var packages: [Package] = [] {
+        didSet { inventoryDerivedCache.invalidateInventory() }
+    }
     private(set) var scanStatuses: [PackageManager: ScannerStatus] = [:]
     private(set) var isScanning = false
     private(set) var lastScanCompletedAt: Date?
@@ -68,8 +91,17 @@ final class AppCoordinator {
 
     // MARK: - Snapshot state
 
-    private(set) var snapshots: [Snapshot] = []
+    /// Snapshot history is metadata-only. Exactly one full payload is retained
+    /// after the user selects it.
+    private(set) var snapshots: [SnapshotSummary] = []
+    private(set) var loadedSnapshot: Snapshot?
     private var snapshotManager: SnapshotManager?
+    private var snapshotCapture: SnapshotCaptureOperation?
+    private var snapshotList: SnapshotListOperation?
+    private var snapshotLoadRequestID: UUID?
+    /// Demo snapshots cannot use persistence, so keep their encoded form and
+    /// decode only the selected payload, matching production memory behavior.
+    private var demoSnapshotDataByID: [UUID: Data] = [:]
 
     // MARK: - Cleanup state
 
@@ -124,16 +156,26 @@ final class AppCoordinator {
     // MARK: - Infrastructure
 
     let folderAccess = FolderAccessManager()
+    @ObservationIgnored private let inventoryDerivedCache = InventoryDerivedCache()
     private(set) var database: Database?
     private var packageDAO: PackageDAO?
     private var scanRunDAO: ScanRunDAO?
-    private var provenanceDAO: ProvenanceDAO?
+    private var provenancePersistence: ProvenancePersistenceClient?
     private var dataDirectory: URL?
+    @ObservationIgnored private var persistenceInitializationTask: Task<
+        PersistenceInitializationResult,
+        Never
+    >?
+    private var hasHydratedPersistedState = false
+    private var isHydratingPersistedState = false
+    @ObservationIgnored private var hydrationWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Provenance evidence keyed by package ID. Populated at the end of each
     /// scan when `provenanceCollection` is true. Empty in demo mode until the
     /// orchestrator wires `DemoData.demoProvenanceByPackageId()`.
-    private(set) var provenanceByPackageId: [String: ProvenanceEvidence] = [:]
+    private(set) var provenanceByPackageId: [String: ProvenanceEvidence] = [:] {
+        didSet { inventoryDerivedCache.invalidateProvenance() }
+    }
 
     /// Minimum interval between automatic scans triggered by `autoScanIfNeeded`.
     /// Manual `refresh()` ignores this — the user pressing ⌘R always rescans.
@@ -146,32 +188,28 @@ final class AppCoordinator {
     /// access for provenance collection.
     var provenanceAccessGranted: Bool {
         let homePath = FileManager.default.homeDirectoryForCurrentUser.path
-        return folderAccess.grantedPath(forPrefix: homePath) != nil
+        return folderAccess.grantedPath(covering: homePath) != nil
     }
 
     // MARK: - Init
 
-    init() {
+    init(
+        dataDirectoryOverride: URL? = nil,
+        provenancePersistenceOverride: ProvenancePersistenceClient? = nil,
+        snapshotCaptureOverride: SnapshotCaptureOperation? = nil,
+        snapshotListOverride: SnapshotListOperation? = nil
+    ) {
         migrateLegacyDefaultsIfNeeded()
+        snapshotCapture = snapshotCaptureOverride
+        snapshotList = snapshotListOverride
+        provenancePersistence = provenancePersistenceOverride
 
-        if let appSupport = FileManager.default.urls(
+        let defaultDataDirectory = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
-        ).first {
-            let dir = appSupport.appendingPathComponent("Installory", isDirectory: true)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        ).first?.appendingPathComponent("Installory", isDirectory: true)
+        if let dir = dataDirectoryOverride ?? defaultDataDirectory {
             dataDirectory = dir
-            if let db = try? Database(directory: dir) {
-                database = db
-                packageDAO = PackageDAO(database: db)
-                scanRunDAO = ScanRunDAO(database: db)
-                snapshotManager = SnapshotManager(database: db)
-                provenanceDAO = ProvenanceDAO(database: db)
-                packages = (try? packageDAO!.loadAll()) ?? []
-                lastScanCompletedAt = try? scanRunDAO!.mostRecentCompletedAt()
-            } else {
-                storageWarning = "Couldn't open the local cache, so scan results won't be saved between launches."
-            }
         } else {
             storageWarning = "Couldn't locate Application Support, so scan results won't be saved between launches."
         }
@@ -236,7 +274,7 @@ final class AppCoordinator {
         isCleanupMode = false
         selectedForCleanup = []
         packages = DemoData.packages()
-        snapshots = DemoData.snapshots()
+        replaceDemoSnapshots(with: DemoData.snapshots())
         scanStatuses = [:]
         lastScanCompletedAt = Date()
         provenanceByPackageId = DemoData.demoProvenanceByPackageId()
@@ -248,9 +286,12 @@ final class AppCoordinator {
     /// Leaves demo mode and restores the real (possibly empty) local state.
     func exitDemoMode() {
         isDemoMode = false
-        packages = (try? packageDAO?.loadAll()) ?? []
-        lastScanCompletedAt = try? scanRunDAO?.mostRecentCompletedAt()
+        packages = []
+        lastScanCompletedAt = nil
         snapshots = []
+        loadedSnapshot = nil
+        snapshotLoadRequestID = nil
+        demoSnapshotDataByID = [:]
         scanStatuses = [:]
         selectedPackage = nil
         isCleanupMode = false
@@ -259,8 +300,9 @@ final class AppCoordinator {
         sidebarSelection = .all
         provenanceByPackageId = [:]
         onboardingCompleted = UserDefaults.standard.bool(forKey: DefaultsKey.onboardingCompleted)
+        hasHydratedPersistedState = false
         Task {
-            await refreshSnapshots()
+            await hydratePersistedState()
             await autoScanIfNeeded()
         }
     }
@@ -271,20 +313,99 @@ final class AppCoordinator {
         packages.filtered(by: sidebarSelection, query: searchQuery).sorted(by: sortOrder)
     }
 
+    var inventoryIndex: InventoryIndex {
+        inventoryDerivedCache.index(for: packages)
+    }
+
+    func package(id: String) -> Package? {
+        inventoryIndex.packagesByID[id]
+    }
+
     var duplicateGroups: [DuplicateGroup] {
-        packages.crossManagerDuplicates()
+        inventoryDerivedCache.duplicateGroups(for: packages)
+    }
+
+    var multiLocationGroups: [MultiLocationGroup] {
+        inventoryDerivedCache.multiLocationGroups(for: packages)
     }
 
     /// Explicitly-installed packages that have no in-inventory dependents within
     /// their own package manager. See ``DependencyAnalysis`` for caveats.
     var orphanedPackages: [Package] {
-        packages.orphanedPackages()
+        inventoryDerivedCache.orphanedPackages(for: packages)
     }
 
     /// Packages whose provenance evidence indicates installation during an AI assistant session.
     /// Empty when provenance collection is off or no evidence is attributed to an AI session.
     var aiInstalledPackages: [Package] {
-        packages.filter { wasInstalledByAIAssistant(provenanceByPackageId[$0.id]) }
+        inventoryDerivedCache.aiInstalledPackages(
+            for: packages,
+            provenance: provenanceByPackageId
+        )
+    }
+
+    func duplicateAnalysis(pathComponents: [String]) -> DuplicateAnalysisState {
+        inventoryDerivedCache.duplicateAnalysis(
+            for: packages,
+            pathComponents: pathComponents
+        )
+    }
+
+    /// Test instrumentation for generation reuse and invalidation. The cache is
+    /// observation-ignored, so reading these counters never drives UI updates.
+    var inventoryDerivedComputationCounts: InventoryDerivedComputationCounts {
+        inventoryDerivedCache.computationCounts
+    }
+
+    /// Drops cleanup/detail selections that no longer refer to a usable package
+    /// after inventory replacement, then ensures the detail package belongs to
+    /// the currently visible sidebar section.
+    func reconcileInventorySelections() {
+        let removableIDs = Set(
+            packages.lazy
+                .filter { !$0.isReadOnly && $0.manager != .mas }
+                .map(\.id)
+        )
+        selectedForCleanup.formIntersection(removableIDs)
+        selectedPackage = selectedPackage.flatMap { package(id: $0.id) }
+        reconcileSelectedPackageForCurrentSidebar()
+    }
+
+    /// Keeps the detail column consistent with the content column whenever the
+    /// sidebar changes. Dedicated analysis sections have their own package sets;
+    /// snapshots never display a live-inventory package detail.
+    func reconcileSelectedPackageForCurrentSidebar() {
+        guard let selectedPackage = selectedPackage.flatMap({ package(id: $0.id) }) else {
+            self.selectedPackage = nil
+            return
+        }
+        self.selectedPackage = selectedPackage
+
+        let remainsVisible: Bool
+        switch sidebarSelection {
+        case nil, .all:
+            remainsVisible = true
+        case .manager(let manager):
+            remainsVisible = selectedPackage.manager == manager
+        case .readOnly:
+            remainsVisible = selectedPackage.isReadOnly
+        case .duplicates:
+            let duplicateIDs = Set(
+                duplicateGroups.flatMap { $0.packages.map(\.id) }
+                    + multiLocationGroups.flatMap { $0.packages.map(\.id) }
+            )
+            remainsVisible = duplicateIDs.contains(selectedPackage.id)
+        case .orphans:
+            remainsVisible = orphanedPackages.contains { $0.id == selectedPackage.id }
+        case .aiInstalled:
+            remainsVisible = aiInstalledPackages.contains { $0.id == selectedPackage.id }
+        case .snapshot:
+            remainsVisible = false
+        }
+
+        if !remainsVisible {
+            self.selectedPackage = nil
+        }
     }
 
     // MARK: - Computed: directories
@@ -296,13 +417,8 @@ final class AppCoordinator {
     }
 
     var ungrantedCanonicalDirectories: [CanonicalDirectory] {
-        let grantedPaths = folderAccess.grantedPaths
         return CanonicalDirectory.all(isAppleSilicon: isAppleSilicon)
-            .filter { dir in
-                !grantedPaths.contains { granted in
-                    granted.hasPrefix(dir.path) || dir.path.hasPrefix(granted)
-                }
-            }
+            .filter { folderAccess.grantedPath(covering: $0.path) == nil }
     }
 
     // MARK: - Computed: status
@@ -352,8 +468,166 @@ final class AppCoordinator {
 
     // MARK: - Actions
 
+    /// Opens and migrates the SQLite cache away from MainActor. The task is
+    /// shared by every caller so launch hydration and an early user action can
+    /// never race two database initializations.
+    private func initializePersistenceIfNeeded() async -> Bool {
+        if database != nil { return true }
+        guard let directory = dataDirectory else { return false }
+
+        if persistenceInitializationTask == nil {
+            // The cache gates visible launch state, so create its pool at
+            // user-initiated QoS while still keeping migration off MainActor.
+            // GRDB's internal queues inherit this context; utility QoS here can
+            // otherwise trigger priority inversion when the UI awaits a read.
+            persistenceInitializationTask = Task.detached(priority: .userInitiated) {
+                do {
+                    try FileManager.default.createDirectory(
+                        at: directory,
+                        withIntermediateDirectories: true
+                    )
+                    let database = try Database(directory: directory)
+                    return .ready(PersistenceResources(
+                        database: database,
+                        packageDAO: PackageDAO(database: database),
+                        scanRunDAO: ScanRunDAO(database: database),
+                        snapshotManager: SnapshotManager(database: database),
+                        provenanceDAO: ProvenanceDAO(database: database)
+                    ))
+                } catch {
+                    return .failed(error.localizedDescription)
+                }
+            }
+        }
+
+        guard let result = await persistenceInitializationTask?.value else {
+            return false
+        }
+        if database != nil { return true }
+
+        switch result {
+        case .ready(let resources):
+            database = resources.database
+            packageDAO = resources.packageDAO
+            scanRunDAO = resources.scanRunDAO
+            snapshotManager = resources.snapshotManager
+            if snapshotCapture == nil {
+                let manager = resources.snapshotManager
+                snapshotCapture = { packages, reason, note in
+                    try await manager.capture(
+                        packages: packages,
+                        reason: reason,
+                        note: note
+                    )
+                }
+            }
+            if snapshotList == nil {
+                let manager = resources.snapshotManager
+                snapshotList = { try await manager.list() }
+            }
+            if provenancePersistence == nil {
+                provenancePersistence = ProvenancePersistenceClient(
+                    dao: resources.provenanceDAO
+                )
+            }
+            storageWarning = nil
+            return true
+        case .failed(let reason):
+            storageWarning = "Couldn't open the local cache, so scan results won't be saved between launches. \(reason)"
+            return false
+        }
+    }
+
+    /// Loads every persisted UI surface independently of the scan-on-launch
+    /// preference. Opening/migrating SQLite and reads that can block use a
+    /// detached task; actor-backed snapshot/provenance reads suspend MainActor.
+    func hydratePersistedState() async {
+        guard !isDemoMode, !hasHydratedPersistedState else {
+            return
+        }
+        if isHydratingPersistedState {
+            await withCheckedContinuation { continuation in
+                hydrationWaiters.append(continuation)
+            }
+            return
+        }
+        isHydratingPersistedState = true
+        defer {
+            isHydratingPersistedState = false
+            let waiters = hydrationWaiters
+            hydrationWaiters.removeAll(keepingCapacity: true)
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+
+        guard await initializePersistenceIfNeeded() else {
+            hasHydratedPersistedState = true
+            return
+        }
+
+        var failures: [String] = []
+
+        if let dao = packageDAO {
+            do {
+                let loaded = try await Task.detached(priority: .utility) {
+                    try dao.loadAll()
+                }.value
+                guard !isDemoMode else { return }
+                packages = loaded
+                reconcileInventorySelections()
+            } catch {
+                failures.append("package inventory")
+            }
+        }
+
+        if let dao = scanRunDAO {
+            do {
+                let loaded = try await Task.detached(priority: .utility) {
+                    try dao.mostRecentCompletedAt()
+                }.value
+                guard !isDemoMode else { return }
+                lastScanCompletedAt = loaded
+            } catch {
+                failures.append("last scan date")
+            }
+        }
+
+        if let snapshotList {
+            do {
+                let loaded = try await snapshotList()
+                guard !isDemoMode else { return }
+                replaceSnapshotSummaries(with: loaded)
+            } catch {
+                failures.append("snapshots")
+            }
+        }
+
+        if let persistence = provenancePersistence {
+            do {
+                let loaded = try await persistence.fetchAll()
+                guard !isDemoMode else { return }
+                provenanceByPackageId = Dictionary(
+                    loaded.map { ($0.packageId, $0) },
+                    uniquingKeysWith: { _, newest in newest }
+                )
+            } catch {
+                failures.append("install history")
+            }
+        }
+
+        guard !isDemoMode else { return }
+        hasHydratedPersistedState = true
+        if failures.isEmpty {
+            storageWarning = nil
+        } else {
+            storageWarning = "Couldn't load \(failures.joined(separator: ", ")) from the local cache. Your on-disk data was left unchanged."
+        }
+    }
+
     func autoScanIfNeeded() async {
         guard !isDemoMode else { return }
+        await hydratePersistedState()
         guard folderAccess.hasAnyGrant, scanOnLaunch else { return }
         if let last = lastScanCompletedAt, Date().timeIntervalSince(last) < Self.autoScanCooldown {
             return
@@ -369,6 +643,7 @@ final class AppCoordinator {
             enterDemoMode()
             return
         }
+        await hydratePersistedState()
         await scan()
         await refreshSnapshots()
     }
@@ -394,33 +669,61 @@ final class AppCoordinator {
 
         guard let scanner = scanner(for: manager, grantedURLs: accessedURLs) else { return }
         let coordinator = ScanCoordinator(scanners: [scanner])
+        let managedManagers = scanner.managedPackageManagers
 
         // Build into a local array so `packages` changes exactly once, as `scan()`
         // does. Mutating it twice inside the event loop flickers the list.
         var updated = packages
+        var updatedStatuses = scanStatuses
         for await event in await coordinator.scan() {
-            if case let .scannerFinished(mgr, status, pkgs) = event {
-                scanStatuses[mgr] = status
-                updated.removeAll { $0.manager == mgr }
-                updated += pkgs
+            if case let .scannerFinished(_, status, pkgs) = event {
+                for managedManager in managedManagers {
+                    updatedStatuses[managedManager] = partitionStatus(
+                        status,
+                        for: managedManager,
+                        packages: pkgs
+                    )
+                }
+                updated = ScanInventoryReconciler.reconcile(
+                    existing: updated,
+                    scanned: pkgs,
+                    managedManagers: managedManagers,
+                    status: status
+                )
             }
         }
+        guard !Task.isCancelled else { return }
         packages = updated
-        selectedPackage = PackageSelection.resolve(selectedPackage, in: packages)
+        scanStatuses = updatedStatuses
+        reconcileInventorySelections()
         lastScanCompletedAt = Date()
         if let dao = packageDAO {
-            try? dao.replaceAll(with: packages)
+            let persistedPackages = packages
+            do {
+                try await Task.detached(priority: .utility) {
+                    try dao.replaceAll(with: persistedPackages)
+                }.value
+                storageWarning = nil
+            } catch {
+                storageWarning = "Couldn't save the latest scan to the local cache, so it won't be remembered next launch."
+            }
         }
     }
 
-    func grantDirectory(suggestedPath: String) async {
-        guard await folderAccess.requestAccess(to: URL(fileURLWithPath: suggestedPath)) != nil else { return }
+    @discardableResult
+    func grantDirectory(suggestedPath: String) async -> Bool {
+        guard await folderAccess.requestAccess(to: URL(fileURLWithPath: suggestedPath)) != nil else {
+            return false
+        }
         Task { await refresh() }
+        return true
     }
 
-    func grantCustomDirectory() async {
-        guard await folderAccess.requestAccess(to: nil) != nil else { return }
+    @discardableResult
+    func grantCustomDirectory() async -> Bool {
+        guard await folderAccess.requestAccess(to: nil) != nil else { return false }
         Task { await refresh() }
+        return true
     }
 
     func persistUIPreferences() {
@@ -463,9 +766,21 @@ final class AppCoordinator {
         NSWorkspace.shared.activateFileViewerSelecting([dir])
     }
 
+    /// Checks an external package path only while its narrowest covering
+    /// security-scoped bookmark is active.
+    func packageInstallPathExists(at installPath: URL) -> Bool {
+        folderAccess.grantedItemExists(at: installPath)
+    }
+
+    /// Reveals an external package path without extending or persisting access.
+    @discardableResult
+    func revealPackageInstallPath(at installPath: URL) -> Bool {
+        folderAccess.revealGrantedItemInFinder(at: installPath)
+    }
+
     /// Renders and writes a Markdown environment report to a user-chosen path.
     @discardableResult
-    func exportEnvironmentReport() -> URL? {
+    func exportEnvironmentReport() async -> URL? {
         let panel = NSSavePanel()
         panel.title = "Export Environment Report"
         panel.nameFieldStringValue = "installory-environment-report.md"
@@ -476,14 +791,20 @@ final class AppCoordinator {
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         // NSSavePanel implicitly starts security-scoped access for its URL.
         defer { url.stopAccessingSecurityScopedResource() }
-        let content = EnvironmentReportRenderer().render(
-            packages: packages,
-            duplicateGroups: duplicateGroups,
-            orphans: orphanedPackages,
-            now: Date()
-        )
+        let exportPackages = packages
+        let exportDuplicateGroups = duplicateGroups
+        let exportOrphans = orphanedPackages
+        let exportDate = Date()
         do {
-            try content.write(to: url, atomically: true, encoding: .utf8)
+            try await Task.detached(priority: .utility) {
+                let content = EnvironmentReportRenderer().render(
+                    packages: exportPackages,
+                    duplicateGroups: exportDuplicateGroups,
+                    orphans: exportOrphans,
+                    now: exportDate
+                )
+                try content.write(to: url, atomically: true, encoding: .utf8)
+            }.value
             actionError = nil
             return url
         } catch {
@@ -493,7 +814,7 @@ final class AppCoordinator {
     }
 
     @discardableResult
-    func exportInventory(format: InventoryExporter.Format) -> URL? {
+    func exportInventory(format: InventoryExporter.Format) async -> URL? {
         let panel = NSSavePanel()
         panel.title = "Export Inventory"
         panel.nameFieldStringValue = "installory-inventory.\(format.fileExtension)"
@@ -504,9 +825,12 @@ final class AppCoordinator {
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         // NSSavePanel implicitly starts security-scoped access for its URL.
         defer { url.stopAccessingSecurityScopedResource() }
-        let content = InventoryExporter().export(packages, format: format)
+        let exportPackages = packages
         do {
-            try content.write(to: url, atomically: true, encoding: .utf8)
+            try await Task.detached(priority: .utility) {
+                let content = InventoryExporter().export(exportPackages, format: format)
+                try content.write(to: url, atomically: true, encoding: .utf8)
+            }.value
             actionError = nil
             return url
         } catch {
@@ -518,28 +842,93 @@ final class AppCoordinator {
     func refreshSnapshots() async {
         // Demo snapshots live only in memory — never overwrite them from the DB.
         guard !isDemoMode else { return }
-        guard let sm = snapshotManager else { return }
-        snapshots = (try? await sm.list()) ?? []
+        guard let snapshotList else { return }
+        do {
+            let refreshed = try await snapshotList()
+            guard !isDemoMode, !Task.isCancelled else { return }
+            replaceSnapshotSummaries(with: refreshed)
+        } catch is CancellationError {
+            return
+        } catch {
+            // Preserve the last known list. A transient read error must not make
+            // durable snapshots appear deleted.
+            storageWarning = "Couldn't refresh saved snapshots from the local cache. Your existing snapshot list was preserved."
+        }
+    }
+
+    /// Loads one full snapshot payload on demand. A request token prevents a
+    /// slower prior selection from replacing a newer one after actor reentrancy.
+    func loadSnapshot(id: UUID) async -> Snapshot? {
+        snapshotLoadRequestID = id
+
+        guard snapshots.contains(where: { $0.id == id }) else {
+            if loadedSnapshot?.id == id {
+                loadedSnapshot = nil
+            }
+            return nil
+        }
+        if loadedSnapshot?.id == id {
+            return loadedSnapshot
+        }
+
+        let loaded: Snapshot?
+        if isDemoMode {
+            loaded = demoSnapshotDataByID[id].flatMap {
+                try? JSONDecoder().decode(Snapshot.self, from: $0)
+            }
+        } else if let manager = snapshotManager {
+            loaded = try? await manager.snapshot(id: id)
+        } else {
+            loaded = nil
+        }
+
+        guard snapshotLoadRequestID == id,
+              snapshots.contains(where: { $0.id == id }) else {
+            return nil
+        }
+        loadedSnapshot = loaded
+        return loaded
     }
 
     func captureManualSnapshot() async {
         // In demo mode, capture a snapshot in memory so the flow is demonstrable
         // without writing to the database.
         if isDemoMode {
-            snapshots.insert(DemoData.makeSnapshot(reason: .manual, from: packages), at: 0)
+            insertDemoSnapshot(DemoData.makeSnapshot(reason: .manual, from: packages))
             return
         }
-        guard let sm = snapshotManager else {
+        guard let capture = snapshotCapture else {
             actionError = "Couldn't take a snapshot: the local cache isn't available."
             return
         }
         do {
-            _ = try await sm.capture(packages: packages, reason: .manual, note: nil)
+            _ = try await capture(packages, .manual, nil)
             actionError = nil
         } catch {
             actionError = "Couldn't take a snapshot. \(error.localizedDescription)"
         }
         await refreshSnapshots()
+    }
+
+    /// Captures the automatic first-scan snapshot and records the preference
+    /// only after the snapshot has been durably inserted. A missing cache or a
+    /// write failure leaves the preference false so a later scan can retry.
+    func captureAutomaticFirstScanSnapshotIfNeeded() async {
+        guard !isDemoMode,
+              !packages.isEmpty,
+              !UserDefaults.standard.bool(forKey: DefaultsKey.firstScanTaken),
+              let capture = snapshotCapture else {
+            return
+        }
+
+        do {
+            _ = try await capture(packages, .autoFirstScan, nil)
+            UserDefaults.standard.set(true, forKey: DefaultsKey.firstScanTaken)
+            await refreshSnapshots()
+        } catch {
+            // The next successful scan retries. Do not claim a snapshot exists
+            // when the database write did not complete.
+        }
     }
 
     // MARK: - Removal flow
@@ -585,16 +974,19 @@ final class AppCoordinator {
         var snapshotFailed = false
         if captureSnapshot, isDemoMode {
             let snap = DemoData.makeSnapshot(reason: .preCleanup, from: packagesToRemove)
-            snapshots.insert(snap, at: 0)
-            snapshotCtx = SnapshotContext(id: snap.id, createdAt: snap.createdAt)
-        } else if captureSnapshot, let sm = snapshotManager {
-            if let snap = try? await sm.capture(
-                packages: packagesToRemove,
-                reason: .preCleanup,
-                note: nil
-            ) {
+            if insertDemoSnapshot(snap) {
                 snapshotCtx = SnapshotContext(id: snap.id, createdAt: snap.createdAt)
-                await refreshSnapshots()
+            } else {
+                snapshotFailed = true
+            }
+        } else if captureSnapshot {
+            if let capture = snapshotCapture {
+                if let snap = try? await capture(packagesToRemove, .preCleanup, nil) {
+                    snapshotCtx = SnapshotContext(id: snap.id, createdAt: snap.createdAt)
+                    await refreshSnapshots()
+                } else {
+                    snapshotFailed = true
+                }
             } else {
                 snapshotFailed = true
             }
@@ -607,6 +999,42 @@ final class AppCoordinator {
             snapshotTaken: snapshotCtx != nil,
             snapshotFailed: snapshotFailed
         )
+    }
+
+    private func replaceSnapshotSummaries(with summaries: [SnapshotSummary]) {
+        snapshots = summaries
+        let retainedIDs = Set(summaries.map(\.id))
+        if let loadedID = loadedSnapshot?.id, !retainedIDs.contains(loadedID) {
+            loadedSnapshot = nil
+        }
+        if let requestedID = snapshotLoadRequestID, !retainedIDs.contains(requestedID) {
+            snapshotLoadRequestID = nil
+        }
+    }
+
+    private func replaceDemoSnapshots(with fullSnapshots: [Snapshot]) {
+        loadedSnapshot = nil
+        snapshotLoadRequestID = nil
+        demoSnapshotDataByID = [:]
+        snapshots = []
+
+        for snapshot in fullSnapshots {
+            guard let data = try? JSONEncoder().encode(snapshot) else { continue }
+            demoSnapshotDataByID[snapshot.id] = data
+            snapshots.append(SnapshotSummary(snapshot: snapshot))
+        }
+    }
+
+    @discardableResult
+    private func insertDemoSnapshot(_ snapshot: Snapshot) -> Bool {
+        guard let data = try? JSONEncoder().encode(snapshot) else {
+            actionError = "Couldn't keep the demo snapshot in memory."
+            return false
+        }
+        demoSnapshotDataByID[snapshot.id] = data
+        snapshots.insert(SnapshotSummary(snapshot: snapshot), at: 0)
+        actionError = nil
+        return true
     }
 
     // MARK: - Provenance actions
@@ -624,31 +1052,32 @@ final class AppCoordinator {
         _ = await folderAccess.requestAccess(to: homeDir)
     }
 
-    /// Removes the home-directory security-scoped bookmark used by provenance
-    /// collection. Clears it from UserDefaults and reloads `FolderAccessManager`'s
-    /// in-memory bookmark cache so `provenanceAccessGranted` updates immediately.
+    /// Removes exactly the narrowest grant that covers the home directory.
+    /// Other ancestor, descendant, and unrelated grants remain intact.
     ///
     /// Safe to call outside of an active scan (the Revoke button is shown only
     /// when the toggle is ON and the toggle is disabled while scanning).
     func revokeProvenanceAccess() {
         let homePath = FileManager.default.homeDirectoryForCurrentUser.path
-        guard let storedPath = folderAccess.grantedPath(forPrefix: homePath) else { return }
-        // "app.installory.bookmarks" is the UserDefaults key used by FolderAccessManager.
-        var bookmarks = UserDefaults.standard.dictionary(
-            forKey: "app.installory.bookmarks"
-        ) as? [String: Data] ?? [:]
-        bookmarks.removeValue(forKey: storedPath)
-        UserDefaults.standard.set(bookmarks, forKey: "app.installory.bookmarks")
-        // Reload FolderAccessManager's in-memory state to reflect the removal.
-        folderAccess.loadPersistedBookmarks()
+        guard let storedPath = folderAccess.grantedPath(covering: homePath) else { return }
+        folderAccess.remove(path: storedPath)
     }
 
     /// Deletes all rows from `provenance_evidence` and clears the in-memory cache.
     /// Called when the user turns off provenance collection and confirms they want
     /// to erase stored install history.
     func clearProvenanceEvidence() async {
-        try? await provenanceDAO?.deleteAll()
-        provenanceByPackageId = [:]
+        guard let persistence = provenancePersistence else {
+            actionError = "Couldn't erase install history because the local cache isn't available."
+            return
+        }
+        do {
+            try await persistence.deleteAll()
+            provenanceByPackageId = [:]
+            actionError = nil
+        } catch {
+            actionError = "Couldn't erase install history. Your saved evidence is still on disk. \(error.localizedDescription)"
+        }
     }
 
     // MARK: - Private
@@ -706,7 +1135,10 @@ final class AppCoordinator {
         guard !isScanning else { return }
         isScanning = true
         let scanStartedAt = Date()
-        defer { isScanning = false }
+        defer {
+            isScanning = false
+            inFlightManagers = []
+        }
 
         var accessedURLs: [URL] = []
         for (_, data) in folderAccess.grantedBookmarks() {
@@ -731,10 +1163,15 @@ final class AppCoordinator {
             MasScanner(applicationDirectories: grantedApplicationsDirectories(accessedURLs)),
         ]
         let scanCoordinator = ScanCoordinator(scanners: scanners)
+        let managedManagersByScanner = Dictionary(
+            uniqueKeysWithValues: scanners.map { ($0.manager, $0.managedPackageManagers) }
+        )
 
-        // Double-buffer: build into local vars so the UI doesn't briefly flip
-        // to "empty" between clearing and the first scanner finishing.
-        var buildPackages: [Package] = []
+        // Double-buffer from the last-known inventory. Each successful scanner
+        // replaces only the partitions it authoritatively observed; failures,
+        // skips, and timeouts preserve those partitions instead of reporting
+        // false removals or cascading away provenance.
+        var buildPackages = packages
         var buildStatuses: [PackageManager: ScannerStatus] = [:]
         inFlightManagers = []
 
@@ -744,41 +1181,64 @@ final class AppCoordinator {
                 inFlightManagers.insert(manager)
             case let .scannerFinished(manager, status, pkgs):
                 inFlightManagers.remove(manager)
-                buildStatuses[manager] = status
-                buildPackages += pkgs
-            case let .allFinished(perManager, allPackages):
+                let managedManagers = managedManagersByScanner[manager] ?? [manager]
+                for managedManager in managedManagers {
+                    buildStatuses[managedManager] = partitionStatus(
+                        status,
+                        for: managedManager,
+                        packages: pkgs
+                    )
+                }
+                buildPackages = ScanInventoryReconciler.reconcile(
+                    existing: buildPackages,
+                    scanned: pkgs,
+                    managedManagers: managedManagers,
+                    status: status
+                )
+            case let .allFinished(perManager, _):
                 inFlightManagers = []
-                buildStatuses = perManager
-                buildPackages = allPackages
+                // `scannerFinished` carries the packages needed for partition
+                // reconciliation. Re-read final statuses defensively without
+                // replacing inventory with the success-only aggregate.
+                for (manager, status) in perManager {
+                    let managedManagers = managedManagersByScanner[manager] ?? [manager]
+                    for managedManager in managedManagers {
+                        // The matching `scannerFinished` event already recorded
+                        // per-partition success counts. Only fill a missing status
+                        // here; failure/timeout/skipped values carry no count split.
+                        if buildStatuses[managedManager] == nil {
+                            buildStatuses[managedManager] = status
+                        }
+                    }
+                }
             }
         }
+
+        // AsyncStream termination cancels the producer. Do not publish or
+        // persist its incomplete double buffer when this consumer was cancelled.
+        guard !Task.isCancelled else { return }
 
         // Swap in the freshly built results once. This is the only point
         // where `packages` and `scanStatuses` change during a scan.
         packages = buildPackages
         scanStatuses = buildStatuses
-        // The selection holds a value type captured before the scan; re-resolve it
-        // against the new inventory so the detail pane isn't showing a stale struct.
-        selectedPackage = PackageSelection.resolve(selectedPackage, in: packages)
+        reconcileInventorySelections()
         inFlightManagers = []
         lastScanCompletedAt = Date()
 
         if let dao = packageDAO {
+            let persistedPackages = packages
             do {
-                try dao.replaceAll(with: packages)
+                try await Task.detached(priority: .utility) {
+                    try dao.replaceAll(with: persistedPackages)
+                }.value
                 storageWarning = nil
             } catch {
                 storageWarning = "Couldn't save the latest scan to the local cache, so it won't be remembered next launch."
             }
         }
 
-        if !packages.isEmpty,
-           !UserDefaults.standard.bool(forKey: DefaultsKey.firstScanTaken),
-           let sm = snapshotManager {
-            _ = try? await sm.capture(packages: packages, reason: .autoFirstScan, note: nil)
-            UserDefaults.standard.set(true, forKey: DefaultsKey.firstScanTaken)
-            await refreshSnapshots()
-        }
+        await captureAutomaticFirstScanSnapshotIfNeeded()
 
         if let dao = scanRunDAO {
             let scanRun = ScanRun(
@@ -787,7 +1247,13 @@ final class AppCoordinator {
                 completedAt: lastScanCompletedAt,
                 perManagerResults: scanStatuses
             )
-            try? dao.save(scanRun)
+            do {
+                try await Task.detached(priority: .utility) {
+                    try dao.save(scanRun)
+                }.value
+            } catch {
+                storageWarning = "Couldn't save scan history to the local cache."
+            }
         }
 
         // MARK: Provenance collection (gated by user opt-in)
@@ -803,7 +1269,7 @@ final class AppCoordinator {
         // The user grants this via "Grant read access…" in Settings → Privacy.
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         guard
-            let homePath = folderAccess.grantedPath(forPrefix: homeDir.path),
+            let homePath = folderAccess.grantedPath(covering: homeDir.path),
             let homeBookmarkPair = folderAccess.grantedBookmarks().first(where: { $0.path == homePath })
         else { return }
 
@@ -828,14 +1294,30 @@ final class AppCoordinator {
 
         // Persist evidence and refresh the in-memory cache. packageDAO.replaceAll
         // already ran above, so FK constraints are satisfied.
-        if let dao = provenanceDAO {
-            var byId: [String: ProvenanceEvidence] = [:]
-            for evidence in evidenceList {
-                try? await dao.upsert(evidence)
-                byId[evidence.packageId] = evidence
+        let byId = Dictionary(
+            evidenceList.map { ($0.packageId, $0) },
+            uniquingKeysWith: { _, newest in newest }
+        )
+        provenanceByPackageId = byId
+        if let persistence = provenancePersistence {
+            do {
+                try await persistence.upsertAll(evidenceList)
+            } catch {
+                storageWarning = "Couldn't save the latest install history to the local cache, so it won't be remembered next launch."
             }
-            provenanceByPackageId = byId
         }
+    }
+
+    private func partitionStatus(
+        _ status: ScannerStatus,
+        for manager: PackageManager,
+        packages: [Package]
+    ) -> ScannerStatus {
+        guard case .succeeded(_, let durationMs) = status else { return status }
+        return .succeeded(
+            count: packages.lazy.filter { $0.manager == manager }.count,
+            durationMs: durationMs
+        )
     }
 
     private func scanner(for manager: PackageManager, grantedURLs: [URL]) -> (any PackageScanner)? {

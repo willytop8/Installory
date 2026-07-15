@@ -38,7 +38,10 @@ struct InstalloryApp: App {
                     }
                 }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
-                .disabled(coordinator.packages.isEmpty)
+                .disabled(
+                    coordinator.packages.isEmpty
+                        || !(coordinator.sidebarSelection?.supportsCleanupControls ?? true)
+                )
 
                 Divider()
 
@@ -54,13 +57,13 @@ struct InstalloryApp: App {
                 Divider()
 
                 Button("Export Inventory as CSV\u{2026}") {
-                    coordinator.exportInventory(format: .csv)
+                    Task { await coordinator.exportInventory(format: .csv) }
                 }
                 .disabled(coordinator.packages.isEmpty)
                 .keyboardShortcut("e", modifiers: .command)
 
                 Button("Export Inventory as Markdown\u{2026}") {
-                    coordinator.exportInventory(format: .markdown)
+                    Task { await coordinator.exportInventory(format: .markdown) }
                 }
                 .disabled(coordinator.packages.isEmpty)
                 .keyboardShortcut("e", modifiers: [.command, .shift])

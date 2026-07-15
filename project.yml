@@ -47,6 +47,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: app.installory.mac
         SWIFT_VERSION: "6.0"
         ENABLE_HARDENED_RUNTIME: YES
+        LM_SKIP_METADATA_EXTRACTION: YES
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: ""
         LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
@@ -55,3 +56,19 @@ targets:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
         Release:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+
+  InstalloryTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - App/Tests
+    dependencies:
+      - target: Installory
+      - package: Installory
+        product: InstalloryCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        LM_SKIP_METADATA_EXTRACTION: YES

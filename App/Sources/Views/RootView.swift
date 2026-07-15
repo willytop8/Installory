@@ -1,4 +1,104 @@
+import InstalloryCore
 import SwiftUI
+
+/// Why a dedicated analysis view has no rows to display.
+///
+/// A positive "no findings" message is reserved for a completed, successful
+/// scan across every supported manager. Saved inventory with unknown coverage,
+/// skipped managers, and failed scans remain explicitly inconclusive.
+enum AnalysisEmptyState: Equatable {
+    case scanInProgress
+    case noInventory
+    case incompleteCoverage
+    case noResults
+
+    static func resolve(
+        packageCount: Int,
+        isScanning: Bool,
+        isDemoMode: Bool,
+        scanStatuses: [PackageManager: ScannerStatus]
+    ) -> AnalysisEmptyState {
+        if isScanning {
+            return .scanInProgress
+        }
+        if isDemoMode {
+            return packageCount == 0 ? .noInventory : .noResults
+        }
+
+        let hasCompleteCoverage = PackageManager.allCases.allSatisfy { manager in
+            guard let status = scanStatuses[manager], case .succeeded = status else {
+                return false
+            }
+            return true
+        }
+        if !scanStatuses.isEmpty, !hasCompleteCoverage {
+            return .incompleteCoverage
+        }
+        if packageCount == 0 {
+            return .noInventory
+        }
+        return hasCompleteCoverage ? .noResults : .incompleteCoverage
+    }
+}
+
+/// Sections backed by PackageListView currently expose Cleanup Mode controls.
+/// Duplicates and Orphans can opt in here when APP-F2 adds their bulk controls.
+extension SidebarSelection {
+    var supportsCleanupControls: Bool {
+        switch self {
+        case .all, .manager, .readOnly:
+            return true
+        case .duplicates, .orphans, .aiInstalled, .snapshot:
+            return false
+        }
+    }
+}
+
+struct AnalysisEmptyStateView: View {
+    let state: AnalysisEmptyState
+    let noResultsTitle: String
+    let noResultsSystemImage: String
+    let noResultsDescription: String
+
+    var body: some View {
+        ContentUnavailableView {
+            Label(title, systemImage: systemImage)
+        } description: {
+            Text(description)
+        }
+    }
+
+    private var title: String {
+        switch state {
+        case .scanInProgress: "Analysis in Progress"
+        case .noInventory: "No Package Inventory"
+        case .incompleteCoverage: "Results May Be Incomplete"
+        case .noResults: noResultsTitle
+        }
+    }
+
+    private var systemImage: String {
+        switch state {
+        case .scanInProgress: "arrow.triangle.2.circlepath"
+        case .noInventory: "shippingbox"
+        case .incompleteCoverage: "exclamationmark.triangle"
+        case .noResults: noResultsSystemImage
+        }
+    }
+
+    private var description: String {
+        switch state {
+        case .scanInProgress:
+            "Installory is still scanning. This analysis will update when the scan finishes."
+        case .noInventory:
+            "Grant access to a package directory and run a scan before using this analysis."
+        case .incompleteCoverage:
+            "One or more package managers have not completed a successful scan. Review Scan Coverage and scan again before relying on this analysis."
+        case .noResults:
+            noResultsDescription
+        }
+    }
+}
 
 struct RootView: View {
     @Environment(AppCoordinator.self) private var coordinator
@@ -69,8 +169,15 @@ struct RootView: View {
                             systemImage: coordinator.isCleanupMode ? "checklist.checked" : "checklist"
                         )
                     }
-                    .disabled(coordinator.packages.isEmpty)
-                    .help("Select packages to generate a cleanup script (⇧⌘K)")
+                    .disabled(
+                        coordinator.packages.isEmpty
+                            || !currentSectionSupportsCleanupControls
+                    )
+                    .help(
+                        currentSectionSupportsCleanupControls
+                            ? "Select packages to generate a cleanup script (⇧⌘K)"
+                            : "Cleanup Mode isn't available in this section"
+                    )
 
                     Button {
                         Task { await coordinator.captureManualSnapshot() }
@@ -93,12 +200,20 @@ struct RootView: View {
         }
         .frame(minWidth: 900, minHeight: 580)
         .task {
+            await coordinator.hydratePersistedState()
             await coordinator.autoScanIfNeeded()
         }
         // Persisted here rather than in PackageListView, which unmounts whenever the
         // user navigates to one of the dedicated sections above.
         .onChange(of: coordinator.sidebarSelection) { _, _ in
+            exitCleanupModeIfUnavailable()
+            coordinator.reconcileSelectedPackageForCurrentSidebar()
             coordinator.persistUIPreferences()
+        }
+        .onChange(of: coordinator.isCleanupMode) { _, _ in
+            // Also catches the global keyboard command while a dedicated view
+            // without cleanup controls is active.
+            exitCleanupModeIfUnavailable()
         }
         .sheet(isPresented: Binding(
             get: { coordinator.cleanupResult != nil },
@@ -126,6 +241,18 @@ struct RootView: View {
                 .environment(coordinator)
         }
         .actionErrorAlert(coordinator: coordinator)
+    }
+
+    private var currentSectionSupportsCleanupControls: Bool {
+        coordinator.sidebarSelection?.supportsCleanupControls ?? true
+    }
+
+    private func exitCleanupModeIfUnavailable() {
+        guard coordinator.isCleanupMode, !currentSectionSupportsCleanupControls else {
+            return
+        }
+        coordinator.isCleanupMode = false
+        coordinator.selectedForCleanup = []
     }
 }
 

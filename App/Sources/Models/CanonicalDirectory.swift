@@ -23,9 +23,10 @@ struct CanonicalDirectory: Identifiable, Sendable {
         var dirs: [CanonicalDirectory] = []
         if isAppleSilicon {
             dirs.append(.init(path: "/opt/homebrew", managers: [.brew, .brewCask, .pip, .npm, .gem]))
-        } else {
-            dirs.append(.init(path: "/usr/local", managers: [.brew, .brewCask, .pip, .npm, .gem]))
         }
+        // Intel Homebrew and language-manager installs can coexist under
+        // /usr/local on Apple Silicon through Rosetta, so always offer it.
+        dirs.append(.init(path: "/usr/local", managers: [.brew, .brewCask, .pip, .npm, .gem]))
         dirs.append(.init(path: "\(home)/.pyenv", managers: [.pip]))
         dirs.append(.init(path: "\(home)/.nvm", managers: [.npm]))
         dirs.append(.init(path: "\(home)/.volta", managers: [.npm]))
