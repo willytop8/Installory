@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest import mock
 
@@ -224,6 +225,166 @@ class LastGoodProductionTests(unittest.TestCase):
                     enforce_production_floors=True,
                     last_good_counts=self.last_good["counts"],
                 )
+
+
+class NpmSeedExpansionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.root = Path(self.temporary_directory.name)
+
+    @staticmethod
+    def response(*names: str, total: int | None = None) -> dict[str, object]:
+        return {
+            "objects": [{"package": {"name": name}} for name in names],
+            "total": len(names) if total is None else total,
+        }
+
+    @staticmethod
+    def query_parameters(url: str) -> dict[str, list[str]]:
+        return urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+
+    def test_production_queries_are_bounded_real_search_terms(self) -> None:
+        queries = generate._NPM_SEARCH_QUERIES
+
+        self.assertGreater(len(queries), 1)
+        self.assertEqual(len(queries), len(set(queries)))
+        self.assertTrue(all(query.strip() and "*" not in query for query in queries))
+        self.assertLessEqual(generate._NPM_SEARCH_PAGE_SIZE, 250)
+        self.assertGreater(generate._NPM_SEARCH_MAX_PAGES_PER_QUERY, 0)
+        self.assertGreater(generate._NPM_SEARCH_MAX_NEW_NAMES, 0)
+
+    def expand(
+        self,
+        existing: list[str],
+        fetch,
+        *,
+        seed_file: Path | None = None,
+        queries: tuple[str, ...] = ("react",),
+        page_size: int = 250,
+        max_pages: int = 1,
+        max_new_names: int = 100,
+    ) -> tuple[list[str], Path]:
+        destination = seed_file or self.root / "npm-seed-list.json"
+        with mock.patch.object(generate, "fetch_json", side_effect=fetch), mock.patch.object(
+            generate, "_NPM_SEARCH_QUERIES", queries
+        ), mock.patch.object(
+            generate, "_NPM_SEARCH_PAGE_SIZE", page_size
+        ), mock.patch.object(
+            generate, "_NPM_SEARCH_MAX_PAGES_PER_QUERY", max_pages
+        ), mock.patch.object(
+            generate, "_NPM_SEARCH_MAX_NEW_NAMES", max_new_names
+        ), mock.patch.object(
+            generate.time, "sleep"
+        ):
+            result = generate._try_expand_npm_seed(existing, destination)
+        return result, destination
+
+    def test_failed_query_keeps_existing_and_successful_results(self) -> None:
+        requested_queries: list[str] = []
+
+        def fetch(url: str) -> dict[str, object]:
+            query = self.query_parameters(url)["text"][0]
+            requested_queries.append(query)
+            if query == "react":
+                return self.response("existing", "zeta")
+            if query == "broken":
+                raise RuntimeError("HTTP 400")
+            return self.response("alpha")
+
+        result, seed_file = self.expand(
+            ["existing"],
+            fetch,
+            queries=("react", "broken", "cli"),
+        )
+
+        self.assertEqual(requested_queries, ["react", "broken", "cli"])
+        self.assertEqual(result, ["existing", "alpha", "zeta"])
+        self.assertEqual(json.loads(seed_file.read_text()), result)
+
+    def test_invalid_later_page_keeps_earlier_page(self) -> None:
+        offsets: list[int] = []
+
+        def fetch(url: str) -> dict[str, object]:
+            offset = int(self.query_parameters(url)["from"][0])
+            offsets.append(offset)
+            if offset == 0:
+                return self.response("beta", "alpha", total=4)
+            return {"objects": "not-an-array"}
+
+        result, _ = self.expand(
+            ["existing"],
+            fetch,
+            page_size=2,
+            max_pages=2,
+        )
+
+        self.assertEqual(offsets, [0, 2])
+        self.assertEqual(result, ["existing", "alpha", "beta"])
+
+    def test_names_are_deduplicated_across_existing_seeds_and_queries(self) -> None:
+        def fetch(url: str) -> dict[str, object]:
+            query = self.query_parameters(url)["text"][0]
+            if query == "react":
+                return self.response("React", "alpha", "alpha")
+            return self.response("react", "beta")
+
+        result, _ = self.expand(
+            ["react", "REACT", "seed"],
+            fetch,
+            queries=("react", "web"),
+        )
+
+        self.assertEqual(result, ["react", "seed", "alpha", "beta"])
+        self.assertEqual(len(result), len(set(result)))
+
+    def test_pagination_respects_page_size_and_global_new_name_bound(self) -> None:
+        requests: list[dict[str, list[str]]] = []
+
+        def fetch(url: str) -> dict[str, object]:
+            parameters = self.query_parameters(url)
+            requests.append(parameters)
+            offset = int(parameters["from"][0])
+            return self.response(
+                f"package-{offset + 1}",
+                f"package-{offset}",
+                total=10,
+            )
+
+        result, _ = self.expand(
+            ["existing"],
+            fetch,
+            queries=("node",),
+            page_size=2,
+            max_pages=3,
+            max_new_names=3,
+        )
+
+        self.assertEqual([int(item["from"][0]) for item in requests], [0, 2])
+        self.assertTrue(all(int(item["size"][0]) == 2 for item in requests))
+        self.assertEqual(
+            result,
+            ["existing", "package-0", "package-1", "package-2"],
+        )
+
+    def test_result_and_persisted_bytes_are_stable_across_api_ordering(self) -> None:
+        first_file = self.root / "first.json"
+        second_file = self.root / "second.json"
+
+        first, _ = self.expand(
+            ["zeta-seed"],
+            lambda _: self.response("beta", "alpha", "beta"),
+            seed_file=first_file,
+        )
+        second, _ = self.expand(
+            ["zeta-seed"],
+            lambda _: self.response("alpha", "beta"),
+            seed_file=second_file,
+        )
+
+        self.assertEqual(first, ["zeta-seed", "alpha", "beta"])
+        self.assertEqual(second, first)
+        self.assertEqual(first_file.read_bytes(), second_file.read_bytes())
 
 
 if __name__ == "__main__":

@@ -145,6 +145,37 @@ _NPM_HARDCODED_SEED: list[str] = [
     "semver", "normalize-url", "husky", "lint-staged",
 ]
 
+# The registry search API requires a real search term; `text=*` now returns 400.
+# These deterministic terms span the major npm ecosystems while keeping refreshes
+# bounded. Search results are popularity-weighted, paged at the documented API
+# maximum, deduplicated across terms, and appended to committed seeds in stable
+# lexical order.
+_NPM_SEARCH_QUERIES: tuple[str, ...] = (
+    "javascript",
+    "typescript",
+    "node",
+    "react",
+    "vue",
+    "angular",
+    "svelte",
+    "web",
+    "server",
+    "cli",
+    "testing",
+    "build",
+    "database",
+    "http",
+    "graphql",
+    "css",
+    "security",
+    "validation",
+    "logging",
+)
+_NPM_SEARCH_PAGE_SIZE = 250
+_NPM_SEARCH_MAX_PAGES_PER_QUERY = 2
+_NPM_SEARCH_MAX_NEW_NAMES = 5_000
+_NPM_SEARCH_DELAY_SECONDS = 0.25
+
 # ---------------------------------------------------------------------------
 # Normalization
 # ---------------------------------------------------------------------------
@@ -354,55 +385,127 @@ def _load_npm_seed(limit: int | None) -> list[str]:
 def _try_expand_npm_seed(existing: list[str], seed_file: Path) -> list[str]:
     """Try to fetch a larger npm seed list from the registry search API.
 
-    Falls back to the hardcoded list if the API fails or returns nothing new.
-    Saves the result to seed_file so future runs are reproducible.
+    Each curated query fails independently, so a bad response never discards
+    existing seeds or results from successful pages. Falls back to the hardcoded
+    list only when search yields nothing new. Saves a stable result to seed_file
+    so future runs are reproducible.
     """
-    existing_set = set(existing)
-    fetched_names: list[str] = list(existing)
-    page_size = 250
-    max_results = 5000
+    fetched_names: list[str] = []
+    existing_set: set[str] = set()
+    for raw_name in existing:
+        if not isinstance(raw_name, str):
+            continue
+        name = normalize_npm(raw_name.strip())
+        if name and name not in existing_set:
+            fetched_names.append(name)
+            existing_set.add(name)
 
-    try:
-        print("  Fetching npm seed list from registry search API …", flush=True)
-        for from_idx in range(0, max_results, page_size):
+    discovered: set[str] = set()
+    page_size = min(max(_NPM_SEARCH_PAGE_SIZE, 1), 250)
+    max_new_names = max(_NPM_SEARCH_MAX_NEW_NAMES, 0)
+    reached_bound = False
+
+    print("  Fetching npm seed list from registry search API …", flush=True)
+    for query in _NPM_SEARCH_QUERIES:
+        for page in range(max(_NPM_SEARCH_MAX_PAGES_PER_QUERY, 0)):
+            from_idx = page * page_size
+            params = urllib.parse.urlencode(
+                (
+                    ("text", query),
+                    ("size", page_size),
+                    ("from", from_idx),
+                    ("quality", "0.0"),
+                    ("maintenance", "0.0"),
+                    ("popularity", "1.0"),
+                )
+            )
             url = (
                 "https://registry.npmjs.org/-/v1/search"
-                f"?text=*&size={page_size}&from={from_idx}"
-                "&quality=0.0&maintenance=0.0&popularity=1.0"
+                f"?{params}"
             )
-            data = fetch_json(url)
-            assert isinstance(data, dict)
-            objects = data.get("objects") or []
-            if not objects:
-                break
-            for obj in objects:
-                pkg_name = (obj.get("package") or {}).get("name") or ""
-                if pkg_name and pkg_name not in existing_set:
-                    fetched_names.append(pkg_name)
-                    existing_set.add(pkg_name)
-            time.sleep(0.25)
-            if len(objects) < page_size:
+            try:
+                data = fetch_json(url)
+                if not isinstance(data, dict) or not isinstance(data.get("objects"), list):
+                    raise ValueError("response is missing an objects array")
+                objects = data["objects"]
+            except Exception as exc:
+                print(
+                    f"  WARNING: npm search query {query!r} at offset "
+                    f"{from_idx} failed: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 break
 
-        print(f"  Fetched {len(fetched_names)} names total.", flush=True)
-    except Exception as exc:
+            if not objects:
+                break
+
+            page_names: set[str] = set()
+            for obj in objects:
+                if not isinstance(obj, dict):
+                    continue
+                package = obj.get("package")
+                if not isinstance(package, dict):
+                    continue
+                raw_name = package.get("name")
+                if not isinstance(raw_name, str):
+                    continue
+                name = normalize_npm(raw_name.strip())
+                if name:
+                    page_names.add(name)
+
+            for name in sorted(page_names):
+                if name in existing_set or name in discovered:
+                    continue
+                if len(discovered) >= max_new_names:
+                    reached_bound = True
+                    break
+                discovered.add(name)
+                if len(discovered) >= max_new_names:
+                    reached_bound = True
+                    break
+
+            if reached_bound:
+                break
+
+            total = data.get("total")
+            consumed = from_idx + len(objects)
+            if isinstance(total, int) and not isinstance(total, bool) and consumed >= total:
+                break
+            if len(objects) < page_size:
+                break
+            time.sleep(_NPM_SEARCH_DELAY_SECONDS)
+
+        if reached_bound:
+            break
+
+    if discovered:
+        fetched_names.extend(sorted(discovered))
+    else:
         print(
-            f"  WARNING: npm search API failed: {exc}. "
-            "Falling back to hardcoded seed list.",
+            "  WARNING: npm search produced no new names. "
+            "Using the hardcoded fallback seed.",
             file=sys.stderr,
             flush=True,
         )
-        for name in _NPM_HARDCODED_SEED:
+        fallback_additions = 0
+        for raw_name in _NPM_HARDCODED_SEED:
+            name = normalize_npm(raw_name.strip())
             if name not in existing_set:
+                if fallback_additions >= max_new_names:
+                    break
                 fetched_names.append(name)
                 existing_set.add(name)
-        print(f"  Using {len(fetched_names)} names (hardcoded fallback).", flush=True)
+                fallback_additions += 1
+
+    print(f"  Fetched {len(fetched_names)} names total.", flush=True)
 
     if fetched_names:
-        SEEDS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(seed_file, "w") as f:
-            json.dump(fetched_names, f, indent=2)
-        print(f"  Saved {len(fetched_names)} names → {seed_file.name}", flush=True)
+        seed_file.parent.mkdir(parents=True, exist_ok=True)
+        serialized = json.dumps(fetched_names, indent=2) + "\n"
+        if not seed_file.exists() or seed_file.read_text(encoding="utf-8") != serialized:
+            seed_file.write_text(serialized, encoding="utf-8")
+            print(f"  Saved {len(fetched_names)} names → {seed_file.name}", flush=True)
 
     return fetched_names
 
