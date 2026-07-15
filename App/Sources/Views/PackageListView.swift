@@ -7,14 +7,15 @@ struct PackageListView: View {
 
     var body: some View {
         @Bindable var coordinator = coordinator
+        let visiblePackages = coordinator.filteredPackages
 
         Group {
             if coordinator.packages.isEmpty {
                 emptyState
-            } else if coordinator.filteredPackages.isEmpty && !coordinator.isCleanupMode {
+            } else if visiblePackages.isEmpty {
                 noMatchState
             } else {
-                packageList
+                packageList(visiblePackages)
             }
         }
         .searchable(text: $coordinator.searchQuery, placement: .toolbar, prompt: "Filter packages")
@@ -247,15 +248,13 @@ struct PackageListView: View {
 
     // MARK: - Package list
 
-    private var packageList: some View {
+    private func packageList(_ visiblePackages: [Package]) -> some View {
         List(
-            coordinator.filteredPackages,
+            visiblePackages,
             selection: Binding(
                 get: { coordinator.selectedPackage?.id },
                 set: { id in
-                    coordinator.selectedPackage = id.flatMap { target in
-                        coordinator.packages.first { $0.id == target }
-                    }
+                    coordinator.selectedPackage = id.flatMap(coordinator.package(id:))
                 }
             )
         ) { pkg in
@@ -282,6 +281,7 @@ struct PackageListView: View {
 // MARK: - Row
 
 private struct PackageRowView: View {
+    @Environment(AppCoordinator.self) private var coordinator
     let package: Package
     var isCleanupMode: Bool = false
     var isSelectedForCleanup: Bool = false
@@ -332,9 +332,10 @@ private struct PackageRowView: View {
                 Button("Copy Install Path", systemImage: "doc.on.doc.fill") {
                     copy(path)
                 }
-                let exists = FileManager.default.fileExists(atPath: path)
+                let installPath = URL(fileURLWithPath: path)
+                let exists = coordinator.packageInstallPathExists(at: installPath)
                 Button("Reveal in Finder", systemImage: "folder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                    coordinator.revealPackageInstallPath(at: installPath)
                 }
                 .disabled(!exists)
             }

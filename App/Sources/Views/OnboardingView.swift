@@ -73,6 +73,8 @@ struct OnboardingView: View {
                         .frame(width: 7, height: 7)
                 }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Page \(page + 1) of 4")
 
             Spacer()
 
@@ -93,16 +95,18 @@ struct OnboardingView: View {
                     if brewRootExists {
                         Button("Grant Access to \(brewRoot)") {
                             Task {
-                                await coordinator.grantDirectory(suggestedPath: brewRoot)
-                                complete()
+                                if await coordinator.grantDirectory(suggestedPath: brewRoot) {
+                                    complete()
+                                }
                             }
                         }
                         .buttonStyle(.borderedProminent)
                     } else {
                         Button("Choose a Folder to Scan…") {
                             Task {
-                                await coordinator.grantCustomDirectory()
-                                complete()
+                                if await coordinator.grantCustomDirectory() {
+                                    complete()
+                                }
                             }
                         }
                         .buttonStyle(.borderedProminent)

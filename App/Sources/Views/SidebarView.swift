@@ -23,13 +23,14 @@ struct SidebarView: View {
     // MARK: - Package Managers section (Task F)
 
     private var packageManagerSection: some View {
-        Section("Package Managers") {
+        let inventoryIndex = coordinator.inventoryIndex
+        return Section("Package Managers") {
             NavigationLink(value: SidebarSelection.all) {
                 Label("All packages (\(coordinator.packages.count))", systemImage: "tray.full")
             }
 
             ForEach(visibleManagers, id: \.self) { manager in
-                let count = coordinator.packages.filter { $0.manager == manager }.count
+                let count = inventoryIndex.managerCounts[manager, default: 0]
                 NavigationLink(value: SidebarSelection.manager(manager)) {
                     Label {
                         HStack(spacing: 4) {
@@ -43,7 +44,7 @@ struct SidebarView: View {
                 }
             }
 
-            let readOnlyCount = coordinator.packages.filter(\.isReadOnly).count
+            let readOnlyCount = inventoryIndex.readOnlyCount
             if readOnlyCount > 0 {
                 NavigationLink(value: SidebarSelection.readOnly) {
                     Label("Read-only (\(readOnlyCount))", systemImage: "lock")
@@ -64,7 +65,7 @@ struct SidebarView: View {
                 }
             }
 
-            if coordinator.provenanceCollection {
+            if coordinator.isDemoMode || coordinator.provenanceCollection {
                 let aiCount = coordinator.aiInstalledPackages.count
                 if aiCount > 0 {
                     NavigationLink(value: SidebarSelection.aiInstalled) {
@@ -294,7 +295,7 @@ struct SidebarView: View {
     /// is `.failed`/`.timedOut` (surfacing errors even when N=0). Managers with
     /// `.succeeded(count: 0)` or `.skipped` stay hidden — clean noise reduction.
     private var visibleManagers: [PackageManager] {
-        let hasPackages = Set(coordinator.packages.map(\.manager))
+        let hasPackages = coordinator.inventoryIndex.packageManagers
         return PackageManager.allCases.filter { manager in
             if hasPackages.contains(manager) { return true }
             if let status = coordinator.scanStatuses[manager] {
