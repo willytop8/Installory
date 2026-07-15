@@ -51,7 +51,7 @@ public enum Migrations {
         try db.execute(sql: "CREATE INDEX idx_packages_name ON packages(name)")
 
         // provenance_evidence — structured signals, stored as JSON payload
-        // collected_at and overall_confidence are extracted as indexed columns
+        // collected_at and overall_confidence are extracted as columns
         // so queries can filter by confidence without deserializing the blob.
         try db.execute(sql: """
             CREATE TABLE provenance_evidence (

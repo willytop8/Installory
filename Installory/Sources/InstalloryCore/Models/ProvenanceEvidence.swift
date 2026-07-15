@@ -7,7 +7,7 @@ import GRDB
 /// timestamps, shell history, and Claude Code session logs. Stored as a
 /// JSON blob in the `provenance_evidence.payload` column, with
 /// `collected_at` and `overall_confidence` also extracted as top-level
-/// columns for indexed queries.
+/// columns so callers can query them without decoding the payload.
 public struct ProvenanceEvidence: Codable, Sendable {
     public let packageId: String
 
@@ -32,9 +32,39 @@ public struct ProvenanceEvidence: Codable, Sendable {
     public let nearbyProjects: [NearbyProject]
     /// IDs of packages installed within one hour of this one.
     public let coInstalledWithin1h: [String]
+    /// Total packages installed within the same one-hour window.
+    ///
+    /// The ID list is a bounded sample so dense installs do not create enormous
+    /// persistence payloads. This field is optional for backward compatibility
+    /// with evidence collected before the total was recorded.
+    public let coInstalledWithin1hTotalCount: Int?
 
     public let overallConfidence: Confidence
     public let collectedAt: Date
+
+    public init(
+        packageId: String,
+        fsInstallTime: Date?,
+        fsInstallTimeSource: String?,
+        installCommand: InstallCommandRecord?,
+        claudeCodeContext: ClaudeCodeContext?,
+        nearbyProjects: [NearbyProject],
+        coInstalledWithin1h: [String],
+        coInstalledWithin1hTotalCount: Int? = nil,
+        overallConfidence: Confidence,
+        collectedAt: Date
+    ) {
+        self.packageId = packageId
+        self.fsInstallTime = fsInstallTime
+        self.fsInstallTimeSource = fsInstallTimeSource
+        self.installCommand = installCommand
+        self.claudeCodeContext = claudeCodeContext
+        self.nearbyProjects = nearbyProjects
+        self.coInstalledWithin1h = coInstalledWithin1h
+        self.coInstalledWithin1hTotalCount = coInstalledWithin1hTotalCount
+        self.overallConfidence = overallConfidence
+        self.collectedAt = collectedAt
+    }
 }
 
 // MARK: - Nested types
@@ -62,6 +92,13 @@ extension ProvenanceEvidence {
         public let shell: Shell
         /// Working directory at the time, if recoverable from history format.
         public let cwd: String?
+
+        public init(timestamp: Date?, command: String, shell: Shell, cwd: String?) {
+            self.timestamp = timestamp
+            self.command = command
+            self.shell = shell
+            self.cwd = cwd
+        }
     }
 
     /// Context extracted from a Claude Code session log that triggered the install.
@@ -77,6 +114,22 @@ extension ProvenanceEvidence {
         /// When the Bash invocation ran. `nil` when the JSONL timestamp field is
         /// absent or malformed — emitting nil is preferred over the epoch fallback.
         public let timestamp: Date?
+
+        public init(
+            sessionId: String,
+            projectPath: String,
+            sessionSummary: String?,
+            firstUserMessage: String?,
+            bashInvocation: String,
+            timestamp: Date?
+        ) {
+            self.sessionId = sessionId
+            self.projectPath = projectPath
+            self.sessionSummary = sessionSummary
+            self.firstUserMessage = firstUserMessage
+            self.bashInvocation = bashInvocation
+            self.timestamp = timestamp
+        }
     }
 
     /// A nearby project that was being actively modified around the install time.
@@ -84,6 +137,12 @@ extension ProvenanceEvidence {
         public let path: String
         public let modifiedFileCount: Int
         public let gitCommitsThatDay: Int
+
+        public init(path: String, modifiedFileCount: Int, gitCommitsThatDay: Int) {
+            self.path = path
+            self.modifiedFileCount = modifiedFileCount
+            self.gitCommitsThatDay = gitCommitsThatDay
+        }
     }
 }
 
@@ -112,14 +171,20 @@ extension ProvenanceEvidence: FetchableRecord, PersistableRecord {
         guard let data = payloadJSON.data(using: .utf8) else {
             throw DatabaseError(message: "provenance_evidence.payload is not valid UTF-8")
         }
-        self = try provenanceDecoder.decode(ProvenanceEvidence.self, from: data)
+        let decoded = try provenanceDecoder.decode(ProvenanceEvidence.self, from: data)
+        // Protect presentation paths when opening evidence written by versions
+        // predating the centralized redaction boundary.
+        self = ProvenanceRedactor().redact(decoded)
     }
 
     public func encode(to container: inout PersistenceContainer) throws {
-        container["package_id"] = packageId
-        let data = try provenanceEncoder.encode(self)
+        // Persist only the redacted form even when callers bypass ProvenanceDAO
+        // and save the record through GRDB directly.
+        let safeEvidence = ProvenanceRedactor().redact(self)
+        container["package_id"] = safeEvidence.packageId
+        let data = try provenanceEncoder.encode(safeEvidence)
         container["payload"] = String(data: data, encoding: .utf8)
-        container["collected_at"] = collectedAt.timeIntervalSince1970
-        container["overall_confidence"] = overallConfidence.rawValue
+        container["collected_at"] = safeEvidence.collectedAt.timeIntervalSince1970
+        container["overall_confidence"] = safeEvidence.overallConfidence.rawValue
     }
 }

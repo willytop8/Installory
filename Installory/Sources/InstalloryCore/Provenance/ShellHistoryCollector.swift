@@ -25,14 +25,31 @@ public struct ShellHistoryCollector: Sendable {
         let detector = InstallCommandDetector()
         var records: [ProvenanceEvidence.InstallCommandRecord] = []
 
+        func appendBounded(_ additions: [ProvenanceEvidence.InstallCommandRecord]) {
+            let remaining = maximumShellHistoryRecords - records.count
+            guard remaining > 0 else { return }
+            records.append(contentsOf: additions.prefix(remaining))
+        }
+
         let zshURL = homeDirectory.appendingPathComponent(".zsh_history")
-        if let data = try? directoryAccess.data(contentsOf: zshURL) {
-            records += parseZshHistory(data, detector: detector)
+        if !Task.isCancelled,
+           let data = try? directoryAccess.data(
+               contentsOf: zshURL,
+               maximumBytes: maximumShellHistoryBytes,
+               from: .suffix
+           ) {
+            appendBounded(parseZshHistory(data, detector: detector))
         }
 
         let bashURL = homeDirectory.appendingPathComponent(".bash_history")
-        if let data = try? directoryAccess.data(contentsOf: bashURL) {
-            records += parseBashHistory(data, detector: detector)
+        if !Task.isCancelled,
+           records.count < maximumShellHistoryRecords,
+           let data = try? directoryAccess.data(
+               contentsOf: bashURL,
+               maximumBytes: maximumShellHistoryBytes,
+               from: .suffix
+           ) {
+            appendBounded(parseBashHistory(data, detector: detector))
         }
 
         let fishURL = homeDirectory
@@ -40,8 +57,14 @@ public struct ShellHistoryCollector: Sendable {
             .appendingPathComponent("share")
             .appendingPathComponent("fish")
             .appendingPathComponent("fish_history")
-        if let data = try? directoryAccess.data(contentsOf: fishURL) {
-            records += parseFishHistory(data, detector: detector)
+        if !Task.isCancelled,
+           records.count < maximumShellHistoryRecords,
+           let data = try? directoryAccess.data(
+               contentsOf: fishURL,
+               maximumBytes: maximumShellHistoryBytes,
+               from: .suffix
+           ) {
+            appendBounded(parseFishHistory(data, detector: detector))
         }
 
         return records
@@ -53,15 +76,19 @@ public struct ShellHistoryCollector: Sendable {
         _ data: Data,
         detector: InstallCommandDetector
     ) -> [ProvenanceEvidence.InstallCommandRecord] {
-        guard let text = String(data: data, encoding: .utf8) else { return [] }
-        return text.components(separatedBy: .newlines).compactMap { rawLine in
+        var records: [ProvenanceEvidence.InstallCommandRecord] = []
+        UTF8LineReader.forEachLine(in: data) { rawLine in
+            guard records.count < maximumShellHistoryRecords else { return false }
             let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard !line.isEmpty else { return nil }
+            guard !line.isEmpty else { return true }
             let (command, timestamp) = zshLineComponents(line)
-            guard !detector.detect(command).isEmpty else { return nil }
-            return ProvenanceEvidence.InstallCommandRecord(
-                timestamp: timestamp, command: command, shell: .zsh, cwd: nil)
+            guard !detector.detect(command).isEmpty else { return true }
+            records.append(ProvenanceEvidence.InstallCommandRecord(
+                timestamp: timestamp, command: command, shell: .zsh, cwd: nil
+            ))
+            return true
         }
+        return records
     }
 
     /// Decomposes one zsh history line into its command string and optional timestamp.
@@ -87,13 +114,13 @@ public struct ShellHistoryCollector: Sendable {
         _ data: Data,
         detector: InstallCommandDetector
     ) -> [ProvenanceEvidence.InstallCommandRecord] {
-        guard let text = String(data: data, encoding: .utf8) else { return [] }
         var records: [ProvenanceEvidence.InstallCommandRecord] = []
         var pendingTimestamp: Date? = nil
 
-        for rawLine in text.components(separatedBy: .newlines) {
+        UTF8LineReader.forEachLine(in: data) { rawLine in
+            guard records.count < maximumShellHistoryRecords else { return false }
             let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard !line.isEmpty else { continue }
+            guard !line.isEmpty else { return true }
 
             if line.hasPrefix("#") {
                 let digits = String(line.dropFirst())
@@ -102,15 +129,16 @@ public struct ShellHistoryCollector: Sendable {
                     pendingTimestamp = Date(timeIntervalSince1970: ts)
                 }
                 // Non-numeric comment lines are ignored; they do not clear a pending timestamp.
-                continue
+                return true
             }
 
             let timestamp = pendingTimestamp
             pendingTimestamp = nil
 
-            guard !detector.detect(line).isEmpty else { continue }
+            guard !detector.detect(line).isEmpty else { return true }
             records.append(ProvenanceEvidence.InstallCommandRecord(
                 timestamp: timestamp, command: line, shell: .bash, cwd: nil))
+            return true
         }
 
         return records
@@ -120,12 +148,12 @@ public struct ShellHistoryCollector: Sendable {
         _ data: Data,
         detector: InstallCommandDetector
     ) -> [ProvenanceEvidence.InstallCommandRecord] {
-        guard let text = String(data: data, encoding: .utf8) else { return [] }
         var records: [ProvenanceEvidence.InstallCommandRecord] = []
         var pendingCmd: String? = nil
         var pendingWhen: Date? = nil
 
-        for line in text.components(separatedBy: .newlines) {
+        UTF8LineReader.forEachLine(in: data) { line in
+            guard records.count < maximumShellHistoryRecords else { return false }
             if line.hasPrefix("- cmd: ") {
                 // Flush the previous entry before starting a new one.
                 if let cmd = pendingCmd, !detector.detect(cmd).isEmpty {
@@ -142,10 +170,14 @@ public struct ShellHistoryCollector: Sendable {
                 }
             }
             // Other keys (paths:, etc.) are intentionally ignored.
+            return true
         }
 
         // Flush the final entry.
-        if let cmd = pendingCmd, !detector.detect(cmd).isEmpty {
+        if !Task.isCancelled,
+           records.count < maximumShellHistoryRecords,
+           let cmd = pendingCmd,
+           !detector.detect(cmd).isEmpty {
             records.append(ProvenanceEvidence.InstallCommandRecord(
                 timestamp: pendingWhen, command: cmd, shell: .fish, cwd: nil))
         }
@@ -153,3 +185,6 @@ public struct ShellHistoryCollector: Sendable {
         return records
     }
 }
+
+private let maximumShellHistoryBytes = 8 * 1_024 * 1_024
+private let maximumShellHistoryRecords = 50_000

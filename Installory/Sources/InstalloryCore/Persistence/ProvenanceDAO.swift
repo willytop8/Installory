@@ -4,8 +4,9 @@ import GRDB
 /// Reads and writes ``ProvenanceEvidence`` rows in the `provenance_evidence` table.
 ///
 /// **FK prerequisite:** `provenance_evidence.package_id` has a
-/// `FOREIGN KEY … REFERENCES packages(id)` constraint. Call ``upsert(_:)`` only
-/// after the corresponding ``Package`` row has been persisted. Phase 5's app shell
+/// `FOREIGN KEY … REFERENCES packages(id)` constraint. Call ``upsert(_:)`` or
+/// ``upsertAll(_:)`` only
+/// after the corresponding ``Package`` row has been persisted. The app shell
 /// sequences this correctly: scan → persist packages → collect provenance →
 /// persist evidence. The FK violation is the runtime signal for a mis-sequenced call.
 public actor ProvenanceDAO {
@@ -22,8 +23,22 @@ public actor ProvenanceDAO {
     ///
     /// - Precondition: the `packages` row for `evidence.packageId` must exist.
     public func upsert(_ evidence: ProvenanceEvidence) throws {
+        try upsertAll([evidence])
+    }
+
+    /// Inserts or updates a batch of evidence in one transaction.
+    ///
+    /// The operation is atomic: if any evidence fails to persist (including a
+    /// foreign-key violation), none of the batch is committed. Input order is
+    /// preserved, so when the batch repeats a package ID, the final occurrence
+    /// supplies the stored values.
+    ///
+    /// - Precondition: a `packages` row must exist for every evidence package ID.
+    public func upsertAll(_ evidenceList: [ProvenanceEvidence]) throws {
         try database.pool.write { db in
-            try evidence.save(db)
+            for evidence in evidenceList {
+                try evidence.save(db)
+            }
         }
     }
 
@@ -31,6 +46,19 @@ public actor ProvenanceDAO {
     public func fetch(packageId: String) throws -> ProvenanceEvidence? {
         try database.pool.read { db in
             try ProvenanceEvidence.fetchOne(db, key: packageId)
+        }
+    }
+
+    /// Returns all persisted evidence ordered by package ID.
+    ///
+    /// The explicit ordering keeps startup cache hydration and tests
+    /// deterministic instead of depending on SQLite's table traversal order.
+    public func fetchAll() throws -> [ProvenanceEvidence] {
+        try database.pool.read { db in
+            try ProvenanceEvidence.fetchAll(
+                db,
+                sql: "SELECT * FROM provenance_evidence ORDER BY package_id"
+            )
         }
     }
 

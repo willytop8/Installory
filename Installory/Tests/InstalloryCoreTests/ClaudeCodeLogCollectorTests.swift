@@ -4,38 +4,46 @@ import Foundation
 
 @Suite("ClaudeCodeLogCollector")
 struct ClaudeCodeLogCollectorTests {
-    private static let fixtureDir = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/claude-code")
-
     private let home = URL(fileURLWithPath: "/fake-home")
     private let podcastDir = URL(fileURLWithPath: "/fake-home/.claude/projects/-Users-will-projects-podcast-app")
     private let myAppDir   = URL(fileURLWithPath: "/fake-home/.claude/projects/-Users-will-projects-my-app")
 
     private func fixtureData(_ relativePath: String) throws -> Data {
-        let url = Self.fixtureDir.appendingPathComponent(relativePath)
-        return try Data(contentsOf: url)
+        try FixtureResource.data("claude-code/\(relativePath)")
     }
 
     private func makeProvider() throws -> InMemoryDirectoryAccessProvider {
-        try InMemoryDirectoryAccessProvider.make { builder in
+        let sessionIndex = try fixtureData(
+            "projects/-Users-will-projects-podcast-app/sessions-index.json"
+        )
+        let firstPodcastSession = try fixtureData(
+            "projects/-Users-will-projects-podcast-app/abc-111-uuid.jsonl"
+        )
+        let secondPodcastSession = try fixtureData(
+            "projects/-Users-will-projects-podcast-app/def-222-uuid.jsonl"
+        )
+        let myAppSession = try fixtureData(
+            "projects/-Users-will-projects-my-app/ghi-333-uuid.jsonl"
+        )
+
+        return InMemoryDirectoryAccessProvider.make { builder in
             // podcast-app: sessions-index.json + two session files
             builder.addFile(
                 at: podcastDir.appendingPathComponent("sessions-index.json"),
-                data: try fixtureData("projects/-Users-will-projects-podcast-app/sessions-index.json")
+                data: sessionIndex
             )
             builder.addFile(
                 at: podcastDir.appendingPathComponent("abc-111-uuid.jsonl"),
-                data: try fixtureData("projects/-Users-will-projects-podcast-app/abc-111-uuid.jsonl")
+                data: firstPodcastSession
             )
             builder.addFile(
                 at: podcastDir.appendingPathComponent("def-222-uuid.jsonl"),
-                data: try fixtureData("projects/-Users-will-projects-podcast-app/def-222-uuid.jsonl")
+                data: secondPodcastSession
             )
             // my-app: no sessions-index.json; directory name is ambiguous (-Users-will-projects-my-app)
             builder.addFile(
                 at: myAppDir.appendingPathComponent("ghi-333-uuid.jsonl"),
-                data: try fixtureData("projects/-Users-will-projects-my-app/ghi-333-uuid.jsonl")
+                data: myAppSession
             )
         }
     }
@@ -177,6 +185,56 @@ struct ClaudeCodeLogCollectorTests {
         let records = ClaudeCodeLogCollector(directoryAccess: provider, homeDirectory: home).collect()
         // abc-111-uuid.jsonl has one invalid-JSON line; openai-whisper install still detected
         #expect(records.contains { $0.packageName == "openai-whisper" })
+    }
+
+    @Test("CORE25-013: invalid UTF-8 discards only its Claude JSONL line")
+    func invalidUTF8DiscardsOnlyCorruptLine() {
+        let userLine = #"{"sessionId":"utf8-test","timestamp":"2025-01-01T11:00:00.000Z","cwd":"/tmp","message":{"role":"user","content":"install my tools"}}"#
+        let installLine = #"{"sessionId":"utf8-test","timestamp":"2025-01-01T11:01:00.000Z","cwd":"/tmp","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"brew install wget"}}]}}"#
+        var jsonl = Data(userLine.utf8)
+        jsonl.append(contentsOf: [0x0A, 0xFF, 0x0A])
+        jsonl.append(Data(installLine.utf8))
+
+        let sessionDir = URL(fileURLWithPath: "/fake-home/.claude/projects/-tmp")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: sessionDir.appendingPathComponent("utf8-test.jsonl"),
+                data: jsonl
+            )
+        }
+
+        let records = ClaudeCodeLogCollector(
+            directoryAccess: provider,
+            homeDirectory: home
+        ).collect()
+
+        #expect(records.count == 1)
+        #expect(records.first?.packageName == "wget")
+        #expect(records.first?.context.firstUserMessage == "install my tools")
+    }
+
+    @Test("PERF25-005: oversized session is rejected before loading its bytes")
+    func oversizedSessionIsNotLoaded() {
+        let sessionDir = URL(fileURLWithPath: "/fake-home/.claude/projects/-tmp")
+        let sessionURL = sessionDir.appendingPathComponent("oversized.jsonl")
+        let base = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: sessionURL,
+                data: Data("{}\n".utf8),
+                logicalSizeBytes: 100 * 1_024 * 1_024
+            )
+        }
+        let trace = DirectoryAccessTrace()
+        let provider = TracingDirectoryAccessProvider(base: base, trace: trace)
+
+        let records = ClaudeCodeLogCollector(
+            directoryAccess: provider,
+            homeDirectory: home
+        ).collect()
+
+        #expect(records.isEmpty)
+        #expect(trace.entries.contains { $0.operation == .metadata && $0.url == sessionURL })
+        #expect(!trace.entries.contains { $0.operation == .data && $0.url == sessionURL })
     }
 
     @Test("missing ~/.claude/projects yields empty result without crashing")

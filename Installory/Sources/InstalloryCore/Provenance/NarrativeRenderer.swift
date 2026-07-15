@@ -38,17 +38,26 @@ public struct NarrativeRenderer: Sendable {
         package: Package,
         nameByPackageId: [String: String] = [:]
     ) -> String {
+        // Defense in depth for evidence created by older app versions or callers
+        // that construct model values directly instead of using the collector.
+        let evidence = ProvenanceRedactor().redact(evidence)
         let coNames = evidence.coInstalledWithin1h
             .map { displayName(for: $0, in: nameByPackageId) }
+        let coInstalledTotal = evidence.coInstalledWithin1hTotalCount ?? coNames.count
 
         if let context = evidence.claudeCodeContext {
-            return renderClaudeCode(context: context, coInstalled: coNames)
+            return renderClaudeCode(context: context, coInstalled: coNames, totalCount: coInstalledTotal)
         }
         if let command = evidence.installCommand {
-            return renderShell(command: command, fsDate: evidence.fsInstallTime, coInstalled: coNames)
+            return renderShell(
+                command: command,
+                fsDate: evidence.fsInstallTime,
+                coInstalled: coNames,
+                totalCount: coInstalledTotal
+            )
         }
         if let date = evidence.fsInstallTime {
-            return renderFsOnly(date: date, coInstalled: coNames)
+            return renderFsOnly(date: date, coInstalled: coNames, totalCount: coInstalledTotal)
         }
         return "We don't have a recorded install date for this package."
     }
@@ -57,7 +66,8 @@ public struct NarrativeRenderer: Sendable {
 
     private func renderClaudeCode(
         context: ProvenanceEvidence.ClaudeCodeContext,
-        coInstalled: [String]
+        coInstalled: [String],
+        totalCount: Int
     ) -> String {
         let dateStr = context.timestamp.map { formatDate($0) } ?? "an unknown date"
         let summary: String
@@ -68,22 +78,23 @@ public struct NarrativeRenderer: Sendable {
         } else {
             summary = ""
         }
-        return "Installed \(dateStr) while working in \(context.projectPath).\(summary)\(coInstalledClause(coInstalled))"
+        return "Installed \(dateStr) while working in \(context.projectPath).\(summary)\(coInstalledClause(coInstalled, totalCount: totalCount))"
     }
 
     private func renderShell(
         command: ProvenanceEvidence.InstallCommandRecord,
         fsDate: Date?,
-        coInstalled: [String]
+        coInstalled: [String],
+        totalCount: Int
     ) -> String {
         // Prefer the command's own timestamp; fall back to the filesystem date.
         let date = command.timestamp ?? fsDate
         let dateStr = date.map { formatDate($0) } ?? "an unknown date"
-        return "Installed \(dateStr) via `\(command.command)` in your terminal.\(coInstalledClause(coInstalled))"
+        return "Installed \(dateStr) via `\(command.command)` in your terminal.\(coInstalledClause(coInstalled, totalCount: totalCount))"
     }
 
-    private func renderFsOnly(date: Date, coInstalled: [String]) -> String {
-        "Installed \(formatDate(date)) (based on file timestamp; we don't have a matching install command in your history).\(coInstalledClause(coInstalled))"
+    private func renderFsOnly(date: Date, coInstalled: [String], totalCount: Int) -> String {
+        "Installed \(formatDate(date)) (based on file timestamp; we don't have a matching install command in your history).\(coInstalledClause(coInstalled, totalCount: totalCount))"
     }
 
     // MARK: - Date formatting
@@ -106,9 +117,11 @@ public struct NarrativeRenderer: Sendable {
 
     // MARK: - Co-installed clause
 
-    private func coInstalledClause(_ names: [String]) -> String {
+    private func coInstalledClause(_ names: [String], totalCount: Int) -> String {
         guard !names.isEmpty else { return "" }
-        return " You also installed \(joinedList(names)) around the same time."
+        let omittedCount = max(0, totalCount - names.count)
+        let omittedClause = omittedCount > 0 ? " and \(omittedCount) more" : ""
+        return " You also installed \(joinedList(names))\(omittedClause) around the same time."
     }
 
     private func joinedList(_ names: [String]) -> String {

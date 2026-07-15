@@ -191,6 +191,7 @@ struct ProvenanceEvidenceTests {
                 )
             ],
             coInstalledWithin1h: ["brew::x264", "brew::x265"],
+            coInstalledWithin1hTotalCount: 12,
             overallConfidence: .high,
             collectedAt: Date(timeIntervalSince1970: 1_710_000_000)
         )
@@ -207,6 +208,20 @@ struct ProvenanceEvidenceTests {
         #expect(decoded.installCommand?.shell == original.installCommand?.shell)
         #expect(decoded.claudeCodeContext?.sessionId == original.claudeCodeContext?.sessionId)
         #expect(decoded.coInstalledWithin1h == original.coInstalledWithin1h)
+        #expect(decoded.coInstalledWithin1hTotalCount == 12)
+    }
+
+    @Test("decoding legacy evidence without a co-installed total remains compatible")
+    func legacyPayloadWithoutCoInstalledTotal() throws {
+        let original = makeEvidence()
+        let encoded = try Self.encoder.encode(original)
+        var payload = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        payload.removeValue(forKey: "coInstalledWithin1hTotalCount")
+        let legacyData = try JSONSerialization.data(withJSONObject: payload)
+
+        let decoded = try Self.decoder.decode(ProvenanceEvidence.self, from: legacyData)
+        #expect(decoded.coInstalledWithin1h == ["brew::x264", "brew::x265"])
+        #expect(decoded.coInstalledWithin1hTotalCount == nil)
     }
 
     @Test("Codable round-trip with nil optional signals")

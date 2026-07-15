@@ -55,6 +55,14 @@ struct InstallCommandDetectorTests {
         #expect(results[0].name == "ffmpeg")
     }
 
+    @Test("CORE25-017: tap-qualified Homebrew targets match their installed name")
+    func brewTapQualifiedName() {
+        let results = detector.detect("brew install owner/tools/custom-formula")
+
+        #expect(results.map(\.name) == ["custom-formula"])
+        #expect(results.allSatisfy { $0.manager == .brew })
+    }
+
     // MARK: - pip / pip3 / python -m pip / uv
 
     @Test("pip install detects .pip package")
@@ -87,6 +95,28 @@ struct InstallCommandDetectorTests {
         #expect(results.count == 1)
         #expect(results[0].name == "scipy")
         #expect(results[0].manager == .pip)
+    }
+
+    @Test("CORE25-011: versioned Python interpreter detects pip installs")
+    func versionedPythonMPipInstall() {
+        let results = detector.detect("python3.12 -m pip install httpx")
+        #expect(results.count == 1)
+        #expect(results[0].name == "httpx")
+        #expect(results[0].manager == .pip)
+    }
+
+    @Test("CORE25-011: absolute Python interpreter detects pip installs")
+    func absolutePythonMPipInstall() {
+        let results = detector.detect("/opt/homebrew/bin/python3.11 -m pip install rich")
+        #expect(results.count == 1)
+        #expect(results[0].name == "rich")
+        #expect(results[0].manager == .pip)
+    }
+
+    @Test("CORE25-011: Python executable lookalikes are rejected")
+    func pythonExecutableLookalikesRejected() {
+        #expect(detector.detect("python3.12-config -m pip install not-a-package").isEmpty)
+        #expect(detector.detect("python3.12m -m pip install not-a-package").isEmpty)
     }
 
     @Test("uv pip install detects .pip package")
@@ -139,6 +169,15 @@ struct InstallCommandDetectorTests {
         #expect(results.allSatisfy { $0.manager == .pip })
     }
 
+    @Test("CORE25-011: pip option values are not treated as packages")
+    func pipOptionValuesSkipped() {
+        let results = detector.detect(
+            "python3.12 -m pip install --python-version 3.12 --index-url index.example requests"
+        )
+        #expect(results.map(\.name) == ["requests"])
+        #expect(results.allSatisfy { $0.manager == .pip })
+    }
+
     // MARK: - pipx
 
     @Test("pipx install detects .pipx package")
@@ -147,6 +186,13 @@ struct InstallCommandDetectorTests {
         #expect(results.count == 1)
         #expect(results[0].name == "black")
         #expect(results[0].manager == .pipx)
+    }
+
+    @Test("CORE25-011: pipx interpreter option value is not treated as a package")
+    func pipxOptionValueSkipped() {
+        let results = detector.detect("pipx install --python python3.12 black")
+        #expect(results.map(\.name) == ["black"])
+        #expect(results.allSatisfy { $0.manager == .pipx })
     }
 
     // MARK: - npm / yarn
@@ -167,11 +213,45 @@ struct InstallCommandDetectorTests {
         #expect(results[0].manager == .npm)
     }
 
+    @Test("CORE25-011: npm global flag after the package is detected")
+    func npmGlobalFlagAfterPackage() {
+        let results = detector.detect("npm install typescript --global")
+        #expect(results.map(\.name) == ["typescript"])
+        #expect(results.allSatisfy { $0.manager == .npm })
+    }
+
+    @Test("CORE25-011: npm option values before a later global flag are skipped")
+    func npmOptionValueBeforeLaterGlobalFlag() {
+        let results = detector.detect("npm i prettier --tag next -g")
+        #expect(results.map(\.name) == ["prettier"])
+        #expect(results.allSatisfy { $0.manager == .npm })
+    }
+
+    @Test("CORE25-011: npm option values after an earlier global flag are skipped")
+    func npmOptionValueAfterEarlierGlobalFlag() {
+        let results = detector.detect("npm install -g --tag next prettier")
+        #expect(results.map(\.name) == ["prettier"])
+        #expect(results.allSatisfy { $0.manager == .npm })
+    }
+
+    @Test("CORE25-011: npm global text after option terminator is not a global install")
+    func npmGlobalAfterOptionTerminatorRejected() {
+        #expect(detector.detect("npm install typescript -- --global").isEmpty)
+    }
+
     @Test("npm install -g missing -g flag produces no records")
     func npmInstallWithoutGFlag() {
         // `npm install typescript` is a local install, not global — should not be detected.
         let results = detector.detect("npm install typescript")
         #expect(results.isEmpty)
+    }
+
+    @Test("CORE25-017: scoped npm targets strip only their trailing version")
+    func npmScopedVersion() {
+        let results = detector.detect("npm install --global @scope/tool@2.1.0 plain@next")
+
+        #expect(results.map(\.name) == ["@scope/tool", "plain"])
+        #expect(results.allSatisfy { $0.manager == .npm })
     }
 
     @Test("yarn global add detects .npm package")
@@ -192,6 +272,13 @@ struct InstallCommandDetectorTests {
         #expect(results[0].manager == .cargo)
     }
 
+    @Test("CORE25-011: Cargo option values are not treated as packages")
+    func cargoOptionValueSkipped() {
+        let results = detector.detect("cargo install ripgrep --version 14.1.1")
+        #expect(results.map(\.name) == ["ripgrep"])
+        #expect(results.allSatisfy { $0.manager == .cargo })
+    }
+
     @Test("gem install detects .gem package")
     func gemInstall() {
         let results = detector.detect("gem install bundler")
@@ -200,12 +287,61 @@ struct InstallCommandDetectorTests {
         #expect(results[0].manager == .gem)
     }
 
+    @Test("CORE25-011: RubyGems option values are not treated as packages")
+    func gemOptionValueSkipped() {
+        let results = detector.detect("gem install rails --version 7.2.0")
+        #expect(results.map(\.name) == ["rails"])
+        #expect(results.allSatisfy { $0.manager == .gem })
+    }
+
     @Test("mas install detects .mas package")
     func masInstall() {
         let results = detector.detect("mas install 497799835")
         #expect(results.count == 1)
         #expect(results[0].name == "497799835")
         #expect(results[0].manager == .mas)
+    }
+
+    // MARK: - Shell command chains and conservative parsing
+
+    @Test("CORE25-011: quoted literal package requirements are parsed")
+    func quotedLiteralPackageRequirement() {
+        let singleQuoted = detector.detect("pip install 'requests>=2'")
+        let doubleQuoted = detector.detect("pip install \"httpx==0.28\"")
+        #expect(singleQuoted.map(\.name) == ["requests"])
+        #expect(doubleQuoted.map(\.name) == ["httpx"])
+    }
+
+    @Test("CORE25-011: shell command chains detect each install invocation")
+    func shellCommandChains() {
+        let results = detector.detect(
+            "cd ~/src && brew install ffmpeg; npm install typescript --global | tee installs.log"
+        )
+        #expect(results.map(\.name) == ["ffmpeg", "typescript"])
+        #expect(results.map(\.manager) == [.brew, .npm])
+    }
+
+    @Test("CORE25-011: quoted command text is not parsed as an invocation")
+    func quotedCommandTextRejected() {
+        #expect(detector.detect("echo \"brew install ffmpeg && npm install evil --global\"").isEmpty)
+    }
+
+    @Test("CORE25-011: shell comments cannot introduce a synthetic command chain")
+    func commentedCommandTextRejected() {
+        #expect(detector.detect("echo complete # ; brew install not-executed").isEmpty)
+    }
+
+    @Test("CORE25-011: unterminated quoting rejects the whole command")
+    func unterminatedQuotingRejected() {
+        #expect(detector.detect("brew install ffmpeg; npm install \"evil --global").isEmpty)
+    }
+
+    @Test("CORE25-011: dynamic shell expressions are not package names")
+    func dynamicShellExpressionsRejected() {
+        #expect(detector.detect("brew install $(printf attacker-controlled)").isEmpty)
+        #expect(detector.detect("brew install $(printf foo; echo bar)").isEmpty)
+        #expect(detector.detect("brew install \"$(printf attacker-controlled)\"").isEmpty)
+        #expect(detector.detect("npm install --global $PACKAGE").isEmpty)
     }
 
     // MARK: - Non-install commands produce no records
@@ -296,4 +432,3 @@ struct InstallCommandDetectorTests {
         #expect(detector.detect("npm ls --global").isEmpty)
     }
 }
-

@@ -14,18 +14,20 @@ struct ProvenanceCollectorTests {
     private func makePackage(
         _ name: String,
         manager: PackageManager = .brew,
+        qualifier: String? = nil,
         installedAt: Date? = nil
     ) -> Package {
+        let effectiveQualifier = qualifier ?? (manager == .pip ? "/usr/bin/python3" : nil)
         let qualifiedId: String
         if manager == .pip {
-            qualifiedId = "pip::/usr/bin/python3:\(name)"
+            qualifiedId = "pip:\(effectiveQualifier ?? ""):\(name)"
         } else {
             qualifiedId = "\(manager.rawValue)::\(name)"
         }
         return Package(
             id: qualifiedId,
             manager: manager,
-            qualifier: manager == .pip ? "/usr/bin/python3" : nil,
+            qualifier: effectiveQualifier,
             name: name,
             version: "1.0.0",
             installPath: nil,
@@ -117,6 +119,25 @@ struct ProvenanceCollectorTests {
         )
     }
 
+    @Test("PERF25-005: a cancelled aggregate collection publishes no partial evidence")
+    func cancelledCollectionReturnsNoEvidence() async {
+        let packages = (0..<5_000).map { index in
+            makePackage("package-\(index)", installedAt: t0)
+        }
+        let collector = ProvenanceCollector(
+            shellCollector: emptyShell(),
+            claudeCodeCollector: emptyClaude()
+        )
+        let task = Task.detached {
+            do { try await Task.sleep(for: .milliseconds(50)) } catch {}
+            return collector.collect(packages: packages)
+        }
+
+        task.cancel()
+
+        #expect(await task.value.isEmpty)
+    }
+
     // MARK: - Confidence
 
     @Test("Claude Code match within ±1h sets .high confidence and populates claudeCodeContext")
@@ -177,7 +198,7 @@ struct ProvenanceCollectorTests {
 
     // MARK: - coInstalledWithin1h
 
-    @Test("coInstalledWithin1h contains other packages within ±1h, sorted, no self-reference")
+    @Test("coInstalledWithin1h contains other packages within ±1h with no self-reference")
     func coInstalledWindow() {
         let ffmpeg  = makePackage("ffmpeg",  installedAt: t0)
         let libpng  = makePackage("libpng",  installedAt: t0.addingTimeInterval(1800))  // within window
@@ -189,8 +210,25 @@ struct ProvenanceCollectorTests {
 
         let ffmpegEvidence = results.first { $0.packageId == "brew::ffmpeg" }!
         #expect(ffmpegEvidence.coInstalledWithin1h == ["brew::libpng"])
+        #expect(ffmpegEvidence.coInstalledWithin1hTotalCount == 1)
         #expect(!ffmpegEvidence.coInstalledWithin1h.contains("brew::ffmpeg"))
         #expect(!ffmpegEvidence.coInstalledWithin1h.contains("brew::openssl"))
+    }
+
+    @Test("dense co-install windows persist a bounded sample and the full count")
+    func denseCoInstalledWindowIsBounded() {
+        let packages = (0..<5_000).map { index in
+            makePackage("package-\(index)", installedAt: t0)
+        }
+        let results = ProvenanceCollector(
+            shellCollector: emptyShell(),
+            claudeCodeCollector: emptyClaude()
+        ).collect(packages: packages)
+
+        #expect(results.count == packages.count)
+        #expect(results.allSatisfy { $0.coInstalledWithin1h.count == 20 })
+        #expect(results.allSatisfy { $0.coInstalledWithin1hTotalCount == 4_999 })
+        #expect(results.allSatisfy { !$0.coInstalledWithin1h.contains($0.packageId) })
     }
 
     // MARK: - Key isolation
@@ -203,6 +241,98 @@ struct ProvenanceCollectorTests {
             claudeCodeCollector: emptyClaude()
         ).collect(packages: [pipPkg])
         #expect(results[0].installCommand == nil)
+    }
+
+    @Test("CORE25-008: qualified Python commands disambiguate pip provenance by interpreter")
+    func qualifiedPythonCommandDisambiguatesPipScopes() {
+        let python311 = "/opt/homebrew/bin/python3.11"
+        let python312 = "/opt/homebrew/bin/python3.12"
+        let packages = [
+            makePackage("httpx", manager: .pip, qualifier: python311, installedAt: t0),
+            makePackage("httpx", manager: .pip, qualifier: python312, installedAt: t0),
+        ]
+
+        let results = ProvenanceCollector(
+            shellCollector: shellCollector(commands: [
+                ("/opt/homebrew/bin/python3.11 -m pip install httpx", 60),
+            ]),
+            claudeCodeCollector: emptyClaude()
+        ).collect(packages: packages)
+
+        let byPackage = Dictionary(uniqueKeysWithValues: results.map { ($0.packageId, $0) })
+        #expect(byPackage["pip:\(python311):httpx"]?.installCommand != nil)
+        #expect(byPackage["pip:\(python312):httpx"]?.installCommand == nil)
+    }
+
+    @Test("CORE25-008: versioned Python commands disambiguate Claude provenance")
+    func versionedPythonCommandDisambiguatesClaudeScopes() {
+        let python311 = "/opt/homebrew/bin/python3.11"
+        let python312 = "/opt/homebrew/bin/python3.12"
+        let packages = [
+            makePackage("rich", manager: .pip, qualifier: python311, installedAt: t0),
+            makePackage("rich", manager: .pip, qualifier: python312, installedAt: t0),
+        ]
+
+        let results = ProvenanceCollector(
+            shellCollector: emptyShell(),
+            claudeCodeCollector: claudeCollector(
+                command: "python3.11 -m pip install rich",
+                offset: 60
+            )
+        ).collect(packages: packages)
+
+        let byPackage = Dictionary(uniqueKeysWithValues: results.map { ($0.packageId, $0) })
+        #expect(byPackage["pip:\(python311):rich"]?.claudeCodeContext != nil)
+        #expect(byPackage["pip:\(python312):rich"]?.claudeCodeContext == nil)
+    }
+
+    @Test("CORE25-008: unqualified evidence remains a fallback outside another qualified scope")
+    func unqualifiedEvidenceIsConservativeFallback() {
+        let python311 = "/opt/homebrew/bin/python3.11"
+        let python312 = "/opt/homebrew/bin/python3.12"
+        let packages = [
+            makePackage("my-package", manager: .pip, qualifier: python311, installedAt: t0),
+            makePackage("my-package", manager: .pip, qualifier: python312, installedAt: t0),
+        ]
+
+        let results = ProvenanceCollector(
+            shellCollector: shellCollector(commands: [
+                ("/opt/homebrew/bin/python3.11 -m pip install my_package", 180),
+                ("pip install my.package", 30),
+            ]),
+            claudeCodeCollector: emptyClaude()
+        ).collect(packages: packages)
+
+        let byPackage = Dictionary(uniqueKeysWithValues: results.map { ($0.packageId, $0) })
+        #expect(
+            byPackage["pip:\(python311):my-package"]?.installCommand?.command
+                == "/opt/homebrew/bin/python3.11 -m pip install my_package"
+        )
+        #expect(
+            byPackage["pip:\(python312):my-package"]?.installCommand?.command
+                == "pip install my.package"
+        )
+    }
+
+    @Test("CORE25-008: stale qualified evidence does not suppress timely unqualified fallback")
+    func unqualifiedEvidenceFallbackAfterStaleQualifiedRecord() {
+        let python311 = "/opt/homebrew/bin/python3.11"
+        let package = makePackage(
+            "httpx",
+            manager: .pip,
+            qualifier: python311,
+            installedAt: t0
+        )
+
+        let results = ProvenanceCollector(
+            shellCollector: shellCollector(commands: [
+                ("/opt/homebrew/bin/python3.11 -m pip install httpx", 7_200),
+                ("pip install httpx", 30),
+            ]),
+            claudeCodeCollector: emptyClaude()
+        ).collect(packages: [package])
+
+        #expect(results[0].installCommand?.command == "pip install httpx")
     }
 
     // MARK: - Nil-timestamp exclusion

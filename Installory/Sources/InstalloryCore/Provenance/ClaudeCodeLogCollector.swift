@@ -21,6 +21,7 @@ public struct ClaudeCodeLogCollector: Sendable {
     /// install command found inside a Bash tool_use, with full session
     /// context attached.
     public func collect() -> [InstalledByClaudeCode] {
+        guard !Task.isCancelled else { return [] }
         let projectsURL = homeDirectory
             .appendingPathComponent(".claude")
             .appendingPathComponent("projects")
@@ -30,8 +31,10 @@ public struct ClaudeCodeLogCollector: Sendable {
         }
 
         var results: [InstalledByClaudeCode] = []
-        for projectDir in projectDirs {
-            results += collectFromProject(projectDir)
+        for projectDir in projectDirs.sorted(by: { $0.path < $1.path }).prefix(maximumClaudeProjects) {
+            guard !Task.isCancelled, results.count < maximumClaudeInstallRecords else { break }
+            let remaining = maximumClaudeInstallRecords - results.count
+            results.append(contentsOf: collectFromProject(projectDir).prefix(remaining))
         }
         return results
     }
@@ -47,29 +50,40 @@ public struct ClaudeCodeLogCollector: Sendable {
 
         let summaries = loadSessionSummaries(from: projectDir)
 
-        let children = (try? directoryAccess.contentsOfDirectory(at: projectDir)) ?? []
+        guard !Task.isCancelled else { return [] }
+        let children = ((try? directoryAccess.contentsOfDirectory(at: projectDir)) ?? [])
+            .filter { $0.pathExtension == "jsonl" }
+            .sorted { $0.path < $1.path }
 
         var results: [InstalledByClaudeCode] = []
-        for fileURL in children where fileURL.pathExtension == "jsonl" {
+        for fileURL in children.prefix(maximumClaudeSessionsPerProject) {
+            guard !Task.isCancelled, results.count < maximumClaudeInstallRecords else { break }
             let sessionId = fileURL.deletingPathExtension().lastPathComponent
-            results += parseSession(
+            let remaining = maximumClaudeInstallRecords - results.count
+            results.append(contentsOf: parseSession(
                 at: fileURL,
                 sessionIdFromFile: sessionId,
                 initialProjectPath: initialProjectPath,
                 sessionSummary: summaries[sessionId]
-            )
+            ).prefix(remaining))
         }
         return results
     }
 
     private func loadSessionSummaries(from projectDir: URL) -> [String: String] {
         let indexURL = projectDir.appendingPathComponent("sessions-index.json")
-        guard let data = try? directoryAccess.data(contentsOf: indexURL),
+        guard !Task.isCancelled,
+              let data = try? directoryAccess.data(
+                  contentsOf: indexURL,
+                  maximumBytes: maximumClaudeIndexBytes,
+                  from: .prefix
+              ),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let sessions = obj["sessions"] as? [[String: Any]] else { return [:] }
 
         var result: [String: String] = [:]
-        for session in sessions {
+        for session in sessions.prefix(maximumClaudeSessionsPerProject) {
+            guard !Task.isCancelled else { break }
             if let id = session["id"] as? String,
                let summary = session["summary"] as? String,
                !summary.isEmpty {
@@ -87,28 +101,31 @@ public struct ClaudeCodeLogCollector: Sendable {
         initialProjectPath: String,
         sessionSummary: String?
     ) -> [InstalledByClaudeCode] {
-        guard let data = try? directoryAccess.data(contentsOf: url),
-              let text = String(data: data, encoding: .utf8) else { return [] }
-
-        let lines = text.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+        guard !Task.isCancelled,
+              let data = try? directoryAccess.data(
+                  contentsOf: url,
+                  maximumBytes: maximumClaudeSessionBytes,
+                  from: .suffix
+              ) else { return [] }
 
         let formatter = makeTimestampFormatter()
 
         // First pass: find the chronologically first user message (sorted by timestamp,
         // not file position — events can arrive out of order in long sessions).
-        let firstUserMessage = findFirstUserMessage(in: lines, formatter: formatter)
+        let firstUserMessage = findFirstUserMessage(in: data, formatter: formatter)
 
         // Second pass: extract Bash tool_use install commands.
         // projectPath is refined in-place from the cwd field as events are processed.
         var projectPath = initialProjectPath
         var results: [InstalledByClaudeCode] = []
 
-        for line in lines {
+        UTF8LineReader.forEachLine(in: data) { rawLine in
+            guard results.count < maximumClaudeInstallRecords else { return false }
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { return true }
             guard let lineData = line.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
-                continue
+                return true
             }
 
             // cwd is the ground-truth project path; override the dashed-name guess.
@@ -118,13 +135,14 @@ public struct ClaudeCodeLogCollector: Sendable {
 
             guard let message = obj["message"] as? [String: Any],
                   message["role"] as? String == "assistant",
-                  let contentArray = message["content"] as? [[String: Any]] else { continue }
+                  let contentArray = message["content"] as? [[String: Any]] else { return true }
 
             let sessionId = obj["sessionId"] as? String ?? sessionIdFromFile
             let tsStr = obj["timestamp"] as? String ?? ""
             let timestamp = formatter.date(from: tsStr)
 
             for block in contentArray {
+                guard results.count < maximumClaudeInstallRecords else { break }
                 guard block["type"] as? String == "tool_use",
                       block["name"] as? String == "Bash",
                       let input = block["input"] as? [String: Any],
@@ -148,8 +166,10 @@ public struct ClaudeCodeLogCollector: Sendable {
                         manager: manager,
                         context: context
                     ))
+                    if results.count == maximumClaudeInstallRecords { break }
                 }
             }
+            return results.count < maximumClaudeInstallRecords
         }
 
         return results
@@ -159,12 +179,14 @@ public struct ClaudeCodeLogCollector: Sendable {
 
     /// Returns the text of the user message with the earliest timestamp in the session.
     ///
-    /// Operates on raw line strings to avoid holding all parsed events in memory simultaneously.
+    /// Walks the bounded data buffer directly to avoid retaining an intermediate
+    /// line array or a second full-file string.
     /// Only user-role events with non-empty text content are considered.
-    private func findFirstUserMessage(in lines: [String], formatter: ISO8601DateFormatter) -> String? {
+    private func findFirstUserMessage(in data: Data, formatter: ISO8601DateFormatter) -> String? {
         var earliest: (ts: TimeInterval, text: String)? = nil
 
-        for line in lines {
+        UTF8LineReader.forEachLine(in: data) { rawLine in
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
             guard let data = line.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let message = obj["message"] as? [String: Any],
@@ -172,12 +194,13 @@ public struct ClaudeCodeLogCollector: Sendable {
                   let tsStr = obj["timestamp"] as? String,
                   let ts = formatter.date(from: tsStr),
                   let text = extractFirstText(from: message["content"]),
-                  !text.isEmpty else { continue }
+                  !text.isEmpty else { return true }
 
             let tsValue = ts.timeIntervalSince1970
             if earliest == nil || tsValue < earliest!.ts {
                 earliest = (ts: tsValue, text: text)
             }
+            return true
         }
 
         return earliest?.text
@@ -208,6 +231,12 @@ public struct ClaudeCodeLogCollector: Sendable {
         return formatter
     }
 }
+
+private let maximumClaudeIndexBytes = 2 * 1_024 * 1_024
+private let maximumClaudeSessionBytes = 16 * 1_024 * 1_024
+private let maximumClaudeProjects = 1_024
+private let maximumClaudeSessionsPerProject = 2_000
+private let maximumClaudeInstallRecords = 50_000
 
 // MARK: - Public types
 
