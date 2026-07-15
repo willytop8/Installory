@@ -28,6 +28,62 @@ struct PipxScannerTests {
         #expect(package.isReadOnly == false)
     }
 
+    @Test("PERF25-011: pipx never reads discarded dist-info ancillary files")
+    func pipxUsesMetadataOnlyParser() async throws {
+        let venv = home.appendingPathComponent(".local/share/pipx/venvs/fixture-tool")
+        let distInfo = venv.appendingPathComponent(
+            "lib/python3.12/site-packages/fixture_tool-2.3.1.dist-info"
+        )
+        let metadata = """
+            Metadata-Version: 2.1
+            Name: fixture-tool
+            Version: 2.3.1
+            Requires-Dist: fixture-dependency (>=1.0)
+            """
+        let base = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: venv.appendingPathComponent("pipx_metadata.json"),
+                data: Data(
+                    #"{"main_package":{"package":"fixture-tool","package_version":"2.3.1"}}"#.utf8
+                )
+            )
+            builder.addFile(
+                at: distInfo.appendingPathComponent("METADATA"),
+                data: Data(metadata.utf8)
+            )
+            builder.addFile(
+                at: distInfo.appendingPathComponent("RECORD"),
+                data: Data("fixture_tool/__init__.py,,\n".utf8)
+            )
+            builder.addFile(
+                at: distInfo.appendingPathComponent("INSTALLER"),
+                data: Data("pip\n".utf8)
+            )
+            builder.addFile(
+                at: distInfo.appendingPathComponent("REQUESTED"),
+                data: Data()
+            )
+        }
+        let trace = DirectoryAccessTrace()
+        let provider = TracingDirectoryAccessProvider(base: base, trace: trace)
+
+        let package = try #require(
+            try await PipxScanner(
+                directoryAccess: provider,
+                homeDirectory: home
+            ).scan().first
+        )
+
+        #expect(package.name == "fixture-tool")
+        #expect(package.dependencies == ["fixture-dependency"])
+        let ancillaryPaths = Set(["RECORD", "INSTALLER", "REQUESTED"].map {
+            distInfo.appendingPathComponent($0).path
+        })
+        #expect(!trace.entries.contains { entry in
+            ancillaryPaths.contains(entry.url.path) && entry.operation != .metadata
+        })
+    }
+
     @Test("falls back to matching the venv directory name")
     func fallsBackToToolDirectoryName() async throws {
         let venv = home.appendingPathComponent(".local/share/pipx/venvs/httpie")

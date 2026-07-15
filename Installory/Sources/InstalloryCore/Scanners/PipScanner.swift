@@ -101,7 +101,14 @@ public struct PipScanner: PackageScanner, Sendable {
         interpreter: PythonInterpreter,
         sizer: inout BoundedDirectorySizer
     ) async throws -> Package? {
-        guard let distInfo = try? parser.parse(directory: distInfoDir) else { return nil }
+        let distInfo: DistInfo
+        do {
+            distInfo = try parser.parse(directory: distInfoDir)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return nil
+        }
         try Task.checkCancellation()
 
         let executablePath = interpreter.executable.path

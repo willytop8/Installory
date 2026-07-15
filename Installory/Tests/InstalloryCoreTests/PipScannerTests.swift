@@ -331,6 +331,71 @@ struct PipScannerTests {
         #expect(package.sizeBytes == 74)
     }
 
+    @Test("PERF25-011: oversized RECORD stays unread and makes pip size unknown")
+    func oversizedRecordIsNotLoaded() async throws {
+        let root = URL(fileURLWithPath: "/.pyenv/versions/3.11.0")
+        let sitePackages = root.appendingPathComponent("lib/python3.11/site-packages")
+        let distInfo = sitePackages.appendingPathComponent("large-record-1.0.0.dist-info")
+        let record = distInfo.appendingPathComponent("RECORD")
+        let base = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: root.appendingPathComponent("bin/python"), data: Data())
+            builder.addFile(
+                at: distInfo.appendingPathComponent("METADATA"),
+                data: Data(
+                    "Metadata-Version: 2.1\nName: large-record\nVersion: 1.0.0\n".utf8
+                )
+            )
+            builder.addFile(
+                at: record,
+                data: Data("large_record/__init__.py,,\n".utf8),
+                logicalSizeBytes: Int64.max
+            )
+            builder.addFile(
+                at: sitePackages.appendingPathComponent("large_record/__init__.py"),
+                data: Data(),
+                logicalSizeBytes: 99
+            )
+        }
+        let trace = DirectoryAccessTrace()
+        let provider = TracingDirectoryAccessProvider(base: base, trace: trace)
+
+        let package = try #require(try await makeScanner(provider: provider).scan().first)
+
+        #expect(package.name == "large-record")
+        #expect(package.sizeBytes == nil)
+        #expect(trace.entries.contains { $0.operation == .metadata && $0.url.path == record.path })
+        #expect(!trace.entries.contains { $0.operation == .data && $0.url.path == record.path })
+    }
+
+    @Test("PERF25-011: oversized INSTALLER stays unread")
+    func oversizedInstallerIsNotLoaded() async throws {
+        let root = URL(fileURLWithPath: "/.pyenv/versions/3.11.0")
+        let sitePackages = root.appendingPathComponent("lib/python3.11/site-packages")
+        let distInfo = sitePackages.appendingPathComponent("bounded-1.0.0.dist-info")
+        let installer = distInfo.appendingPathComponent("INSTALLER")
+        let base = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: root.appendingPathComponent("bin/python"), data: Data())
+            builder.addFile(
+                at: distInfo.appendingPathComponent("METADATA"),
+                data: Data("Metadata-Version: 2.1\nName: bounded\nVersion: 1.0.0\n".utf8)
+            )
+            builder.addFile(
+                at: installer,
+                data: Data("pip\n".utf8),
+                logicalSizeBytes: Int64.max
+            )
+        }
+        let trace = DirectoryAccessTrace()
+        let provider = TracingDirectoryAccessProvider(base: base, trace: trace)
+
+        let package = try #require(try await makeScanner(provider: provider).scan().first)
+
+        #expect(package.name == "bounded")
+        #expect(package.isExplicit)
+        #expect(trace.entries.contains { $0.operation == .metadata && $0.url.path == installer.path })
+        #expect(!trace.entries.contains { $0.operation == .data && $0.url.path == installer.path })
+    }
+
     @Test("CORE-05: pip rejects absolute RECORD paths before sizing")
     func pipRejectsAbsoluteRecordPath() async throws {
         try await assertUnsafeRecordPath("/outside.bin")

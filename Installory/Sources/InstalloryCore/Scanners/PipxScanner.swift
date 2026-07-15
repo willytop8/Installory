@@ -136,9 +136,15 @@ public struct PipxScanner: PackageScanner, Sendable {
         try Task.checkCancellation()
         for directory in directories {
             try Task.checkCancellation()
-            guard directory.lastPathComponent.hasSuffix(".dist-info"),
-                  let info = try? parser.parse(directory: directory) else { continue }
-            result.append((directory, info))
+            guard directory.lastPathComponent.hasSuffix(".dist-info") else { continue }
+            do {
+                let info = try parser.parseMetadataOnly(directory: directory)
+                result.append((directory, info))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                continue
+            }
         }
         try Task.checkCancellation()
         return result

@@ -63,7 +63,12 @@ public struct DistInfoParser: Sendable {
         case invalidUTF8(URL)
         case malformedMetadata(line: String)
         case missingRequiredField(String)
+        case recordExceedsLimits(URL)
     }
+
+    private static let maximumRecordBytes: Int64 = 16 * 1_024 * 1_024
+    private static let maximumRecordEntries = 100_000
+    private static let maximumInstallerBytes: Int64 = 4 * 1_024
 
     private let directoryAccess: any DirectoryAccessProvider
 
@@ -74,6 +79,28 @@ public struct DistInfoParser: Sendable {
     /// Parses `METADATA`, `RECORD`, optional `INSTALLER`, and `REQUESTED`
     /// marker presence from `directory`.
     public func parse(directory: URL) throws -> DistInfo {
+        let metadata = try parseMetadataOnly(directory: directory)
+
+        return DistInfo(
+            name: metadata.name,
+            version: metadata.version,
+            summary: metadata.summary,
+            homepage: metadata.homepage,
+            author: metadata.author,
+            license: metadata.license,
+            description: metadata.description,
+            recordPaths: try parseRecordIfPresent(in: directory),
+            installer: parseInstallerIfPresent(in: directory),
+            requiresDist: metadata.requiresDist,
+            requestedMarkerPresent: directoryAccess.fileExists(
+                at: directory.appendingPathComponent("REQUESTED")
+            )
+        )
+    }
+
+    /// Parses only `METADATA`. This deliberately never probes `RECORD`,
+    /// `INSTALLER`, or `REQUESTED`, for callers such as pipx that discard them.
+    public func parseMetadataOnly(directory: URL) throws -> DistInfo {
         let metadataURL = directory.appendingPathComponent("METADATA")
         let metadata = try parseMetadata(at: metadataURL)
 
@@ -85,26 +112,65 @@ public struct DistInfoParser: Sendable {
             author: metadata.headers["author"],
             license: metadata.headers["license"],
             description: metadata.description,
-            recordPaths: parseRecordIfPresent(in: directory),
-            installer: parseInstallerIfPresent(in: directory),
+            recordPaths: [],
+            installer: nil,
             requiresDist: metadata.requiresDist,
-            requestedMarkerPresent: directoryAccess.fileExists(
-                at: directory.appendingPathComponent("REQUESTED")
-            )
+            requestedMarkerPresent: false
         )
     }
 
     /// Parses a `RECORD` CSV file and returns installed paths.
     public func parseRecord(at url: URL) throws -> [String] {
-        let text = try string(contentsOf: url)
-        guard !text.isEmpty else { return [] }
+        try Task.checkCancellation()
+        let metadata = try directoryAccess.metadata(at: url)
+        guard metadata.kind == .regularFile,
+              let logicalSize = metadata.logicalSizeBytes,
+              logicalSize >= 0,
+              logicalSize <= Self.maximumRecordBytes else {
+            throw Error.recordExceedsLimits(url)
+        }
 
-        return text
-            .split(whereSeparator: \.isNewline)
-            .compactMap { line in
-                splitCSVLine(String(line)).first
+        let data = try directoryAccess.data(contentsOf: url)
+        try Task.checkCancellation()
+        guard Int64(data.count) <= Self.maximumRecordBytes else {
+            throw Error.recordExceedsLimits(url)
+        }
+
+        var paths: [String] = []
+        var entryCount = 0
+        var lineStart = data.startIndex
+        var index = lineStart
+
+        while index < data.endIndex {
+            let byte = data[index]
+            guard byte == 0x0A || byte == 0x0D else {
+                index = data.index(after: index)
+                continue
             }
-            .filter { !$0.isEmpty }
+
+            try appendRecordPath(
+                from: data[lineStart..<index],
+                sourceURL: url,
+                paths: &paths,
+                entryCount: &entryCount
+            )
+
+            let separator = byte
+            index = data.index(after: index)
+            if separator == 0x0D, index < data.endIndex, data[index] == 0x0A {
+                index = data.index(after: index)
+            }
+            lineStart = index
+        }
+
+        try appendRecordPath(
+            from: data[lineStart..<data.endIndex],
+            sourceURL: url,
+            paths: &paths,
+            entryCount: &entryCount
+        )
+        try Task.checkCancellation()
+        return paths
     }
 
     // MARK: - Private
@@ -192,23 +258,61 @@ public struct DistInfoParser: Sendable {
         return (text, "")
     }
 
-    private func parseRecordIfPresent(in directory: URL) -> [String] {
+    private func parseRecordIfPresent(in directory: URL) throws -> [String] {
         let url = directory.appendingPathComponent("RECORD")
-        return (try? parseRecord(at: url)) ?? []
+        do {
+            return try parseRecord(at: url)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return []
+        }
     }
 
     private func parseInstallerIfPresent(in directory: URL) -> String? {
         let url = directory.appendingPathComponent("INSTALLER")
-        guard let text = try? string(contentsOf: url) else { return nil }
+        guard let metadata = try? directoryAccess.metadata(at: url),
+              metadata.kind == .regularFile,
+              let logicalSize = metadata.logicalSizeBytes,
+              logicalSize >= 0,
+              logicalSize <= Self.maximumInstallerBytes,
+              let data = try? directoryAccess.data(contentsOf: url),
+              Int64(data.count) <= Self.maximumInstallerBytes,
+              let text = String(data: data, encoding: .utf8) else { return nil }
         return text.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
 
     private func string(contentsOf url: URL) throws -> String {
+        try Task.checkCancellation()
         let data = try directoryAccess.data(contentsOf: url)
+        try Task.checkCancellation()
         guard let text = String(data: data, encoding: .utf8) else {
             throw Error.invalidUTF8(url)
         }
         return text
+    }
+
+    private func appendRecordPath(
+        from bytes: Data.SubSequence,
+        sourceURL: URL,
+        paths: inout [String],
+        entryCount: inout Int
+    ) throws {
+        guard !bytes.isEmpty else { return }
+        entryCount += 1
+        guard entryCount <= Self.maximumRecordEntries else {
+            throw Error.recordExceedsLimits(sourceURL)
+        }
+        if entryCount.isMultiple(of: 256) {
+            try Task.checkCancellation()
+        }
+
+        guard let line = String(data: Data(bytes), encoding: .utf8) else {
+            throw Error.invalidUTF8(sourceURL)
+        }
+        if let path = splitCSVLine(line).first, !path.isEmpty {
+            paths.append(path)
+        }
     }
 
     private func splitCSVLine(_ line: String) -> [String] {
