@@ -4,36 +4,16 @@ import Testing
 
 @Suite("PipScanner")
 struct PipScannerTests {
-    private static let fixtureDir = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/python")
-
     // MARK: - Helpers
 
     private func buildProvider() throws -> InMemoryDirectoryAccessProvider {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: Self.fixtureDir,
-            includingPropertiesForKeys: [.isRegularFileKey]
-        ) else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-
-        return InMemoryDirectoryAccessProvider.make { builder in
-            while let fileURL = enumerator.nextObject() as? URL {
-                let isFile = (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) ?? false
-                guard isFile else { continue }
-
-                let relativePath = String(fileURL.path.dropFirst(Self.fixtureDir.path.count))
-                let fakeURL = URL(fileURLWithPath: relativePath)
-                if let data = try? Data(contentsOf: fileURL) {
-                    builder.addFile(at: fakeURL, data: data)
-                }
-            }
-        }
+        try FixtureResource.provider(
+            directory: "python",
+            mappedTo: URL(fileURLWithPath: "/")
+        )
     }
 
-    private func makeScanner(provider: InMemoryDirectoryAccessProvider) -> PipScanner {
+    private func makeScanner(provider: any DirectoryAccessProvider) -> PipScanner {
         let discovery = PythonInterpreterDiscovery(
             directoryAccess: provider,
             homeDirectory: URL(fileURLWithPath: "/")
@@ -176,14 +156,55 @@ struct PipScannerTests {
         }
     }
 
-    @Test("isExplicit is true for all pip packages")
-    func isExplicitAlwaysTrue() async throws {
+    @Test("pip REQUESTED marker distinguishes direct installs from dependencies")
+    func requestedMarkerControlsPipExplicitness() async throws {
         let provider = try buildProvider()
         let packages = try await makeScanner(provider: provider).scan()
 
-        for package in packages {
-            #expect(package.isExplicit == true)
+        let requests = try #require(packages.first { $0.name == "requests" })
+        let urllib3 = try #require(packages.first { $0.name == "urllib3" })
+        let flask = try #require(packages.first { $0.name == "flask" })
+
+        #expect(requests.isExplicit == true)
+        #expect(flask.isExplicit == true)
+        #expect(urllib3.isExplicit == false)
+    }
+
+    @Test("missing REQUESTED falls back to explicit for legacy and non-pip metadata")
+    func missingRequestedUsesConservativeFallbackOutsidePip() async throws {
+        let sitePackages = URL(
+            fileURLWithPath: "/.pyenv/versions/3.11.0/lib/python3.11/site-packages"
+        )
+        let legacy = sitePackages.appendingPathComponent("legacy-tool-1.0.0.dist-info")
+        let uv = sitePackages.appendingPathComponent("uv-tool-2.0.0.dist-info")
+
+        func metadata(name: String, version: String) -> Data {
+            Data("Metadata-Version: 2.1\nName: \(name)\nVersion: \(version)\n".utf8)
         }
+
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: URL(fileURLWithPath: "/.pyenv/versions/3.11.0/bin/python"),
+                data: Data()
+            )
+            builder.addFile(
+                at: legacy.appendingPathComponent("METADATA"),
+                data: metadata(name: "legacy-tool", version: "1.0.0")
+            )
+            builder.addFile(
+                at: uv.appendingPathComponent("METADATA"),
+                data: metadata(name: "uv-tool", version: "2.0.0")
+            )
+            builder.addFile(
+                at: uv.appendingPathComponent("INSTALLER"),
+                data: Data("uv\n".utf8)
+            )
+        }
+
+        let packages = try await makeScanner(provider: provider).scan()
+
+        #expect(packages.first { $0.name == "legacy-tool" }?.isExplicit == true)
+        #expect(packages.first { $0.name == "uv-tool" }?.isExplicit == true)
     }
 
     @Test("same package in multiple interpreters produces distinct rows")
@@ -254,5 +275,143 @@ struct PipScannerTests {
         // Verify the scan completes and produces no packages attributed to it.
         let systemPackages = packages.filter { $0.qualifier == "/usr/bin/python3" }
         #expect(systemPackages.isEmpty)
+    }
+
+    // MARK: - CORE-05: RECORD-owned package sizes
+
+    @Test("CORE-05: pip size sums unique RECORD files and excludes unrelated site-packages")
+    func pipSizeUsesOnlyRecordOwnedFiles() async throws {
+        let sitePackages = URL(
+            fileURLWithPath: "/.pyenv/versions/3.11.0/lib/python3.11/site-packages"
+        )
+        let distInfo = sitePackages.appendingPathComponent("owned-1.0.0.dist-info")
+        let metadata = "Metadata-Version: 2.1\nName: owned\nVersion: 1.0.0\n"
+        let record = """
+            owned/__init__.py,,
+            owned/data.bin,,
+            owned/data.bin,,
+            owned-1.0.0.dist-info/METADATA,,
+            owned-1.0.0.dist-info/RECORD,,
+            """
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: URL(fileURLWithPath: "/.pyenv/versions/3.11.0/bin/python"),
+                data: Data()
+            )
+            builder.addFile(
+                at: sitePackages.appendingPathComponent("owned/__init__.py"),
+                data: Data(),
+                logicalSizeBytes: 20
+            )
+            builder.addFile(
+                at: sitePackages.appendingPathComponent("owned/data.bin"),
+                data: Data(),
+                logicalSizeBytes: 30
+            )
+            builder.addFile(
+                at: distInfo.appendingPathComponent("METADATA"),
+                data: Data(metadata.utf8),
+                logicalSizeBytes: 11
+            )
+            builder.addFile(
+                at: distInfo.appendingPathComponent("RECORD"),
+                data: Data(record.utf8),
+                logicalSizeBytes: 13
+            )
+            builder.addFile(
+                at: sitePackages.appendingPathComponent("unrelated/huge.bin"),
+                data: Data(),
+                logicalSizeBytes: 999_999
+            )
+        }
+
+        let package = try #require(try await makeScanner(provider: provider).scan().first)
+
+        #expect(package.name == "owned")
+        #expect(package.sizeBytes == 74)
+    }
+
+    @Test("CORE-05: pip rejects absolute RECORD paths before sizing")
+    func pipRejectsAbsoluteRecordPath() async throws {
+        try await assertUnsafeRecordPath("/outside.bin")
+    }
+
+    @Test("CORE-05: pip rejects RECORD paths escaping the interpreter root")
+    func pipRejectsEscapingRecordPath() async throws {
+        try await assertUnsafeRecordPath("../../../../outside.bin")
+    }
+
+    @Test("CORE-05: pip rejects RECORD paths escaping through a parent symlink")
+    func pipRejectsRecordPathThroughParentSymlink() async throws {
+        let root = URL(fileURLWithPath: "/.pyenv/versions/3.11.0")
+        let sitePackages = root.appendingPathComponent("lib/python3.11/site-packages")
+        let distInfo = sitePackages.appendingPathComponent("unsafe-1.0.0.dist-info")
+        let linkedDirectory = sitePackages.appendingPathComponent("unsafe")
+        let outside = URL(fileURLWithPath: "/outside")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: root.appendingPathComponent("bin/python"), data: Data())
+            builder.addFile(
+                at: distInfo.appendingPathComponent("METADATA"),
+                data: Data("Metadata-Version: 2.1\nName: unsafe\nVersion: 1.0.0\n".utf8)
+            )
+            builder.addFile(
+                at: distInfo.appendingPathComponent("RECORD"),
+                data: Data("unsafe/payload.bin,,\n".utf8)
+            )
+            builder.addSymlink(at: linkedDirectory, target: outside)
+            builder.addFile(
+                at: outside.appendingPathComponent("payload.bin"),
+                data: Data(),
+                logicalSizeBytes: 999
+            )
+        }
+
+        let package = try #require(try await makeScanner(provider: provider).scan().first)
+
+        #expect(package.sizeBytes == nil)
+    }
+
+    @Test("CORE-05: pip scanning propagates task cancellation")
+    func pipScanningPropagatesCancellation() async throws {
+        let provider = try buildProvider()
+        let scanner = makeScanner(provider: provider)
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await scanner.scan()
+        }
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
+    }
+
+    private func assertUnsafeRecordPath(_ unsafePath: String) async throws {
+        let sitePackages = URL(
+            fileURLWithPath: "/.pyenv/versions/3.11.0/lib/python3.11/site-packages"
+        )
+        let distInfo = sitePackages.appendingPathComponent("unsafe-1.0.0.dist-info")
+        let metadata = "Metadata-Version: 2.1\nName: unsafe\nVersion: 1.0.0\n"
+        let record = "owned.py,,\n\(unsafePath),,\n"
+        let escapedURL = unsafePath.hasPrefix("/")
+            ? URL(fileURLWithPath: unsafePath)
+            : sitePackages.appendingPathComponent(unsafePath).standardizedFileURL
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: URL(fileURLWithPath: "/.pyenv/versions/3.11.0/bin/python"),
+                data: Data()
+            )
+            builder.addFile(at: distInfo.appendingPathComponent("METADATA"), data: Data(metadata.utf8))
+            builder.addFile(at: distInfo.appendingPathComponent("RECORD"), data: Data(record.utf8))
+            builder.addFile(
+                at: sitePackages.appendingPathComponent("owned.py"),
+                data: Data(),
+                logicalSizeBytes: 10
+            )
+            builder.addFile(at: escapedURL, data: Data(), logicalSizeBytes: 999)
+        }
+
+        let package = try #require(try await makeScanner(provider: provider).scan().first)
+
+        #expect(package.sizeBytes == nil)
     }
 }

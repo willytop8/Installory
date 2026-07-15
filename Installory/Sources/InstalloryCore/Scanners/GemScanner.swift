@@ -1,7 +1,7 @@
 import Foundation
 
 /// Scans Ruby gems by walking `specifications/*.gemspec` files for common Ruby
-/// installations and version managers.
+/// installations, `$GEM_HOME`, and version managers.
 ///
 /// Gemspecs are not evaluated as Ruby. Installory only uses the filename for
 /// name/version and best-effort string extraction for runtime dependencies.
@@ -10,17 +10,22 @@ public struct GemScanner: PackageScanner, Sendable {
 
     private let directoryAccess: any DirectoryAccessProvider
     private let homeDirectory: URL
+    private let environment: PackageManagerEnvironment
 
     public init(
         directoryAccess: any DirectoryAccessProvider = SystemDirectoryAccessProvider(),
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: PackageManagerEnvironment = .current
     ) {
         self.directoryAccess = directoryAccess
         self.homeDirectory = homeDirectory
+        self.environment = environment
     }
 
     public func isAvailable() async -> Bool {
-        !specificationDirs().isEmpty
+        guard !Task.isCancelled else { return false }
+        guard let dirs = try? specificationDirs() else { return false }
+        return !Task.isCancelled && !dirs.isEmpty
     }
 
     public var unavailableReason: String {
@@ -28,62 +33,127 @@ public struct GemScanner: PackageScanner, Sendable {
     }
 
     public func scan() async throws -> [Package] {
+        try Task.checkCancellation()
+        var sizer = BoundedDirectorySizer(directoryAccess: directoryAccess)
         var seen: Set<String> = []
-        return specificationDirs()
-            .flatMap(packagesInSpecificationsDir)
-            .filter { seen.insert($0.id).inserted }
-            .sorted { ($0.name, $0.qualifier ?? "") < ($1.name, $1.qualifier ?? "") }
+        var packages: [Package] = []
+
+        for specificationsDir in try specificationDirs() {
+            try Task.checkCancellation()
+            let discovered = try await packagesInSpecificationsDir(
+                specificationsDir,
+                sizer: &sizer
+            )
+            for package in discovered {
+                try Task.checkCancellation()
+                guard seen.insert(package.id).inserted else { continue }
+                packages.append(package)
+            }
+        }
+
+        let sortedPackages = packages.sorted {
+            ($0.name, $0.qualifier ?? "", $0.version)
+                < ($1.name, $1.qualifier ?? "", $1.version)
+        }
+        try Task.checkCancellation()
+        return sortedPackages
     }
 
-    private func specificationDirs() -> [URL] {
-        let roots = rubyGemsRoots()
+    private func specificationDirs() throws -> [URL] {
+        let roots = try rubyGemsRoots()
+        var candidates: [URL] = []
+        for root in roots {
+            try Task.checkCancellation()
+            candidates.append(contentsOf: try specificationDirs(inGemsRoot: root))
+        }
+
         var seen: Set<String> = []
-        return roots
-            .flatMap(specificationDirs(inGemsRoot:))
-            .filter { seen.insert(directoryAccess.resolvingSymlinks(at: $0).path).inserted }
-            .sorted { $0.path < $1.path }
+        var result: [URL] = []
+        for candidate in candidates {
+            try Task.checkCancellation()
+            let resolved = directoryAccess.resolvingSymlinks(at: candidate).path
+            guard seen.insert(resolved).inserted else { continue }
+            result.append(candidate)
+        }
+        let sortedResult = result.sorted { $0.path < $1.path }
+        try Task.checkCancellation()
+        return sortedResult
     }
 
-    private func rubyGemsRoots() -> [URL] {
+    private func rubyGemsRoots() throws -> [URL] {
+        let userGemHome = environment.gemHome(
+            fallback: homeDirectory.appendingPathComponent(".gem/ruby")
+        )
         var roots: [URL] = [
             URL(fileURLWithPath: "/opt/homebrew/lib/ruby/gems"),
             URL(fileURLWithPath: "/usr/local/lib/ruby/gems"),
             URL(fileURLWithPath: "/Library/Ruby/Gems"),
-            homeDirectory.appendingPathComponent(".gem/ruby"),
+            userGemHome,
         ]
 
         let rbenvVersions = homeDirectory.appendingPathComponent(".rbenv/versions")
-        roots += childDirectories(of: rbenvVersions)
-            .map { $0.appendingPathComponent("lib/ruby/gems") }
+        let versions = directoryAccess.directoryContentsOrEmpty(at: rbenvVersions)
+        try Task.checkCancellation()
+        for version in versions {
+            try Task.checkCancellation()
+            roots.append(version.appendingPathComponent("lib/ruby/gems"))
+        }
 
         return roots
     }
 
-    private func specificationDirs(inGemsRoot root: URL) -> [URL] {
+    private func specificationDirs(inGemsRoot root: URL) throws -> [URL] {
+        try Task.checkCancellation()
         var dirs: [URL] = []
 
         let direct = root.appendingPathComponent("specifications")
         if directoryAccess.fileExists(at: direct) {
             dirs.append(direct)
         }
+        try Task.checkCancellation()
 
-        for apiVersion in childDirectories(of: root) {
+        let apiVersions = directoryAccess.directoryContentsOrEmpty(at: root)
+        try Task.checkCancellation()
+        for apiVersion in apiVersions {
+            try Task.checkCancellation()
             let specifications = apiVersion.appendingPathComponent("specifications")
             if directoryAccess.fileExists(at: specifications) {
                 dirs.append(specifications)
             }
         }
 
+        try Task.checkCancellation()
         return dirs
     }
 
-    private func packagesInSpecificationsDir(_ specificationsDir: URL) -> [Package] {
-        childDirectories(of: specificationsDir)
-            .filter { $0.pathExtension == "gemspec" }
-            .compactMap { makePackage(gemspec: $0, specificationsDir: specificationsDir) }
+    private func packagesInSpecificationsDir(
+        _ specificationsDir: URL,
+        sizer: inout BoundedDirectorySizer
+    ) async throws -> [Package] {
+        var packages: [Package] = []
+        let entries = directoryAccess.directoryContentsOrEmpty(at: specificationsDir)
+        try Task.checkCancellation()
+        for entry in entries {
+            try Task.checkCancellation()
+            guard entry.pathExtension == "gemspec",
+                  let package = try await makePackage(
+                    gemspec: entry,
+                    specificationsDir: specificationsDir,
+                    sizer: &sizer
+                  )
+            else { continue }
+            packages.append(package)
+        }
+        try Task.checkCancellation()
+        return packages
     }
 
-    private func makePackage(gemspec: URL, specificationsDir: URL) -> Package? {
+    private func makePackage(
+        gemspec: URL,
+        specificationsDir: URL,
+        sizer: inout BoundedDirectorySizer
+    ) async throws -> Package? {
+        try Task.checkCancellation()
         guard let parsed = parseGemspecFilename(gemspec.lastPathComponent) else { return nil }
         // The unpacked gem directory keeps the platform suffix that `version` drops.
         let gemDirName = [parsed.name, parsed.version, parsed.platform]
@@ -93,10 +163,22 @@ public struct GemScanner: PackageScanner, Sendable {
             .deletingLastPathComponent()
             .appendingPathComponent("gems")
             .appendingPathComponent(gemDirName)
-        let installPath = directoryAccess.fileExists(at: gemDir) ? gemDir : gemspec
+        let gemDirExists = directoryAccess.fileExists(at: gemDir)
+        let installPath = gemDirExists ? gemDir : gemspec
+        let sizeBytes: Int64?
+        if gemDirExists {
+            sizeBytes = (try await sizer.measure(
+                [.tree(gemDir)],
+                constrainedTo: specificationsDir.deletingLastPathComponent()
+            )).sizeBytes
+        } else {
+            sizeBytes = nil
+        }
+        let dependencies = try parseRuntimeDependencies(in: gemspec)
+        try Task.checkCancellation()
 
         return Package(
-            id: "gem:\(specificationsDir.path):\(parsed.name)",
+            id: "gem:\(specificationsDir.path):\(parsed.name):\(parsed.version)",
             manager: .gem,
             qualifier: specificationsDir.path,
             name: parsed.name,
@@ -104,10 +186,10 @@ public struct GemScanner: PackageScanner, Sendable {
             installPath: installPath,
             installedAt: directoryAccess.modificationDate(at: gemspec),
             installedAtConfidence: .low,
-            sizeBytes: nil,
+            sizeBytes: sizeBytes,
             isExplicit: true,
             isReadOnly: isSystemGemPath(specificationsDir),
-            dependencies: parseRuntimeDependencies(in: gemspec),
+            dependencies: dependencies,
             lastSeen: Date()
         )
     }
@@ -155,39 +237,84 @@ public struct GemScanner: PackageScanner, Sendable {
         }
     }
 
-    private func parseRuntimeDependencies(in gemspec: URL) -> [String] {
+    private func parseRuntimeDependencies(in gemspec: URL) throws -> [String] {
+        try Task.checkCancellation()
         guard let data = try? directoryAccess.data(contentsOf: gemspec),
               let text = String(data: data, encoding: .utf8) else { return [] }
+        try Task.checkCancellation()
 
         var dependencies: [String] = []
         for line in text.split(whereSeparator: \.isNewline).map(String.init) {
+            try Task.checkCancellation()
             guard line.contains("add_runtime_dependency") || line.contains("add_dependency") else {
                 continue
             }
-            if let dependency = firstQuotedString(in: line) {
+            if let dependency = firstDependencyLiteral(in: line) {
                 dependencies.append(dependency)
             }
         }
-        return Array(Set(dependencies)).sorted()
+        let sortedDependencies = Array(Set(dependencies)).sorted()
+        try Task.checkCancellation()
+        return sortedDependencies
     }
 
-    private func firstQuotedString(in line: String) -> String? {
-        for quote in ["\"", "'"] {
-            guard let start = line.firstIndex(of: Character(quote)) else { continue }
-            let afterStart = line.index(after: start)
-            guard let end = line[afterStart...].firstIndex(of: Character(quote)) else { continue }
-            let value = String(line[afterStart..<end])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return value.isEmpty ? nil : value
+    /// Extracts only the first dependency-name literal after the declaration method.
+    /// RubyGems-generated gemspecs commonly use `%q<name>.freeze`; supporting a
+    /// bounded set of literal delimiters keeps parsing useful without evaluating Ruby.
+    private func firstDependencyLiteral(in line: String) -> String? {
+        let methodEnd = line.range(of: "add_runtime_dependency")?.upperBound
+            ?? line.range(of: "add_dependency")?.upperBound
+        guard var cursor = methodEnd else { return nil }
+
+        while cursor < line.endIndex {
+            let character = line[cursor]
+            if character == "\"" || character == "'" {
+                let contentStart = line.index(after: cursor)
+                guard let end = line[contentStart...].firstIndex(of: character) else { return nil }
+                return nonemptyLiteral(in: line, from: contentStart, to: end)
+            }
+
+            if character == "%" {
+                let qIndex = line.index(after: cursor)
+                if qIndex < line.endIndex, line[qIndex] == "q" {
+                    let delimiterIndex = line.index(after: qIndex)
+                    guard delimiterIndex < line.endIndex,
+                          let closingDelimiter = percentQClosingDelimiter(for: line[delimiterIndex])
+                    else { return nil }
+                    let contentStart = line.index(after: delimiterIndex)
+                    guard let end = line[contentStart...].firstIndex(of: closingDelimiter) else {
+                        return nil
+                    }
+                    return nonemptyLiteral(in: line, from: contentStart, to: end)
+                }
+            }
+
+            cursor = line.index(after: cursor)
         }
         return nil
     }
 
-    private func isSystemGemPath(_ url: URL) -> Bool {
-        url.path.hasPrefix("/System/") || url.path.hasPrefix("/Library/Ruby/")
+    private func percentQClosingDelimiter(for openingDelimiter: Character) -> Character? {
+        switch openingDelimiter {
+        case "(": ")"
+        case "[": "]"
+        case "{": "}"
+        case "<": ">"
+        case "|", "!", "/": openingDelimiter
+        default: nil
+        }
     }
 
-    private func childDirectories(of url: URL) -> [URL] {
-        (try? directoryAccess.contentsOfDirectory(at: url)) ?? []
+    private func nonemptyLiteral(
+        in line: String,
+        from start: String.Index,
+        to end: String.Index
+    ) -> String? {
+        let value = String(line[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    private func isSystemGemPath(_ url: URL) -> Bool {
+        url.path.hasPrefix("/System/") || url.path.hasPrefix("/Library/Ruby/")
     }
 }

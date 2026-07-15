@@ -103,22 +103,26 @@ private final class DiscoveryCache: @unchecked Sendable {
     }
 }
 
-/// Discovers Python interpreters by walking known filesystem locations.
+/// Discovers Python interpreters by walking known filesystem locations,
+/// including `$PYENV_ROOT` when configured.
 ///
 /// Discovery never invokes Python or `pip`; all filesystem operations go
 /// through the injected `DirectoryAccessProvider`.
 public struct PythonInterpreterDiscovery: Sendable {
     private let directoryAccess: any DirectoryAccessProvider
     private let homeDirectory: URL
+    private let environment: PackageManagerEnvironment
     private let cache = DiscoveryCache()
 
     public init(
         directoryAccess: any DirectoryAccessProvider = SystemDirectoryAccessProvider(),
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: PackageManagerEnvironment = .current,
         projectVenvRoots: [URL] = []
     ) {
         self.directoryAccess = directoryAccess
         self.homeDirectory = homeDirectory
+        self.environment = environment
         self._projectVenvRoots = projectVenvRoots
     }
 
@@ -131,30 +135,44 @@ public struct PythonInterpreterDiscovery: Sendable {
     /// because it's a reference type, and a fresh discovery is created per scan, so
     /// results stay current run-to-run.
     public func discover() -> [PythonInterpreter] {
+        guard !Task.isCancelled else { return [] }
         if let cached = cache.value { return cached }
         let result = computeDiscover()
+        // Never memoize a partial walk abandoned by a scanner timeout.
+        guard !Task.isCancelled else { return [] }
         cache.value = result
         return result
     }
 
     private func computeDiscover() -> [PythonInterpreter] {
-        let candidates = systemCandidates()
-            + commandLineToolsCandidates()
-            + homebrewCandidates()
-            + pyenvCandidates()
-            + uvCandidates()
-            + condaCandidates()
-            + pipxCandidates()
-            + projectVenvCandidates()
+        var candidates: [Candidate] = []
+        let candidateGroups: [() -> [Candidate]] = [
+            systemCandidates,
+            commandLineToolsCandidates,
+            homebrewCandidates,
+            pyenvCandidates,
+            uvCandidates,
+            condaCandidates,
+            pipxCandidates,
+            projectVenvCandidates,
+        ]
+        for candidateGroup in candidateGroups {
+            guard !Task.isCancelled else { return [] }
+            candidates.append(contentsOf: candidateGroup())
+        }
 
         var seen: Set<String> = []
-        return candidates.compactMap { candidate in
-            guard directoryAccess.fileExists(at: candidate.executable) else { return nil }
+        var interpreters: [PythonInterpreter] = []
+        for candidate in candidates {
+            guard !Task.isCancelled else { return [] }
+            guard directoryAccess.fileExists(at: candidate.executable) else { continue }
             let resolved = directoryAccess.resolvingSymlinks(at: candidate.executable).path
-            guard seen.insert(resolved).inserted else { return nil }
-            return makeInterpreter(from: candidate)
+            guard seen.insert(resolved).inserted else { continue }
+            if let interpreter = makeInterpreter(from: candidate) {
+                interpreters.append(interpreter)
+            }
         }
-        .sorted { $0.executable.path < $1.executable.path }
+        return interpreters.sorted { $0.executable.path < $1.executable.path }
     }
 
     // MARK: - Candidate enumeration
@@ -192,9 +210,10 @@ public struct PythonInterpreterDiscovery: Sendable {
 
     private func homebrewOptCandidates(prefix: URL) -> [Candidate] {
         let opt = prefix.appendingPathComponent("opt")
-        return childDirectories(of: opt)
+        return cancellableDirectoryContents(at: opt)
             .filter { $0.lastPathComponent.hasPrefix("python@") }
             .flatMap { pythonRoot -> [Candidate] in
+                guard !Task.isCancelled else { return [] }
                 let bin = pythonRoot.appendingPathComponent("bin")
                 return pythonExecutables(in: bin).map {
                     Candidate(
@@ -209,10 +228,12 @@ public struct PythonInterpreterDiscovery: Sendable {
 
     private func homebrewCellarCandidates(prefix: URL) -> [Candidate] {
         let cellar = prefix.appendingPathComponent("Cellar")
-        return childDirectories(of: cellar)
+        return cancellableDirectoryContents(at: cellar)
             .filter { $0.lastPathComponent.hasPrefix("python@") }
             .flatMap { formula -> [Candidate] in
-                childDirectories(of: formula).flatMap { versionRoot -> [Candidate] in
+                guard !Task.isCancelled else { return [] }
+                return cancellableDirectoryContents(at: formula).flatMap { versionRoot -> [Candidate] in
+                    guard !Task.isCancelled else { return [] }
                     let bin = versionRoot.appendingPathComponent("bin")
                     return pythonExecutables(in: bin).map {
                         Candidate(
@@ -239,12 +260,15 @@ public struct PythonInterpreterDiscovery: Sendable {
     }
 
     private func pyenvCandidates() -> [Candidate] {
-        let versions = homeDirectory
-            .appendingPathComponent(".pyenv")
+        let pyenvRoot = environment.pyenvRoot(
+            fallback: homeDirectory.appendingPathComponent(".pyenv")
+        )
+        let versions = pyenvRoot
             .appendingPathComponent("versions")
 
-        return childDirectories(of: versions).map { versionRoot in
-            Candidate(
+        return cancellableDirectoryContents(at: versions).compactMap { versionRoot in
+            guard !Task.isCancelled else { return nil }
+            return Candidate(
                 executable: versionRoot.appendingPathComponent("bin/python"),
                 kind: .pyenv,
                 installRoot: versionRoot,
@@ -258,7 +282,8 @@ public struct PythonInterpreterDiscovery: Sendable {
     /// either `bin/python3` or `bin/python3.<minor>`.
     private func uvCandidates() -> [Candidate] {
         let root = homeDirectory.appendingPathComponent(".local/share/uv/python")
-        return childDirectories(of: root).flatMap { versionRoot -> [Candidate] in
+        return cancellableDirectoryContents(at: root).flatMap { versionRoot -> [Candidate] in
+            guard !Task.isCancelled else { return [] }
             let bin = versionRoot.appendingPathComponent("bin")
             return pythonExecutables(in: bin).map {
                 Candidate(
@@ -280,31 +305,66 @@ public struct PythonInterpreterDiscovery: Sendable {
     }
 
     /// Project venvs in additional roots provided by the host app (typically
-    /// directories the user granted read access to). For each root we look one
-    /// level deep for `.venv/bin/python(3)` and `venv/bin/python(3)`. Going
-    /// deeper would force-walk the filesystem under every granted directory,
-    /// which is too expensive — Installory only surfaces venvs that live at
-    /// the top of a granted folder.
+    /// directories the user granted read access to). For each root we check the
+    /// root itself and its immediate children for `.venv/bin/python(3)` and
+    /// `venv/bin/python(3)`. Going deeper would force-walk the filesystem under
+    /// every granted directory, which is too expensive.
     private func projectVenvCandidates() -> [Candidate] {
-        projectVenvRoots.flatMap { root -> [Candidate] in
-            childDirectories(of: root).flatMap { child -> [Candidate] in
+        var candidates: [Candidate] = []
+        var seenProjectDirectories: Set<String> = []
+
+        for root in projectVenvRoots
+            .map(\.standardizedFileURL)
+            .sorted(by: { $0.path < $1.path }) {
+            guard !Task.isCancelled else { return [] }
+            let resolvedRoot = directoryAccess
+                .resolvingSymlinks(at: root)
+                .standardizedFileURL
+            let projectDirectories = ([root] + cancellableDirectoryContents(at: root))
+                .map(\.standardizedFileURL)
+                .filter { isSameOrImmediateChild($0, of: root) }
+                .sorted(by: { $0.path < $1.path })
+
+            for projectDirectory in projectDirectories {
+                guard !Task.isCancelled else { return [] }
+                let resolvedProject = directoryAccess
+                    .resolvingSymlinks(at: projectDirectory)
+                    .standardizedFileURL
+                guard isContained(resolvedProject, in: resolvedRoot),
+                      seenProjectDirectories.insert(resolvedProject.path).inserted else {
+                    continue
+                }
+
                 let venvCandidates = [
-                    child.appendingPathComponent(".venv"),
-                    child.appendingPathComponent("venv"),
+                    projectDirectory.appendingPathComponent(".venv"),
+                    projectDirectory.appendingPathComponent("venv"),
                 ]
-                return venvCandidates.flatMap { venv -> [Candidate] in
+                for venv in venvCandidates {
+                    guard !Task.isCancelled else { return [] }
+                    let resolvedVenv = directoryAccess
+                        .resolvingSymlinks(at: venv)
+                        .standardizedFileURL
+                    guard isContained(resolvedVenv, in: resolvedRoot) else { continue }
+
                     let bin = venv.appendingPathComponent("bin")
-                    return pythonExecutables(in: bin).map {
-                        Candidate(
-                            executable: $0,
+                    for executable in pythonExecutables(in: bin)
+                        .sorted(by: { $0.path < $1.path }) {
+                        guard !Task.isCancelled else { return [] }
+                        let resolvedExecutable = directoryAccess
+                            .resolvingSymlinks(at: executable)
+                            .standardizedFileURL
+                        guard isContained(resolvedExecutable, in: resolvedRoot) else { continue }
+                        candidates.append(Candidate(
+                            executable: executable,
                             kind: .projectVenv,
                             installRoot: venv,
-                            versionHint: $0.lastPathComponent
-                        )
+                            versionHint: executable.lastPathComponent
+                        ))
                     }
                 }
             }
         }
+        return candidates
     }
 
     /// Extra roots to look under for project venvs. Defaults to none; the app
@@ -343,7 +403,9 @@ public struct PythonInterpreterDiscovery: Sendable {
         }
 
         let lib = candidate.installRoot.appendingPathComponent("lib")
-        for child in childDirectories(of: lib) where child.lastPathComponent.hasPrefix("python") {
+        for child in cancellableDirectoryContents(at: lib)
+            where child.lastPathComponent.hasPrefix("python") {
+            guard !Task.isCancelled else { return nil }
             if let version = PythonInterpreter.PythonVersion(child.lastPathComponent) {
                 return version
             }
@@ -360,19 +422,43 @@ public struct PythonInterpreterDiscovery: Sendable {
 
     // MARK: - Filesystem helpers
 
-    private func childDirectories(of url: URL) -> [URL] {
-        (try? directoryAccess.contentsOfDirectory(at: url)) ?? []
+    private func cancellableDirectoryContents(at url: URL) -> [URL] {
+        guard !Task.isCancelled else { return [] }
+        return directoryAccess.directoryContentsOrEmpty(at: url)
     }
 
     private func pythonExecutables(in bin: URL) -> [URL] {
-        childDirectories(of: bin)
+        guard !Task.isCancelled else { return [] }
+        return cancellableDirectoryContents(at: bin)
             .filter { child in
+                guard !Task.isCancelled else { return false }
                 let name = child.lastPathComponent
                 if name == "python" || name == "python3" { return true }
                 guard name.hasPrefix("python3.") else { return false }
                 let suffix = name.dropFirst("python3.".count)
                 return !suffix.isEmpty && suffix.unicodeScalars.allSatisfy(CharacterSet.decimalDigits.contains)
             }
+    }
+
+    private func isSameOrImmediateChild(_ candidate: URL, of root: URL) -> Bool {
+        let rootComponents = root.standardizedFileURL.pathComponents
+        let candidateComponents = candidate.standardizedFileURL.pathComponents
+        guard candidateComponents.count == rootComponents.count
+                || candidateComponents.count == rootComponents.count + 1 else {
+            return false
+        }
+        return zip(rootComponents, candidateComponents).allSatisfy { pair in
+            pair.0 == pair.1
+        }
+    }
+
+    private func isContained(_ candidate: URL, in root: URL) -> Bool {
+        let rootComponents = root.standardizedFileURL.pathComponents
+        let candidateComponents = candidate.standardizedFileURL.pathComponents
+        guard rootComponents.count <= candidateComponents.count else { return false }
+        return zip(rootComponents, candidateComponents).allSatisfy { pair in
+            pair.0 == pair.1
+        }
     }
 }
 

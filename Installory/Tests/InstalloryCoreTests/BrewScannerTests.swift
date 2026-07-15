@@ -13,36 +13,12 @@ struct BrewScannerTests {
     // so no real filesystem access occurs even though the path looks real.
     private let fakePrefix = URL(fileURLWithPath: "/opt/homebrew")
 
-    /// Source-tree path to the brew fixture directory.
-    private static let fixtureDir = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/brew")
-
     // MARK: - Helpers
 
     /// Builds an `InMemoryDirectoryAccessProvider` from the real fixture files,
     /// mapping the fixture tree under `fakePrefix` (/opt/homebrew).
     private func buildProvider() throws -> InMemoryDirectoryAccessProvider {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: Self.fixtureDir,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-
-        return InMemoryDirectoryAccessProvider.make { builder in
-            while let fileURL = enumerator.nextObject() as? URL {
-                let isFile = (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) ?? false
-                guard isFile else { continue }
-                let relativePath = String(fileURL.path.dropFirst(Self.fixtureDir.path.count))
-                let fakeURL = URL(fileURLWithPath: fakePrefix.path + relativePath)
-                if let data = try? Data(contentsOf: fileURL) {
-                    builder.addFile(at: fakeURL, data: data)
-                }
-            }
-        }
+        try FixtureResource.provider(directory: "brew", mappedTo: fakePrefix)
     }
 
     private func makeScanner() throws -> BrewScanner {
@@ -390,5 +366,136 @@ struct BrewScannerTests {
         let packages = try await scanner.scan()
 
         #expect(Set(packages.map(\.name)) == ["arm-only", "intel-only"])
+    }
+
+    // MARK: - CORE-05: bounded package sizes
+
+    @Test("CORE-05: formula size is the exact logical size of its selected keg")
+    func formulaSizeUsesSelectedKegTree() async throws {
+        let versionDir = fakePrefix.appendingPathComponent("Cellar/sized-formula/1.0.0")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: versionDir.appendingPathComponent("INSTALL_RECEIPT.json"),
+                data: minimalReceiptData(),
+                logicalSizeBytes: 10
+            )
+            builder.addFile(
+                at: versionDir.appendingPathComponent("bin/sized-formula"),
+                data: Data(),
+                logicalSizeBytes: 90
+            )
+            builder.addFile(
+                at: versionDir.appendingPathComponent("share/man/man1/sized-formula.1"),
+                data: Data(),
+                logicalSizeBytes: 25
+            )
+        }
+        let discovery = PathDiscovery(checkExists: { $0 == self.fakePrefix.path })
+
+        let package = try #require(try await BrewScanner(
+            pathDiscovery: discovery,
+            directoryAccess: provider
+        ).scan().first)
+
+        #expect(package.sizeBytes == 125)
+    }
+
+    @Test("CORE-05: cask size counts app bundles but never receipt or zap paths")
+    func caskSizeCountsOnlyInstalledAppBundle() async throws {
+        let applications = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        let versionDir = fakePrefix.appendingPathComponent("Caskroom/sized-cask/1.0.0")
+        let receipt = Data("""
+            {
+              "installed_on_request": true,
+              "artifacts": [
+                {"app": ["Sized App.app"]},
+                {"zap": [{"trash": ["~/Library/Application Support/Sized App"]}]}
+              ]
+            }
+            """.utf8)
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: versionDir.appendingPathComponent("INSTALL_RECEIPT.json"),
+                data: receipt,
+                logicalSizeBytes: 1_000
+            )
+            builder.addFile(
+                at: applications.appendingPathComponent("Sized App.app/Contents/MacOS/Sized App"),
+                data: Data(),
+                logicalSizeBytes: 120
+            )
+            builder.addFile(
+                at: applications.appendingPathComponent("Sized App.app/Contents/Resources/icon.icns"),
+                data: Data(),
+                logicalSizeBytes: 30
+            )
+            builder.addFile(
+                at: URL(fileURLWithPath: "/Users/tester/Library/Application Support/Sized App/cache"),
+                data: Data(),
+                logicalSizeBytes: 50_000
+            )
+        }
+        let discovery = PathDiscovery(checkExists: { $0 == self.fakePrefix.path })
+
+        let package = try #require(try await BrewScanner(
+            pathDiscovery: discovery,
+            directoryAccess: provider,
+            applicationDirectories: [applications]
+        ).scan().first)
+
+        #expect(package.manager == .brewCask)
+        #expect(package.sizeBytes == 150)
+    }
+
+    @Test("CORE-05: cask app artifacts with path components are rejected")
+    func unsafeCaskAppArtifactHasUnknownSize() async throws {
+        let applications = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        let versionDir = fakePrefix.appendingPathComponent("Caskroom/unsafe-cask/1.0.0")
+        let receipt = Data("""
+            {
+              "installed_on_request": true,
+              "artifacts": [{"app": ["Nested/Evil.app"]}]
+            }
+            """.utf8)
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: versionDir.appendingPathComponent("INSTALL_RECEIPT.json"),
+                data: receipt
+            )
+            builder.addFile(
+                at: applications.appendingPathComponent("Nested/Evil.app/Contents/MacOS/Evil"),
+                data: Data(),
+                logicalSizeBytes: 777
+            )
+        }
+        let discovery = PathDiscovery(checkExists: { $0 == self.fakePrefix.path })
+
+        let package = try #require(try await BrewScanner(
+            pathDiscovery: discovery,
+            directoryAccess: provider,
+            applicationDirectories: [applications]
+        ).scan().first)
+
+        #expect(package.sizeBytes == nil)
+    }
+
+    @Test("CORE-05: Brew scanning propagates task cancellation")
+    func brewScanningPropagatesCancellation() async {
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: fakePrefix.appendingPathComponent("Cellar/tool/1.0.0/INSTALL_RECEIPT.json"),
+                data: minimalReceiptData()
+            )
+        }
+        let discovery = PathDiscovery(checkExists: { $0 == self.fakePrefix.path })
+        let scanner = BrewScanner(pathDiscovery: discovery, directoryAccess: provider)
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await scanner.scan()
+        }
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
     }
 }

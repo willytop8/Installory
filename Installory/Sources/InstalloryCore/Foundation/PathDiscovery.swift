@@ -10,14 +10,22 @@ import Foundation
 public struct PathDiscovery: Sendable {
 
     private let checkExists: @Sendable (String) -> Bool
+    private let environment: PackageManagerEnvironment
+    private let homeDirectory: URL
 
     /// Creates a `PathDiscovery` backed by a real or fake filesystem.
     ///
-    /// - Parameter checkExists: Returns `true` if the given absolute path
-    ///   exists. Defaults to `FileManager.default.fileExists(atPath:)`.
+    /// - Parameters:
+    ///   - environment: Package-manager root overrides inherited by the app.
+    ///   - homeDirectory: The user's home directory used for default roots.
+    ///   - checkExists: Returns `true` if the given absolute path exists.
     public init(
+        environment: PackageManagerEnvironment = .current,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         checkExists: @Sendable @escaping (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
     ) {
+        self.environment = environment
+        self.homeDirectory = homeDirectory
         self.checkExists = checkExists
     }
 
@@ -38,21 +46,32 @@ public struct PathDiscovery: Sendable {
     /// Resolves a managed directory to a URL, or `nil` if the directory
     /// does not exist on this system.
     public func locate(_ kind: ManagerDirectory) -> URL? {
-        let path = kind.candidatePath(home: homeDirectory)
-        guard checkExists(path) else { return nil }
-        return URL(fileURLWithPath: path)
-    }
+        let fallback = URL(
+            fileURLWithPath: kind.candidatePath(home: homeDirectory.path),
+            isDirectory: true
+        )
+        let candidate: URL
+        switch kind {
+        case .cargoHome:
+            candidate = environment.cargoHome(fallback: fallback)
+        case .pyenvVersions:
+            let fallbackRoot = homeDirectory.appendingPathComponent(".pyenv")
+            candidate = environment.pyenvRoot(fallback: fallbackRoot)
+                .appendingPathComponent("versions")
+        case .nvmNode:
+            let fallbackRoot = homeDirectory.appendingPathComponent(".nvm")
+            candidate = environment.nvmDirectory(fallback: fallbackRoot)
+                .appendingPathComponent("versions/node")
+        case .pipxVenvs:
+            let fallbackRoot = homeDirectory.appendingPathComponent(".local/share/pipx")
+            candidate = environment.pipxHome(fallback: fallbackRoot)
+                .appendingPathComponent("venvs")
+        case .voltaNode, .bunGlobal, .rbenvVersions:
+            candidate = fallback
+        }
 
-    // MARK: - Private
-
-    /// The user's home directory.
-    ///
-    /// In a sandboxed app `NSHomeDirectory()` returns the app container;
-    /// `FileManager.default.homeDirectoryForCurrentUser` returns the real
-    /// user home and is safe to call inside the sandbox for path construction
-    /// (we're not reading the directory, just building strings).
-    private var homeDirectory: String {
-        FileManager.default.homeDirectoryForCurrentUser.path
+        guard checkExists(candidate.path) else { return nil }
+        return candidate
     }
 }
 

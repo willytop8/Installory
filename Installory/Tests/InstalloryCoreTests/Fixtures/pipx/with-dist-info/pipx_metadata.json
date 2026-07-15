@@ -1,0 +1,12 @@
+{
+  "pipx_metadata_version": "0.5",
+  "python_version": "3.12.4",
+  "main_package": {
+    "package": "fixture-tool",
+    "package_or_url": "fixture-tool",
+    "package_version": "2.3.1",
+    "apps": [
+      "fixture-tool"
+    ]
+  }
+}

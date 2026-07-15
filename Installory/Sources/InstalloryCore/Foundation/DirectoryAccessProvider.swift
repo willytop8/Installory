@@ -1,5 +1,22 @@
 import Foundation
 
+public enum FileSystemItemKind: Sendable, Equatable {
+    case regularFile
+    case directory
+    case symbolicLink
+    case other
+}
+
+public struct FileSystemItemMetadata: Sendable, Equatable {
+    public let kind: FileSystemItemKind
+    public let logicalSizeBytes: Int64?
+
+    public init(kind: FileSystemItemKind, logicalSizeBytes: Int64? = nil) {
+        self.kind = kind
+        self.logicalSizeBytes = logicalSizeBytes
+    }
+}
+
 /// Abstracts filesystem directory enumeration and file reading.
 ///
 /// Injected into scanners so tests can supply an in-memory fake without
@@ -20,6 +37,9 @@ public protocol DirectoryAccessProvider: Sendable {
 
     /// Returns the modification date of the item at `url`, or nil if unavailable.
     func modificationDate(at url: URL) -> Date?
+
+    /// Returns the final item's kind without following a final symbolic link.
+    func metadata(at url: URL) throws -> FileSystemItemMetadata
 
     /// Returns `url` with any symlinks in its path resolved to their targets.
     func resolvingSymlinks(at url: URL) -> URL
@@ -53,5 +73,29 @@ public struct SystemDirectoryAccessProvider: DirectoryAccessProvider, Sendable {
     public func modificationDate(at url: URL) -> Date? {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         return attrs?[.modificationDate] as? Date
+    }
+
+    public func metadata(at url: URL) throws -> FileSystemItemMetadata {
+        let values = try url.resourceValues(forKeys: [
+            .isSymbolicLinkKey,
+            .isRegularFileKey,
+            .isDirectoryKey,
+            .totalFileSizeKey,
+            .fileSizeKey,
+        ])
+        if values.isSymbolicLink == true {
+            return FileSystemItemMetadata(kind: .symbolicLink)
+        }
+        if values.isRegularFile == true {
+            let size = values.totalFileSize ?? values.fileSize
+            return FileSystemItemMetadata(
+                kind: .regularFile,
+                logicalSizeBytes: size.map(Int64.init)
+            )
+        }
+        if values.isDirectory == true {
+            return FileSystemItemMetadata(kind: .directory)
+        }
+        return FileSystemItemMetadata(kind: .other)
     }
 }

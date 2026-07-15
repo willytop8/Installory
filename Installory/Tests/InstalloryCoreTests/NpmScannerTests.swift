@@ -4,39 +4,20 @@ import Testing
 
 @Suite("NpmScanner")
 struct NpmScannerTests {
-    private static let fixtureDir = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/npm")
-
     // MARK: - Helpers
 
     private func buildProvider() throws -> InMemoryDirectoryAccessProvider {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: Self.fixtureDir,
-            includingPropertiesForKeys: [.isRegularFileKey]
-        ) else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-
-        return InMemoryDirectoryAccessProvider.make { builder in
-            while let fileURL = enumerator.nextObject() as? URL {
-                let isFile = (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) ?? false
-                guard isFile else { continue }
-
-                let relativePath = String(fileURL.path.dropFirst(Self.fixtureDir.path.count))
-                let fakeURL = URL(fileURLWithPath: relativePath)
-                if let data = try? Data(contentsOf: fileURL) {
-                    builder.addFile(at: fakeURL, data: data)
-                }
-            }
-        }
+        try FixtureResource.provider(
+            directory: "npm",
+            mappedTo: URL(fileURLWithPath: "/")
+        )
     }
 
     private func makeScanner(provider: InMemoryDirectoryAccessProvider) -> NpmScanner {
         NpmScanner(
             directoryAccess: provider,
-            homeDirectory: URL(fileURLWithPath: "/")
+            homeDirectory: URL(fileURLWithPath: "/"),
+            environment: .empty
         )
     }
 
@@ -144,6 +125,84 @@ struct NpmScannerTests {
         #expect(packages.first?.name == "valid-pkg")
     }
 
+    @Test("CORE-05: npm size includes the recursive package tree but not siblings")
+    func sizeIncludesNestedDependenciesButNotSiblings() async throws {
+        let nodeModules = URL(fileURLWithPath: "/opt/homebrew/lib/node_modules")
+        let package = nodeModules.appendingPathComponent("tool")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: package.appendingPathComponent("package.json"),
+                data: Data(#"{"name":"tool","version":"1.0.0"}"#.utf8),
+                logicalSizeBytes: 11
+            )
+            builder.addFile(
+                at: package.appendingPathComponent("bin/tool.js"),
+                data: Data(),
+                logicalSizeBytes: 20
+            )
+            builder.addFile(
+                at: package.appendingPathComponent("node_modules/nested/index.js"),
+                data: Data(),
+                logicalSizeBytes: 7
+            )
+            builder.addFile(
+                at: nodeModules.appendingPathComponent("sibling/huge.bin"),
+                data: Data(),
+                logicalSizeBytes: 50_000
+            )
+        }
+
+        let packages = try await makeScanner(provider: provider).scan()
+        let tool = try #require(packages.first { $0.name == "tool" })
+
+        #expect(tool.sizeBytes == 38)
+    }
+
+    @Test("CORE-05: npm package-root symlinks never count target bytes")
+    func packageRootSymlinkHasUnknownSize() async throws {
+        let nodeModules = URL(fileURLWithPath: "/opt/homebrew/lib/node_modules")
+        let target = URL(fileURLWithPath: "/store/tool")
+        let symlink = nodeModules.appendingPathComponent("tool")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: target.appendingPathComponent("package.json"),
+                data: Data(#"{"name":"tool","version":"1.0.0"}"#.utf8),
+                logicalSizeBytes: 10
+            )
+            builder.addFile(
+                at: target.appendingPathComponent("payload.bin"),
+                data: Data(),
+                logicalSizeBytes: 90_000
+            )
+            builder.addSymlink(at: symlink, target: target)
+        }
+
+        let packages = try await makeScanner(provider: provider).scan()
+        let tool = try #require(packages.first { $0.name == "tool" })
+
+        #expect(tool.installPath == symlink)
+        #expect(tool.sizeBytes == nil)
+    }
+
+    @Test("CORE-05: npm scan cancellation propagates")
+    func cancellationPropagates() async {
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/tool/package.json"),
+                data: Data(#"{"name":"tool","version":"1.0.0"}"#.utf8)
+            )
+        }
+        let scanner = makeScanner(provider: provider)
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await scanner.scan()
+        }
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
+    }
+
     // MARK: - Symlink dedup tests
 
     @Test("two node_modules dirs that resolve to the same path produce packages only once")
@@ -162,7 +221,11 @@ struct NpmScannerTests {
         }
 
         // homeDirectory set to "/" so nvm/Volta discovery finds nothing extra
-        let scanner = NpmScanner(directoryAccess: provider, homeDirectory: URL(fileURLWithPath: "/"))
+        let scanner = NpmScanner(
+            directoryAccess: provider,
+            homeDirectory: URL(fileURLWithPath: "/"),
+            environment: .empty
+        )
         let packages = try await scanner.scan()
 
         // The symlink and real dir resolve to the same path → scanned only once
@@ -189,7 +252,11 @@ struct NpmScannerTests {
             builder.addSymlink(at: aliasEntry, target: realPkgDir)
         }
 
-        let scanner = NpmScanner(directoryAccess: provider, homeDirectory: URL(fileURLWithPath: "/"))
+        let scanner = NpmScanner(
+            directoryAccess: provider,
+            homeDirectory: URL(fileURLWithPath: "/"),
+            environment: .empty
+        )
         let packages = try await scanner.scan()
 
         // Both symlinks resolve to the same physical dir — only one package emitted
@@ -211,7 +278,11 @@ struct NpmScannerTests {
             builder.addFile(at: v8.appendingPathComponent("lodash/package.json"), data: pkgJSON)
         }
 
-        let scanner = NpmScanner(directoryAccess: provider, homeDirectory: URL(fileURLWithPath: "/"))
+        let scanner = NpmScanner(
+            directoryAccess: provider,
+            homeDirectory: URL(fileURLWithPath: "/"),
+            environment: .empty
+        )
         let packages = try await scanner.scan()
 
         // Two distinct physical dirs → two distinct packages
@@ -222,5 +293,37 @@ struct NpmScannerTests {
         let qualifiers = packages.map { $0.qualifier ?? "" }.sorted()
         #expect(qualifiers.contains("/.nvm/versions/node/v20.0.0/lib/node_modules"))
         #expect(qualifiers.contains("/.nvm/versions/node/v8.0.0/lib/node_modules"))
+    }
+
+    @Test("CORE-08: NVM_DIR overrides the default nvm root")
+    func nvmDirectoryOverridesDefaultRoot() async throws {
+        let home = URL(fileURLWithPath: "/Users/tester")
+        let customNvm = URL(fileURLWithPath: "/Volumes/Dev/nvm")
+        let customModules = customNvm.appendingPathComponent(
+            "versions/node/v22.0.0/lib/node_modules"
+        )
+        let defaultModules = home.appendingPathComponent(
+            ".nvm/versions/node/v20.0.0/lib/node_modules"
+        )
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: customModules.appendingPathComponent("custom/package.json"),
+                data: Data(#"{"name":"custom","version":"2.0.0"}"#.utf8)
+            )
+            builder.addFile(
+                at: defaultModules.appendingPathComponent("fallback/package.json"),
+                data: Data(#"{"name":"fallback","version":"1.0.0"}"#.utf8)
+            )
+        }
+
+        let scanner = NpmScanner(
+            directoryAccess: provider,
+            homeDirectory: home,
+            environment: PackageManagerEnvironment(values: ["NVM_DIR": customNvm.path])
+        )
+        let packages = try await scanner.scan()
+
+        #expect(packages.map(\.name) == ["custom"])
+        #expect(packages.first?.qualifier == customModules.path)
     }
 }

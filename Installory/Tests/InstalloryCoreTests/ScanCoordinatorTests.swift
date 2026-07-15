@@ -76,6 +76,25 @@ private func makePackage(_ name: String, manager: PackageManager) -> Package {
     )
 }
 
+private actor CancellationProbe {
+    private var isCancelled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func markCancelled() {
+        isCancelled = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+
+    func waitUntilCancelled() async {
+        if isCancelled { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+}
+
 // MARK: - Tests
 
 @Suite("ScanCoordinator")
@@ -258,5 +277,36 @@ struct ScanCoordinatorTests {
                 }
             }
         }
+    }
+
+    @Test("CORE25-014: terminating the event consumer cancels scan production")
+    func terminatingConsumerCancelsScanProduction() async throws {
+        let cancellation = CancellationProbe()
+        let started = AsyncStream<Void>.makeStream()
+        let scanner = MockScanner(manager: .brew) {
+            started.continuation.yield()
+            return try await withTaskCancellationHandler {
+                try await Task.sleep(for: .seconds(60))
+                return []
+            } onCancel: {
+                Task { await cancellation.markCancelled() }
+            }
+        }
+        let coordinator = ScanCoordinator(
+            scanners: [scanner],
+            timeouts: [.brew: 120]
+        )
+        let consumer = Task {
+            for await _ in await coordinator.scan() {}
+        }
+
+        var startIterator = started.stream.makeAsyncIterator()
+        _ = await startIterator.next()
+        consumer.cancel()
+
+        try await withTimeout(1) {
+            await cancellation.waitUntilCancelled()
+        }
+        _ = await consumer.result
     }
 }

@@ -39,16 +39,19 @@ public actor ScanCoordinator {
         let scanners = self.scanners
         let timeouts = self.timeouts
         return AsyncStream { (continuation: AsyncStream<ScanEvent>.Continuation) in
-            Task.detached {
+            let producer = Task.detached {
                 var allPackages: [Package] = []
                 var perManager: [PackageManager: ScannerStatus] = [:]
 
-                await withTaskGroup(of: (PackageManager, ScannerStatus, [Package]).self) { group in
+                await withTaskGroup(
+                    of: (PackageManager, ScannerStatus, [Package])?.self
+                ) { group in
                     for scanner in scanners {
                         let mgr = scanner.manager
                         let timeoutSecs = timeouts[mgr] ?? 30
 
                         group.addTask {
+                            guard !Task.isCancelled else { return nil }
                             // .scannerStarted must be yielded before awaiting scan().
                             continuation.yield(.scannerStarted(mgr))
                             let start = Date()
@@ -71,24 +74,35 @@ public actor ScanCoordinator {
                                 let ms = Int(Date().timeIntervalSince(start) * 1000)
                                 status = .timedOut(durationMs: ms)
                                 packages = []
+                            } catch is CancellationError {
+                                return nil
                             } catch {
                                 let ms = Int(Date().timeIntervalSince(start) * 1000)
                                 status = .failed(reason: error.localizedDescription, durationMs: ms)
                                 packages = []
                             }
+                            guard !Task.isCancelled else { return nil }
                             continuation.yield(.scannerFinished(mgr, status, packages))
                             return (mgr, status, packages)
                         }
                     }
 
-                    for await (mgr, status, pkgs) in group {
+                    for await result in group {
+                        guard let (mgr, status, pkgs) = result else { continue }
                         perManager[mgr] = status
                         allPackages += pkgs
                     }
                 }
 
+                guard !Task.isCancelled else {
+                    continuation.finish()
+                    return
+                }
                 continuation.yield(.allFinished(perManager: perManager, allPackages: allPackages))
                 continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
             }
         }
     }

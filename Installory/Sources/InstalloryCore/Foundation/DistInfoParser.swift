@@ -20,6 +20,11 @@ public struct DistInfo: Equatable, Sendable {
     public let recordPaths: [String]
     /// The installer tool named by `INSTALLER`, when present.
     public let installer: String?
+    /// Whether the `.dist-info` directory contains a `REQUESTED` marker.
+    ///
+    /// pip writes this marker, which is commonly empty, for requirements the
+    /// user requested directly. Its presence matters; its contents do not.
+    public let requestedMarkerPresent: Bool
     /// Raw `Requires-Dist` entries from `METADATA`, one per line. Each entry may contain
     /// version constraints and environment markers; callers are responsible for stripping them.
     public let requiresDist: [String]
@@ -34,7 +39,8 @@ public struct DistInfo: Equatable, Sendable {
         description: String?,
         recordPaths: [String],
         installer: String?,
-        requiresDist: [String] = []
+        requiresDist: [String] = [],
+        requestedMarkerPresent: Bool = false
     ) {
         self.name = name
         self.version = version
@@ -46,6 +52,7 @@ public struct DistInfo: Equatable, Sendable {
         self.recordPaths = recordPaths
         self.installer = installer
         self.requiresDist = requiresDist
+        self.requestedMarkerPresent = requestedMarkerPresent
     }
 }
 
@@ -64,7 +71,8 @@ public struct DistInfoParser: Sendable {
         self.directoryAccess = directoryAccess
     }
 
-    /// Parses `METADATA`, `RECORD`, and optional `INSTALLER` from `directory`.
+    /// Parses `METADATA`, `RECORD`, optional `INSTALLER`, and `REQUESTED`
+    /// marker presence from `directory`.
     public func parse(directory: URL) throws -> DistInfo {
         let metadataURL = directory.appendingPathComponent("METADATA")
         let metadata = try parseMetadata(at: metadataURL)
@@ -79,7 +87,10 @@ public struct DistInfoParser: Sendable {
             description: metadata.description,
             recordPaths: parseRecordIfPresent(in: directory),
             installer: parseInstallerIfPresent(in: directory),
-            requiresDist: metadata.requiresDist
+            requiresDist: metadata.requiresDist,
+            requestedMarkerPresent: directoryAccess.fileExists(
+                at: directory.appendingPathComponent("REQUESTED")
+            )
         )
     }
 

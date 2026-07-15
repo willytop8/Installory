@@ -7,25 +7,38 @@ import Foundation
 /// of truth for install time, explicit/dependency status, and runtime dependencies.
 public struct BrewScanner: PackageScanner, Sendable {
     public let manager: PackageManager = .brew
+    public let managedPackageManagers: Set<PackageManager> = [.brew, .brewCask]
 
     private let pathDiscovery: PathDiscovery
     private let directoryAccess: any DirectoryAccessProvider
+    private let applicationDirectories: [URL]
 
     public init(
         pathDiscovery: PathDiscovery = PathDiscovery(),
-        directoryAccess: any DirectoryAccessProvider = SystemDirectoryAccessProvider()
+        directoryAccess: any DirectoryAccessProvider = SystemDirectoryAccessProvider(),
+        applicationDirectories: [URL]? = nil
     ) {
         self.pathDiscovery = pathDiscovery
         self.directoryAccess = directoryAccess
+        self.applicationDirectories = applicationDirectories ?? [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Applications", isDirectory: true),
+        ]
     }
 
     // MARK: - PackageScanner
 
     public func isAvailable() async -> Bool {
-        !pathDiscovery.homebrewPrefixes.isEmpty
+        guard !Task.isCancelled else { return false }
+        let isAvailable = !pathDiscovery.homebrewPrefixes.isEmpty
+        return !Task.isCancelled && isAvailable
     }
 
     public func scan() async throws -> [Package] {
+        try Task.checkCancellation()
+        let prefixes = pathDiscovery.homebrewPrefixes
+        try Task.checkCancellation()
         // `Package.id` carries no prefix component, so a formula installed under
         // both `/opt/homebrew` and `/usr/local` (common on Apple Silicon Macs
         // running Rosetta workloads) would otherwise yield two packages sharing
@@ -33,11 +46,25 @@ public struct BrewScanner: PackageScanner, Sendable {
         // Prefixes are ordered Apple Silicon first, so first-wins is correct.
         var seen: Set<String> = []
         var packages: [Package] = []
-        for prefix in pathDiscovery.homebrewPrefixes {
-            let found = try packagesIn(subdirectory: "Cellar", of: prefix, manager: .brew)
-                + packagesIn(subdirectory: "Caskroom", of: prefix, manager: .brewCask)
+        var sizer = BoundedDirectorySizer(directoryAccess: directoryAccess)
+        for prefix in prefixes {
+            try Task.checkCancellation()
+            let formulae = try await packagesIn(
+                subdirectory: "Cellar",
+                of: prefix,
+                manager: .brew,
+                sizer: &sizer
+            )
+            let casks = try await packagesIn(
+                subdirectory: "Caskroom",
+                of: prefix,
+                manager: .brewCask,
+                sizer: &sizer
+            )
+            let found = formulae + casks
             packages += found.filter { seen.insert($0.id).inserted }
         }
+        try Task.checkCancellation()
         return packages
     }
 
@@ -46,19 +73,24 @@ public struct BrewScanner: PackageScanner, Sendable {
     private func packagesIn(
         subdirectory: String,
         of prefix: URL,
-        manager: PackageManager
-    ) throws -> [Package] {
+        manager: PackageManager,
+        sizer: inout BoundedDirectorySizer
+    ) async throws -> [Package] {
+        try Task.checkCancellation()
         let root = prefix.appendingPathComponent(subdirectory)
         let nameDirs: [URL]
         do {
             nameDirs = try directoryAccess.contentsOfDirectory(at: root)
         } catch {
+            try Task.checkCancellation()
             // Cellar or Caskroom doesn't exist under this prefix — not an error.
             return []
         }
+        try Task.checkCancellation()
 
         var packages: [Package] = []
-        for nameDir in nameDirs {
+        for nameDir in nameDirs.sorted(by: { $0.path < $1.path }) {
+            try Task.checkCancellation()
             let pkgName = nameDir.lastPathComponent
             guard !pkgName.hasPrefix(".") else { continue }
 
@@ -66,14 +98,17 @@ public struct BrewScanner: PackageScanner, Sendable {
             do {
                 versionDirs = try directoryAccess.contentsOfDirectory(at: nameDir)
             } catch {
+                try Task.checkCancellation()
                 continue
             }
+            try Task.checkCancellation()
 
             // Collect all valid (versionDir, receipt) pairs, then pick the latest.
             // Multiple version directories arise when Homebrew retains old keg links;
             // emitting one Package per name prevents duplicate SwiftUI List IDs.
             var candidates: [(versionDir: URL, receipt: InstallReceipt)] = []
-            for versionDir in versionDirs {
+            for versionDir in versionDirs.sorted(by: { $0.path < $1.path }) {
+                try Task.checkCancellation()
                 let version = versionDir.lastPathComponent
                 guard !version.hasPrefix(".") else { continue }
                 let receiptURL = versionDir.appendingPathComponent("INSTALL_RECEIPT.json")
@@ -85,14 +120,17 @@ public struct BrewScanner: PackageScanner, Sendable {
             }
 
             guard let best = pickLatest(candidates) else { continue }
-            packages.append(makePackage(
+            packages.append(try await makePackage(
                 name: pkgName,
                 version: best.versionDir.lastPathComponent,
                 installPath: best.versionDir,
                 receipt: best.receipt,
-                manager: manager
+                manager: manager,
+                scannerRoot: root,
+                sizer: &sizer
             ))
         }
+        try Task.checkCancellation()
         return packages
     }
 
@@ -129,13 +167,34 @@ public struct BrewScanner: PackageScanner, Sendable {
         version: String,
         installPath: URL,
         receipt: InstallReceipt,
-        manager: PackageManager
-    ) -> Package {
+        manager: PackageManager,
+        scannerRoot: URL,
+        sizer: inout BoundedDirectorySizer
+    ) async throws -> Package {
         let id = "\(manager.rawValue)::\(name)"
         let installedAt = receipt.time.map { Date(timeIntervalSince1970: $0) }
         let deps = receipt.runtimeDependencies?.map(\.name) ?? []
         let isExplicit = receipt.installedOnRequest ?? !(receipt.installedAsDependency ?? false)
         let artifactPaths = manager == .brewCask ? receipt.artifactPaths : nil
+        try Task.checkCancellation()
+        let sizeRoots: [SizeRoot]
+        if manager == .brew {
+            sizeRoots = [.tree(installPath)]
+        } else {
+            sizeRoots = caskApplicationRoots(receipt: receipt) ?? []
+        }
+        let sizeBytes: Int64?
+        if sizeRoots.isEmpty {
+            sizeBytes = nil
+        } else if manager == .brew {
+            sizeBytes = try await sizer.measure(
+                sizeRoots,
+                constrainedTo: scannerRoot
+            ).sizeBytes
+        } else {
+            sizeBytes = try await sizer.measure(sizeRoots).sizeBytes
+        }
+        try Task.checkCancellation()
 
         return Package(
             id: id,
@@ -146,13 +205,46 @@ public struct BrewScanner: PackageScanner, Sendable {
             installPath: installPath,
             installedAt: installedAt,
             installedAtConfidence: .high,
-            sizeBytes: nil,
+            sizeBytes: sizeBytes,
             isExplicit: isExplicit,
             isReadOnly: false,
             dependencies: deps,
             artifactPaths: artifactPaths,
             lastSeen: Date()
         )
+    }
+
+    /// Returns the installed app bundles named by a cask receipt. App artifacts
+    /// are accepted only as plain `.app` basenames and are resolved underneath
+    /// known application directories. Zap paths are intentionally never sized:
+    /// they are user data, not the cask payload removed by `brew uninstall`.
+    private func caskApplicationRoots(receipt: InstallReceipt) -> [SizeRoot]? {
+        let appPaths = Array(Set(receipt.appPaths)).sorted()
+        guard !appPaths.isEmpty else { return nil }
+
+        var seen: Set<String> = []
+        var roots: [SizeRoot] = []
+        for appPath in appPaths {
+            guard Self.isSafeCaskAppBasename(appPath) else { return nil }
+            guard let appURL = applicationDirectories.lazy
+                .map({ $0.appendingPathComponent(appPath, isDirectory: true) })
+                .first(where: { directoryAccess.fileExists(at: $0) })
+            else { return nil }
+
+            let standardized = appURL.standardizedFileURL
+            if seen.insert(standardized.path).inserted {
+                roots.append(.tree(standardized))
+            }
+        }
+        return roots.isEmpty ? nil : roots
+    }
+
+    private static func isSafeCaskAppBasename(_ path: String) -> Bool {
+        !path.isEmpty
+            && path.hasSuffix(".app")
+            && !path.contains("/")
+            && !path.contains("\\")
+            && !path.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
     }
 }
 
@@ -188,6 +280,10 @@ private struct InstallReceipt: Decodable {
     var artifactPaths: [String]? {
         let paths = artifacts?.flatMap(\.paths) ?? []
         return paths.isEmpty ? nil : paths
+    }
+
+    var appPaths: [String] {
+        artifacts?.flatMap { $0.app ?? [] } ?? []
     }
 
     struct RuntimeDep: Decodable {
