@@ -11,7 +11,8 @@ struct SnapshotChangesTests {
         brew: [(name: String, version: String)] = [],
         pip: [(qualifier: String, name: String, version: String)] = [],
         npm: [(name: String, version: String)] = [],
-        cargo: [(name: String, version: String)] = []
+        cargo: [(name: String, version: String)] = [],
+        gem: [(qualifier: String, name: String, version: String)] = []
     ) -> Snapshot {
         var managers: [PackageManager: [SnapshotPackage]] = [:]
         if !brew.isEmpty {
@@ -35,6 +36,12 @@ struct SnapshotChangesTests {
                 SnapshotPackage(name: entry.name, version: entry.version, qualifier: q, isExplicit: true)
             )
         }
+        for entry in gem {
+            let q: String? = entry.qualifier.isEmpty ? nil : entry.qualifier
+            managers[.gem, default: []].append(
+                SnapshotPackage(name: entry.name, version: entry.version, qualifier: q, isExplicit: true)
+            )
+        }
         return Snapshot(
             id: UUID(),
             createdAt: Date(),
@@ -51,7 +58,9 @@ struct SnapshotChangesTests {
         version: String = "1.0.0"
     ) -> Package {
         Package(
-            id: "\(manager.rawValue):\(qualifier ?? ""):\(name)",
+            id: manager == .gem
+                ? "\(manager.rawValue):\(qualifier ?? ""):\(name):\(version)"
+                : "\(manager.rawValue):\(qualifier ?? ""):\(name)",
             manager: manager,
             qualifier: qualifier,
             name: name,
@@ -153,6 +162,41 @@ struct SnapshotChangesTests {
         #expect(!result.added.contains { $0.name == "ffmpeg" })
     }
 
+    @Test("CORE25-007: coexisting gem versions remain distinct in snapshot changes")
+    func coexistingGemVersionsRemainDistinct() throws {
+        let qualifier = "/Users/tester/.gem/ruby/3.3.0/specifications"
+        let snapshot = makeSnapshot(gem: [
+            (qualifier, "nokogiri", "1.15.4"),
+            (qualifier, "nokogiri", "1.16.8"),
+        ])
+        let live = [
+            makePackage(
+                manager: .gem,
+                name: "nokogiri",
+                qualifier: qualifier,
+                version: "1.16.8"
+            ),
+            makePackage(
+                manager: .gem,
+                name: "nokogiri",
+                qualifier: qualifier,
+                version: "1.17.0"
+            ),
+        ]
+
+        let changes = snapshotChanges(from: snapshot, to: live)
+        #expect(changes.added.map(\.version) == ["1.17.0"])
+        #expect(changes.removed.map(\.package.version) == ["1.15.4"])
+        #expect(changes.versionChanged.isEmpty)
+        #expect(snapshotDiff(snapshot: snapshot, livePackages: live).map(\.package.version) == ["1.15.4"])
+
+        let old = try #require(snapshot.payload.managers[.gem]?.first)
+        let newer = try #require(snapshot.payload.managers[.gem]?.last)
+        #expect(old.id != newer.id)
+        #expect(MissingPackage(manager: .gem, package: old).id
+            != MissingPackage(manager: .gem, package: newer).id)
+    }
+
     // MARK: - Identical inventories
 
     @Test func identicalInventoriesProducesEmptyChangeSet() {
@@ -216,6 +260,45 @@ struct SnapshotChangesTests {
         #expect(r1.added.count == r2.added.count)
         #expect(r1.removed.count == r2.removed.count)
         #expect(r1.versionChanged.count == r2.versionChanged.count)
+    }
+
+    @Test("CORE25-015: change arrays use stable identity order")
+    func changeArraysUseStableIdentityOrder() {
+        let snapshot = makeSnapshot(brew: [
+            ("zulu-removed", "1"),
+            ("delta-changed", "1"),
+            ("whiskey-removed", "1"),
+            ("charlie-changed", "1"),
+            ("victor-removed", "1"),
+            ("bravo-changed", "1"),
+            ("uniform-removed", "1"),
+            ("alpha-changed", "1"),
+        ])
+        let live = [
+            makePackage(manager: .brew, name: "hotel-added"),
+            makePackage(manager: .brew, name: "delta-changed", version: "2"),
+            makePackage(manager: .brew, name: "golf-added"),
+            makePackage(manager: .brew, name: "charlie-changed", version: "2"),
+            makePackage(manager: .brew, name: "foxtrot-added"),
+            makePackage(manager: .brew, name: "bravo-changed", version: "2"),
+            makePackage(manager: .brew, name: "echo-added"),
+            makePackage(manager: .brew, name: "alpha-changed", version: "2"),
+        ]
+
+        let result = snapshotChanges(from: snapshot, to: live)
+
+        #expect(result.added.map(\.name) == [
+            "echo-added", "foxtrot-added", "golf-added", "hotel-added",
+        ])
+        #expect(result.removed.map(\.package.name) == [
+            "uniform-removed", "victor-removed", "whiskey-removed", "zulu-removed",
+        ])
+        #expect(result.versionChanged.map(\.name) == [
+            "alpha-changed", "bravo-changed", "charlie-changed", "delta-changed",
+        ])
+        #expect(snapshotDiff(snapshot: snapshot, livePackages: live).map(\.package.name) == [
+            "uniform-removed", "victor-removed", "whiskey-removed", "zulu-removed",
+        ])
     }
 
     // MARK: - VersionChange identity

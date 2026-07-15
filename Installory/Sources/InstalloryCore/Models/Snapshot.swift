@@ -38,12 +38,12 @@ public struct SnapshotPayload: Sendable {
 
 /// A minimal package record stored inside a snapshot payload.
 public struct SnapshotPackage: Identifiable, Codable, Sendable {
-    /// Composite of name and qualifier so that pip packages across different interpreters
-    /// with the same name don't collide when used as SwiftUI ForEach identifiers.
-    public var id: String { "\(name)|\(qualifier ?? "")" }
+    /// Composite of name, qualifier, and version. Version is required because
+    /// RubyGems can retain multiple versions of one gem in the same install root.
+    public var id: String { "\(name)|\(qualifier ?? "")|\(version)" }
     public let name: String
     public let version: String
-    /// Interpreter path for pip packages; nil for all other managers.
+    /// Manager-specific installation scope when one was recorded.
     public let qualifier: String?
     public let isExplicit: Bool
 }
