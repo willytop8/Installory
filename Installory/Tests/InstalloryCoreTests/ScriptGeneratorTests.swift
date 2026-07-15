@@ -15,17 +15,20 @@ struct ScriptGeneratorTests {
     private func makePackage(
         manager: PackageManager,
         name: String,
+        version: String = "1.0.0",
         qualifier: String? = nil,
         isReadOnly: Bool = false,
         dependencies: [String] = [],
         artifactPaths: [String]? = nil
     ) -> Package {
         Package(
-            id: "\(manager.rawValue):\(qualifier ?? ""):\(name)",
+            id: manager == .gem
+                ? "\(manager.rawValue):\(qualifier ?? ""):\(name):\(version)"
+                : "\(manager.rawValue):\(qualifier ?? ""):\(name)",
             manager: manager,
             qualifier: qualifier,
             name: name,
-            version: "1.0.0",
+            version: version,
             installPath: nil,
             installedAt: nil,
             installedAtConfidence: .low,
@@ -262,6 +265,57 @@ struct ScriptGeneratorTests {
         #expect(script.contains("brew uninstall cycler-b"))
     }
 
+    @Test("PERF25-010: large dependency ordering uses a deterministic logarithmic ready queue")
+    func largeDependencyOrderingUsesDeterministicLogarithmicReadyQueue() {
+        let pairCount = 2_000
+        let apps = (0..<pairCount).map { index in
+            let suffix = String(format: "%04d", index)
+            return makePackage(
+                manager: .brew,
+                name: "app-\(suffix)",
+                dependencies: ["lib-\(suffix)"]
+            )
+        }
+        let libraries = (0..<pairCount).map { index in
+            makePackage(
+                manager: .brew,
+                name: "lib-\(String(format: "%04d", index))"
+            )
+        }
+        let packages = Array((apps + libraries).reversed())
+
+        func uninstallNames(from packages: [Package]) -> [String] {
+            lines(of: generator.generate(packages: packages).scriptText)
+                .filter { $0.hasPrefix("brew uninstall ") }
+                .map { String($0.dropFirst("brew uninstall ".count)) }
+        }
+
+        let firstOrder = uninstallNames(from: packages)
+        let secondOrder = uninstallNames(from: libraries + apps)
+        let positions = Dictionary(
+            uniqueKeysWithValues: firstOrder.enumerated().map { ($0.element, $0.offset) }
+        )
+
+        #expect(firstOrder == secondOrder)
+        #expect(firstOrder.count == packages.count)
+        for index in 0..<pairCount {
+            let suffix = String(format: "%04d", index)
+            let appPosition = positions["app-\(suffix)"]
+            let libraryPosition = positions["lib-\(suffix)"]
+            #expect(appPosition != nil && libraryPosition != nil)
+            if let appPosition, let libraryPosition {
+                #expect(appPosition < libraryPosition)
+            }
+        }
+
+        let diagnostics = ScriptGenerator.dependencyOrderingDiagnostics(for: packages)
+        #expect(diagnostics.enqueuedNodeCount == packages.count)
+        #expect(diagnostics.dequeuedNodeCount == packages.count)
+        // A binary heap performs O(n log n) comparisons. This generous structural
+        // bound catches a return to whole-queue sorting without using wall-clock time.
+        #expect(diagnostics.queueComparisonCount < packages.count * 40)
+    }
+
     // MARK: - Multiple managers
 
     @Test func multipleManagersEachGetOwnSectionHeader() {
@@ -329,6 +383,81 @@ struct ScriptGeneratorTests {
         #expect(lines(of: result.scriptText).contains(#"brew uninstall 'weird package'\''$(rm -rf ~)'"#))
     }
 
+    // MARK: - CORE25-003 / SEC25-003: comment injection
+
+    @Test("CORE25-003/SEC25-003: shell comment sanitizer neutralizes line breaks and control characters")
+    func shellCommentSanitizerNeutralizesUnsafeScalars() {
+        let unsafe = CharacterSet.controlCharacters.union(.newlines)
+        let sanitized = shellCommentText("alpha\r\nbeta\t\u{001B}gamma\u{2028}delta\u{2029}end")
+
+        #expect(sanitized == "alpha  beta  gamma delta end")
+        #expect(sanitized.unicodeScalars.allSatisfy { !unsafe.contains($0) })
+    }
+
+    @Test("CORE25-003/SEC25-003: echo previews neutralize terminal control sequences")
+    func echoPreviewNeutralizesTerminalControlSequences() {
+        let unsafe = CharacterSet.controlCharacters.union(.newlines)
+        let preview = shellEchoLine(
+            for: "brew uninstall 'tool\u{001B}]52;c;Y2xpcGJvYXJk\u{0007}\nnext'"
+        )
+
+        #expect(preview.contains("tool ]52;c;Y2xpcGJvYXJk  next"))
+        #expect(preview.unicodeScalars.allSatisfy { !unsafe.contains($0) })
+    }
+
+    @Test("CORE25-003/SEC25-003: hostile qualifier stays inside its section comment")
+    func hostileQualifierCannotEscapeSectionComment() {
+        let qualifier = "/tmp/python\nprintf QUALIFIER_PWNED\u{001B}"
+        let pkg = makePackage(manager: .pip, name: "requests", qualifier: qualifier)
+        let script = generator.generate(packages: [pkg]).scriptText
+
+        #expect(script.contains("# === pip (interpreter: /tmp/python printf QUALIFIER_PWNED ) ==="))
+        #expect(!script.contains("# === pip (interpreter: /tmp/python\n"))
+    }
+
+    @Test("CORE25-003/SEC25-003: hostile cask artifact path stays inside its comment")
+    func hostileCaskArtifactPathCannotEscapeComment() {
+        let pkg = makePackage(
+            manager: .brewCask,
+            name: "warp",
+            artifactPaths: ["/Applications/Warp.app\nprintf ARTIFACT_PWNED\u{0007}"]
+        )
+        let script = generator.generate(packages: [pkg]).scriptText
+
+        #expect(script.contains("#   /Applications/Warp.app printf ARTIFACT_PWNED "))
+        #expect(!script.contains("#   /Applications/Warp.app\n"))
+        #expect(!lines(of: script).contains(where: { $0.hasPrefix("printf ARTIFACT_PWNED") }))
+    }
+
+    @Test("CORE25-003/SEC25-003: hostile MAS name stays inside its manual-removal comment")
+    func hostileMASNameCannotEscapeComment() {
+        let pkg = makePackage(manager: .mas, name: "Xcode\nprintf MAS_PWNED\u{0000}")
+        let script = generator.generate(packages: [pkg]).scriptText
+
+        #expect(script.contains("# Xcode printf MAS_PWNED : mas does not support CLI uninstall"))
+        #expect(!lines(of: script).contains(where: { $0.hasPrefix("printf MAS_PWNED") }))
+    }
+
+    @Test("CORE25-003/SEC25-003: hostile denylist command and reason remain commented")
+    func hostileDenylistMetadataCannotEscapeComment() {
+        let packageName = "essential\nprintf COMMAND_PWNED"
+        let denylist = Denylist(entries: [
+            DenylistEntry(
+                manager: .brew,
+                namePattern: packageName,
+                reason: "needed\nprintf REASON_PWNED\u{001B}"
+            ),
+        ])
+        let hostileGenerator = ScriptGenerator(denylist: denylist)
+        let script = hostileGenerator.generate(packages: [
+            makePackage(manager: .brew, name: packageName),
+        ]).scriptText
+
+        #expect(script.contains("# brew uninstall 'essential printf COMMAND_PWNED'  # reason: needed printf REASON_PWNED "))
+        #expect(!lines(of: script).contains(where: { $0.hasPrefix("printf COMMAND_PWNED") }))
+        #expect(!lines(of: script).contains(where: { $0.hasPrefix("printf REASON_PWNED") }))
+    }
+
     // MARK: - removalCommand(for:)
 
     @Test func removalCommandBrewFormula() {
@@ -363,8 +492,45 @@ struct ScriptGeneratorTests {
     }
 
     @Test func removalCommandPipx() {
-        let pkg = makePackage(manager: .pipx, name: "black")
+        let pkg = makePackage(
+            manager: .pipx,
+            name: "black",
+            qualifier: "/Users/tester/.local/share/pipx/venvs/black"
+        )
         #expect(generator.removalCommand(for: pkg) == "pipx uninstall black")
+    }
+
+    @Test("CORE25-004: same-name suffixed pipx installs have distinct exact uninstall targets")
+    func suffixedPipxInstallsHaveDistinctUninstallTargets() {
+        let venv311 = "/Users/tester/.local/share/pipx/venvs/black-3-11"
+        let venv312 = "/Users/tester/.local/share/pipx/venvs/black-3-12"
+        let packages = [
+            makePackage(manager: .pipx, name: "black", qualifier: venv312),
+            makePackage(manager: .pipx, name: "black", qualifier: venv311),
+        ]
+
+        let commands = lines(of: generator.generate(packages: packages).scriptText)
+            .filter { $0.hasPrefix("pipx uninstall ") }
+
+        #expect(commands == [
+            "pipx uninstall black-3-11",
+            "pipx uninstall black-3-12",
+        ])
+        #expect(generator.removalCommand(for: packages[0]) == "pipx uninstall black-3-12")
+        #expect(generator.removalCommand(for: packages[1]) == "pipx uninstall black-3-11")
+    }
+
+    @Test("CORE25-004: pipx environment targets are shell quoted end-to-end")
+    func pipxEnvironmentTargetIsShellQuoted() {
+        let environmentName = "black-qa'$(touch PWNED)"
+        let package = makePackage(
+            manager: .pipx,
+            name: "black",
+            qualifier: "/Users/tester/.local/share/pipx/venvs/\(environmentName)"
+        )
+
+        #expect(generator.removalCommand(for: package)
+            == #"pipx uninstall 'black-qa'\''$(touch PWNED)'"#)
     }
 
     @Test func removalCommandCargo() {
@@ -372,9 +538,27 @@ struct ScriptGeneratorTests {
         #expect(generator.removalCommand(for: pkg) == "cargo uninstall ripgrep")
     }
 
-    @Test func removalCommandGem() {
-        let pkg = makePackage(manager: .gem, name: "bundler")
-        #expect(generator.removalCommand(for: pkg) == "gem uninstall bundler")
+    @Test("CORE25-007: gem removal targets the recorded version")
+    func gemRemovalTargetsRecordedVersion() {
+        let pkg = makePackage(manager: .gem, name: "nokogiri", version: "1.15.4")
+        #expect(generator.removalCommand(for: pkg) == "gem uninstall nokogiri -v 1.15.4")
+    }
+
+    @Test("CORE25-007: cleanup keeps every selected version of the same gem")
+    func cleanupKeepsMultipleGemVersions() {
+        let qualifier = "/Users/tester/.gem/ruby/3.3.0/specifications"
+        let packages = [
+            makePackage(manager: .gem, name: "nokogiri", version: "1.15.4", qualifier: qualifier),
+            makePackage(manager: .gem, name: "nokogiri", version: "1.16.8", qualifier: qualifier),
+        ]
+
+        let commands = lines(of: generator.generate(packages: Array(packages.reversed())).scriptText)
+            .filter { $0.hasPrefix("gem uninstall nokogiri -v ") }
+
+        #expect(commands == [
+            "gem uninstall nokogiri -v 1.15.4 --install-dir /Users/tester/.gem/ruby/3.3.0",
+            "gem uninstall nokogiri -v 1.16.8 --install-dir /Users/tester/.gem/ruby/3.3.0",
+        ])
     }
 
     @Test func removalCommandMasReturnsNil() {
@@ -454,8 +638,8 @@ struct ScriptGeneratorQualifierTests {
         let commands = commandLines(script, containing: "uninstall bundler")
         #expect(commands.count == 2)
         #expect(Set(commands).count == 2)
-        #expect(commands.contains("/Users/w/.rbenv/versions/3.1.4/bin/gem uninstall bundler"))
-        #expect(commands.contains("/Users/w/.rbenv/versions/3.2.2/bin/gem uninstall bundler"))
+        #expect(commands.contains("/Users/w/.rbenv/versions/3.1.4/bin/gem uninstall bundler -v 1.0.0"))
+        #expect(commands.contains("/Users/w/.rbenv/versions/3.2.2/bin/gem uninstall bundler -v 1.0.0"))
     }
 
     @Test("CORE-03: npm sections are grouped per Node install")
@@ -486,7 +670,7 @@ struct ScriptGeneratorQualifierTests {
             makePackage(manager: .gem, name: "bundler", qualifier: "/Users/w/.gem/ruby/3.2.0/specifications"),
         ]).scriptText
 
-        #expect(script.contains("gem uninstall --install-dir /Users/w/.gem/ruby/3.2.0 bundler"))
+        #expect(script.contains("gem uninstall bundler -v 1.0.0 --install-dir /Users/w/.gem/ruby/3.2.0"))
     }
 
     @Test("CORE-03: removalCommand honours the qualifier, matching the generated script")
@@ -504,7 +688,7 @@ struct ScriptGeneratorQualifierTests {
         ]).scriptText
 
         #expect(script.contains("npm uninstall -g typescript"))
-        #expect(script.contains("gem uninstall bundler"))
+        #expect(script.contains("gem uninstall bundler -v 1.0.0"))
         #expect(script.contains("# === npm (global) ==="))
         #expect(script.contains("# === Ruby Gems ==="))
     }
