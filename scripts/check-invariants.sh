@@ -64,7 +64,7 @@ require_file "$ENTITLEMENTS"
 expected_entitlements=(
     com.apple.security.app-sandbox
     com.apple.security.files.bookmarks.app-scope
-    com.apple.security.files.user-selected.read-only
+    com.apple.security.files.user-selected.read-write
 )
 
 for key in "${expected_entitlements[@]}"; do
@@ -83,6 +83,11 @@ entitlement_count="$(/usr/bin/plutil -p "$ENTITLEMENTS" | /usr/bin/grep -c ' => 
 project_entitlement_count="$(rg -c '^[[:space:]]*com\.apple\.security\.' project.yml || true)"
 [ "${project_entitlement_count:-0}" -eq "${#expected_entitlements[@]}" ] || \
     fail "project.yml entitlement set changed: expected exactly ${#expected_entitlements[@]} approved keys"
+
+# The entitlement authorizes explicit save-panel destinations, but every
+# persistent scanning bookmark must remain read-only.
+rg -q '\.securityScopeAllowOnlyReadAccess' App/Sources/FolderAccessManager.swift || \
+    fail "Scanning bookmarks must retain securityScopeAllowOnlyReadAccess"
 
 require_file scripts/regenerate-xcode.sh
 [ -x scripts/regenerate-xcode.sh ] || fail "scripts/regenerate-xcode.sh must be executable"
