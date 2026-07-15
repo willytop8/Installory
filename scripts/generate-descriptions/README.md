@@ -14,16 +14,47 @@ Python 3.9+ (no third-party packages — stdlib only).
 # Full run — all registries, all packages (~15–20 min on first run, fast on re-runs)
 python3 scripts/generate-descriptions/generate.py
 
-# Fast partial run — good for verifying the pipeline
-python3 scripts/generate-descriptions/generate.py --limit 500
+# Full fetch + production safety validation, without writing anything
+python3 scripts/generate-descriptions/generate.py --check
 
-# Skip a registry
-python3 scripts/generate-descriptions/generate.py --no-npm
-python3 scripts/generate-descriptions/generate.py --no-pip
+# Fast partial run — it must use a separate output or --check
+python3 scripts/generate-descriptions/generate.py \
+  --limit 500 \
+  --output /tmp/installory-descriptions-partial.json
+
+# Skip a registry while testing, without writing anything
+python3 scripts/generate-descriptions/generate.py --no-npm --check
 ```
 
 Run from the repo root or from this directory — the script resolves paths
 relative to itself.
+
+## Production-write safety
+
+The checked-in `App/Resources/descriptions.json` is treated as the last-good
+production corpus:
+
+- `--limit`, `--no-pip`, and `--no-npm` cannot replace it by default. Use a
+  separate `--output PATH` for partial artifacts or `--check` for a no-write run.
+- `--allow-partial` is an explicit, intentionally unsafe escape hatch for a
+  maintainer who truly wants a partial corpus at the production path.
+- Every corpus is validated before writing: keys must use a known manager prefix,
+  pip/npm keys must be normalized, descriptions must be non-empty and bounded,
+  declared counts must exactly match the description keys, and manager counts
+  must add up to the total.
+- Full production runs must meet conservative absolute floors and retain at least
+  80% of each manager's last-good count. A failed or badly truncated registry is
+  rejected without changing the checked-in file.
+- Output is written to a temporary file in the destination directory, flushed,
+  and atomically renamed only after validation succeeds.
+
+Run the generator's dependency-free regression suite with:
+
+```bash
+python3 -m unittest discover \
+  -s scripts/generate-descriptions/tests \
+  -p 'test_*.py'
+```
 
 ## Resumability
 

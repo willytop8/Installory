@@ -30,6 +30,10 @@ Installory.xcodeproj/
 *.log
 *.tmp
 
+# Python build-tool caches
+__pycache__/
+*.pyc
+
 # Personal/project-tool artifacts
 .claude/settings.local.json
 
