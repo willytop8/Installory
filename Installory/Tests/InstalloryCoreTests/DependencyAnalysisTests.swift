@@ -137,6 +137,20 @@ struct DependencyAnalysisTests {
         #expect(orphans.map(\.name) == ["alpha", "zebra", "util", "tool"])
     }
 
+    @Test("APP25-022: case-insensitive orphan sort ties break by stable package ID")
+    func deterministicOrderForEqualFoldedNames() {
+        let packages = [
+            pkg("alpha", manager: .brew),
+            pkg("Alpha", manager: .brew),
+        ]
+
+        let ids = Array(packages.reversed())
+            .orphanedPackages(denylist: Denylist(entries: []))
+            .map(\.id)
+
+        #expect(ids == ids.sorted())
+    }
+
     @Test("Input array is not mutated — calling twice returns identical results")
     func inputImmutable() {
         let packages = [
@@ -184,5 +198,64 @@ struct DependencyAnalysisTests {
         #expect(npmOrphans.contains("openssl"))
         // brew curl has no brew dependents → orphan
         #expect(names.contains("curl"))
+    }
+
+    // MARK: - Qualifier and package-name identity
+
+    @Test("CORE25-008: a dependency protects only the matching manager qualifier")
+    func dependencyIsIsolatedByQualifier() {
+        let python311 = "/opt/homebrew/bin/python3.11"
+        let python312 = "/opt/homebrew/bin/python3.12"
+        let packages = [
+            pkg("requests", manager: .pip, qualifier: python311),
+            pkg("requests", manager: .pip, qualifier: python312),
+            pkg("api-client", manager: .pip, qualifier: python311, deps: ["requests"]),
+        ]
+
+        let orphanIds = Set(
+            packages
+                .orphanedPackages(denylist: Denylist(entries: []))
+                .map(\.id)
+        )
+
+        #expect(!orphanIds.contains("pip:\(python311):requests"))
+        #expect(orphanIds.contains("pip:\(python312):requests"))
+        #expect(orphanIds.contains("pip:\(python311):api-client"))
+    }
+
+    @Test("CORE25-008: pip dependency matching applies PEP 503 normalization")
+    func pipDependencyUsesPEP503Normalization() {
+        let interpreter = "/usr/bin/python3"
+        let packages = [
+            pkg("Requests_OAuthLib", manager: .pip, qualifier: interpreter),
+            pkg(
+                "auth-client",
+                manager: .pip,
+                qualifier: interpreter,
+                deps: ["requests...oauthlib"]
+            ),
+        ]
+
+        let orphanNames = packages
+            .orphanedPackages(denylist: Denylist(entries: []))
+            .map(\.name)
+
+        #expect(orphanNames == ["auth-client"])
+    }
+
+    @Test("CORE25-008: PEP 503 separator folding is not applied to other managers")
+    func nonPythonManagersPreservePackageSeparators() {
+        let packages = [
+            pkg("my_gem", manager: .gem),
+            pkg("consumer", manager: .gem, deps: ["my-gem"]),
+        ]
+
+        let orphanNames = Set(
+            packages
+                .orphanedPackages(denylist: Denylist(entries: []))
+                .map(\.name)
+        )
+
+        #expect(orphanNames == ["my_gem", "consumer"])
     }
 }

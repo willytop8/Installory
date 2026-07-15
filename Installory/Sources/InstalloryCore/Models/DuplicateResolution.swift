@@ -74,11 +74,25 @@ func executableDirectory(for package: Package) -> String? {
         return root.appendingPathComponent("bin").path
 
     case .npm:
-        // Expected layout: {npm-prefix}/lib/node_modules/{package-name}
-        // Binary symlinks:  {npm-prefix}/bin/
-        // Navigate: package-name → node_modules → lib → npm-prefix → bin
-        let root = url
-            .deletingLastPathComponent() // node_modules dir
+        // Expected layouts:
+        //   {npm-prefix}/lib/node_modules/{package-name}
+        //   {npm-prefix}/lib/node_modules/{scope}/{package-name}
+        // Binary symlinks: {npm-prefix}/bin/
+        // A scoped package has one extra path component, so first identify the
+        // node_modules directory rather than navigating a fixed number of levels.
+        let packageParent = url.deletingLastPathComponent()
+        let possibleScopedRoot = packageParent.deletingLastPathComponent()
+        let nodeModulesDirectory: URL
+        if packageParent.lastPathComponent == "node_modules" {
+            nodeModulesDirectory = packageParent
+        } else if possibleScopedRoot.lastPathComponent == "node_modules" {
+            nodeModulesDirectory = possibleScopedRoot
+        } else {
+            // Preserve the existing best-effort derivation for an unexpected
+            // layout: treat the immediate parent as node_modules.
+            nodeModulesDirectory = packageParent
+        }
+        let root = nodeModulesDirectory
             .deletingLastPathComponent() // lib dir
             .deletingLastPathComponent() // npm-prefix
         return root.appendingPathComponent("bin").path
