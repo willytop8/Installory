@@ -16,6 +16,14 @@ struct DatabaseTests {
         return (db, dir)
     }
 
+    private func makeTempPool() throws -> (DatabasePool, URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("InstalloryMigrationTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let pool = try DatabasePool(path: dir.appendingPathComponent("installory.db").path)
+        return (pool, dir)
+    }
+
     // MARK: - Schema
 
     @Test("Migrations create all four tables")
@@ -118,6 +126,104 @@ struct DatabaseTests {
             )
         }
         #expect(tables.contains("packages"))
+    }
+
+    @Test("A shipped v1 database upgrades to v2 without losing rows")
+    func v1DatabaseUpgradesToV2WithoutLosingRows() throws {
+        let (pool, dir) = try makeTempPool()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let migrator = Migrations.makeMigrator()
+        try migrator.migrate(pool, upTo: "v1_initial")
+
+        try pool.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO packages (
+                        id, manager, qualifier, name, version, install_path,
+                        installed_at, installed_at_confidence, size_bytes,
+                        is_explicit, is_read_only, dependencies, last_seen
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                arguments: [
+                    "brew::git", "brew", nil, "git", "2.44.0",
+                    "/opt/homebrew/Cellar/git/2.44.0", 1_700_000_000,
+                    "high", 50_000_000, 1, 0, "[\"gettext\"]", 1_710_000_000,
+                ]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO provenance_evidence (
+                        package_id, payload, collected_at, overall_confidence
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                arguments: ["brew::git", "{\"packageId\":\"brew::git\"}", 1_710_000_100, "high"]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO snapshots (id, created_at, reason, note, payload)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                arguments: ["snapshot-v1", 1_710_000_200, "manual", "before upgrade", "[]"]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO scan_runs (id, started_at, completed_at, per_manager_results)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                arguments: ["scan-v1", 1_710_000_300, 1_710_000_301, "{}"]
+            )
+        }
+
+        try Migrations.run(pool)
+
+        try pool.read { db in
+            let package = try Row.fetchOne(db, sql: "SELECT * FROM packages WHERE id = ?", arguments: ["brew::git"])
+            #expect(package != nil)
+            #expect((package?["name"] as String?) == "git")
+            #expect((package?["artifact_paths"] as String?) == nil)
+
+            let evidenceCount = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM provenance_evidence WHERE package_id = ?",
+                arguments: ["brew::git"]
+            )
+            #expect(evidenceCount == 1)
+            #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM snapshots") == 1)
+            #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM scan_runs") == 1)
+
+            let foreignKeyViolations = try Row.fetchAll(db, sql: "PRAGMA foreign_key_check")
+            #expect(foreignKeyViolations.isEmpty)
+        }
+    }
+
+    @Test("Fresh and v1-upgraded databases have equivalent application schemas")
+    func freshAndUpgradedDatabasesHaveEquivalentSchema() throws {
+        let (upgradedPool, upgradedDir) = try makeTempPool()
+        defer { try? FileManager.default.removeItem(at: upgradedDir) }
+        let migrator = Migrations.makeMigrator()
+        try migrator.migrate(upgradedPool, upTo: "v1_initial")
+        try Migrations.run(upgradedPool)
+
+        let (fresh, freshDir) = try makeTempDatabase()
+        defer { try? FileManager.default.removeItem(at: freshDir) }
+
+        func applicationSchema(in reader: some DatabaseReader) throws -> [String] {
+            try reader.read { db in
+                try String.fetchAll(
+                    db,
+                    sql: """
+                        SELECT type || ':' || name || ':' || COALESCE(sql, '')
+                        FROM sqlite_master
+                        WHERE name NOT LIKE 'sqlite_%'
+                          AND name != 'grdb_migrations'
+                        ORDER BY type, name
+                        """
+                )
+            }
+        }
+
+        #expect(try applicationSchema(in: upgradedPool) == applicationSchema(in: fresh.pool))
     }
 
     // MARK: - GRDB record round-trips
