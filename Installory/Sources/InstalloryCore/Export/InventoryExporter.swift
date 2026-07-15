@@ -4,9 +4,10 @@ import Foundation
 ///
 /// Pure formatter — no filesystem access. The caller persists the returned
 /// string. CSV is RFC 4180 quoting: fields containing comma, quote, or newline
-/// are wrapped in double quotes with internal `"` doubled. Markdown uses GitHub
-/// pipe tables; pipes and backticks in cells are escaped so the table stays
-/// well-formed.
+/// are wrapped in double quotes with internal `"` doubled. Cells beginning with
+/// a spreadsheet formula prefix are neutralized with a leading apostrophe.
+/// Markdown uses GitHub pipe tables; pipes and backticks in cells are escaped so
+/// the table stays well-formed.
 public struct InventoryExporter: Sendable {
     public enum Format: String, Sendable, CaseIterable {
         case csv
@@ -47,14 +48,29 @@ public struct InventoryExporter: Sendable {
                 pkg.isReadOnly ? "true" : "false",
                 pkg.dependencies.joined(separator: ";"),
             ]
-            .map(csvQuote)
+            .map(csvCell)
             .joined(separator: ",")
         }
         return ([header] + rows).joined(separator: "\n") + "\n"
     }
 
+    private func csvCell(_ field: String) -> String {
+        let safeField: String
+        let firstSignificant = field.first { !$0.isWhitespace }
+        if let first = field.first, first == "\t" || first == "\r" || first == "\n" {
+            safeField = "'\(field)"
+        } else if let firstSignificant, "=+-@".contains(firstSignificant) {
+            safeField = "'\(field)"
+        } else {
+            safeField = field
+        }
+
+        return csvQuote(safeField)
+    }
+
     private func csvQuote(_ field: String) -> String {
-        if field.contains(",") || field.contains("\"") || field.contains("\n") {
+        if field.contains(",") || field.contains("\"")
+            || field.contains("\n") || field.contains("\r") {
             let escaped = field.replacingOccurrences(of: "\"", with: "\"\"")
             return "\"\(escaped)\""
         }
