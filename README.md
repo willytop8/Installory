@@ -76,6 +76,10 @@ cd Installory
 swift test
 ```
 
+The bundled package-description corpus was last refreshed on **2026-07-15**.
+Run `python3 scripts/generate-descriptions/generate.py` before every release so
+the offline descriptions stay current; partial runs are never release input.
+
 ## Architecture
 
 Installory is split into a pure Swift library and a thin app shell:

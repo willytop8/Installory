@@ -79,6 +79,8 @@ re-runs are reproducible without needing the upstream seed sources.
 
 Run `generate.py` again and commit the updated `descriptions.json`. Re-runs are
 fast because the `.cache/` already holds previously-fetched responses.
+Perform one complete refresh immediately before every Installory release;
+partial runs are for testing only and must not be used as release input.
 
 To pull a fresh seed list (after the npm/PyPI top-packages landscape shifts):
 

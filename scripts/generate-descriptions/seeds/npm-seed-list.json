@@ -261,5 +261,12 @@
   "complexity-report",
   "plop",
   "hygen",
-  "yeoman-generator"
+  "yeoman-generator",
+  "react-router",
+  "react-router-dom",
+  "react-query",
+  "swr",
+  "stylelint",
+  "mkdirp",
+  "pm2"
 ]
