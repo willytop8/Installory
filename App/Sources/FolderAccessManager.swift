@@ -56,6 +56,9 @@ final class FolderAccessManager {
         panel.directoryURL = Self.safePanelDirectory(for: suggestedURL)
 
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        // AppKit implicitly starts security-scoped access for URLs returned by
+        // NSOpenPanel. Balance that grant after creating the persistent bookmark.
+        defer { url.stopAccessingSecurityScopedResource() }
 
         guard let data = try? url.bookmarkData(
             options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],

@@ -98,6 +98,8 @@ struct ScriptSheetView<Warning: View>: View {
         }
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
+            // NSSavePanel implicitly starts security-scoped access for its URL.
+            defer { url.stopAccessingSecurityScopedResource() }
             try? scriptText.write(to: url, atomically: true, encoding: .utf8)
         }
     }

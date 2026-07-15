@@ -474,6 +474,8 @@ final class AppCoordinator {
         }
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        // NSSavePanel implicitly starts security-scoped access for its URL.
+        defer { url.stopAccessingSecurityScopedResource() }
         let content = EnvironmentReportRenderer().render(
             packages: packages,
             duplicateGroups: duplicateGroups,
@@ -500,6 +502,8 @@ final class AppCoordinator {
         }
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        // NSSavePanel implicitly starts security-scoped access for its URL.
+        defer { url.stopAccessingSecurityScopedResource() }
         let content = InventoryExporter().export(packages, format: format)
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
