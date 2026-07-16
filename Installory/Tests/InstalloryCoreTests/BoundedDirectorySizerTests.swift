@@ -100,22 +100,15 @@ final class BoundedDirectorySizerTests: XCTestCase {
     }
 
     func testCORE05ByteCapDiscardsPartialResult() async throws {
-        trace("entered byte-cap test")
         let provider = InMemoryDirectoryAccessProvider.make { builder in
-            trace("entered provider builder")
             builder.addFile(at: root.appendingPathComponent("large"), data: Data(), logicalSizeBytes: 11)
-            trace("finished provider builder")
         }
-        trace("created provider")
         var sizer = BoundedDirectorySizer(
             directoryAccess: provider,
             limits: limits(maxBytesPerMeasurement: 10)
         )
-        trace("created sizer")
 
-        trace("starting measurement")
         let result = try await sizer.measure([.tree(root)])
-        trace("finished measurement")
         XCTAssertEqual(result, .incomplete(.byteLimit))
     }
 
@@ -211,9 +204,5 @@ final class BoundedDirectorySizerTests: XCTestCase {
             maxBytesPerScan: maxBytesPerScan,
             maxDurationPerScan: maxDurationPerScan
         )
-    }
-
-    private func trace(_ message: String) {
-        FileHandle.standardError.write(Data("INSTALLORY_SIZER_TRACE: \(message)\n".utf8))
     }
 }

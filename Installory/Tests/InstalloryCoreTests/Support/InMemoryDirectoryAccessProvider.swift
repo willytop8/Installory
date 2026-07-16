@@ -128,46 +128,52 @@ extension InMemoryDirectoryAccessProvider {
             modificationDate: Date? = nil,
             logicalSizeBytes: Int64? = nil
         ) {
-            trace("addFile entered")
             fileData[url.path] = data
-            trace("stored file data")
             logicalSizes[url.path] = logicalSizeBytes ?? Int64(data.count)
-            trace("stored logical size")
             if let date = modificationDate { modificationDates[url.path] = date }
-            trace("starting ancestor registration")
-            addToContents(child: url, parent: url.deletingLastPathComponent())
-            trace("finished addFile")
+            addToContents(child: url)
         }
 
         /// Registers a symlink so that `resolvingSymlinks(at:)` and `fileExists(at:)` follow it.
         mutating func addSymlink(at url: URL, target: URL) {
             symlinks[url.path] = target.path
-            addToContents(child: url, parent: url.deletingLastPathComponent())
+            addToContents(child: url)
         }
 
         mutating func addDirectory(at url: URL) {
             if contents[url.path] == nil {
                 contents[url.path] = []
             }
-            addToContents(child: url, parent: url.deletingLastPathComponent())
+            addToContents(child: url)
         }
 
         mutating func makeUnreadable(at url: URL) {
             unreadablePaths.insert(url.path)
         }
 
-        private mutating func addToContents(child: URL, parent: URL) {
-            let parentPath = parent.path
-            if contents[parentPath] == nil {
-                contents[parentPath] = []
+        private mutating func addToContents(child: URL) {
+            var currentChild = URL(fileURLWithPath: child.standardizedFileURL.path)
+            guard var parentPath = Self.parentPath(of: currentChild.path) else { return }
+
+            while true {
+                var children = contents[parentPath, default: []]
+                if !children.contains(where: { $0.path == currentChild.path }) {
+                    children.append(currentChild)
+                    contents[parentPath] = children
+                }
+
+                guard parentPath != "/" else { return }
+                currentChild = URL(fileURLWithPath: parentPath, isDirectory: true)
+                guard let nextParent = Self.parentPath(of: parentPath) else { return }
+                parentPath = nextParent
             }
-            if !contents[parentPath]!.contains(child) {
-                contents[parentPath]!.append(child)
-            }
-            let grandparent = parent.deletingLastPathComponent()
-            if grandparent.path != parent.path {
-                addToContents(child: parent, parent: grandparent)
-            }
+        }
+
+        private static func parentPath(of path: String) -> String? {
+            let components = path.split(separator: "/", omittingEmptySubsequences: true)
+            guard !components.isEmpty else { return nil }
+            guard components.count > 1 else { return "/" }
+            return "/" + components.dropLast().joined(separator: "/")
         }
 
         func build() -> InMemoryDirectoryAccessProvider {
@@ -181,8 +187,5 @@ extension InMemoryDirectoryAccessProvider {
             )
         }
 
-        private func trace(_ message: String) {
-            FileHandle.standardError.write(Data("INSTALLORY_PROVIDER_TRACE: \(message)\n".utf8))
-        }
     }
 }
