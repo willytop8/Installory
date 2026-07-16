@@ -63,9 +63,11 @@ public struct DistInfoParser: Sendable {
         case invalidUTF8(URL)
         case malformedMetadata(line: String)
         case missingRequiredField(String)
+        case metadataExceedsLimits(URL)
         case recordExceedsLimits(URL)
     }
 
+    private static let maximumMetadataBytes: Int64 = 4 * 1_024 * 1_024
     private static let maximumRecordBytes: Int64 = 16 * 1_024 * 1_024
     private static let maximumRecordEntries = 100_000
     private static let maximumInstallerBytes: Int64 = 4 * 1_024
@@ -284,8 +286,27 @@ public struct DistInfoParser: Sendable {
 
     private func string(contentsOf url: URL) throws -> String {
         try Task.checkCancellation()
-        let data = try directoryAccess.data(contentsOf: url)
+        let item = try directoryAccess.metadata(at: url)
+        guard item.kind == .regularFile,
+              let logicalSize = item.logicalSizeBytes,
+              logicalSize >= 0,
+              logicalSize <= Self.maximumMetadataBytes else {
+            throw Error.metadataExceedsLimits(url)
+        }
+
+        // Read one byte beyond the accepted ceiling. The metadata preflight
+        // prevents ordinary oversized loads; the extra byte catches a file that
+        // grows between that check and this bounded read.
+        let readLimit = Int(Self.maximumMetadataBytes) + 1
+        let data = try directoryAccess.data(
+            contentsOf: url,
+            maximumBytes: readLimit,
+            from: .prefix
+        )
         try Task.checkCancellation()
+        guard Int64(data.count) <= Self.maximumMetadataBytes else {
+            throw Error.metadataExceedsLimits(url)
+        }
         guard let text = String(data: data, encoding: .utf8) else {
             throw Error.invalidUTF8(url)
         }

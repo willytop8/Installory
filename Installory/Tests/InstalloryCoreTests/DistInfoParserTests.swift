@@ -166,6 +166,28 @@ struct DistInfoParserTests {
         }
     }
 
+    @Test("PERF25-011: oversized METADATA is rejected before its contents are loaded")
+    func oversizedMetadataIsRejectedBeforeLoading() throws {
+        let directory = URL(fileURLWithPath: "/oversized.dist-info")
+        let metadataURL = directory.appendingPathComponent("METADATA")
+        let base = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: metadataURL,
+                data: Data("Name: oversized\nVersion: 1.0\n".utf8),
+                logicalSizeBytes: 4 * 1_024 * 1_024 + 1
+            )
+        }
+        let trace = DirectoryAccessTrace()
+        let parser = DistInfoParser(
+            directoryAccess: TracingDirectoryAccessProvider(base: base, trace: trace)
+        )
+
+        #expect(throws: DistInfoParser.Error.metadataExceedsLimits(metadataURL)) {
+            try parser.parseMetadataOnly(directory: directory)
+        }
+        #expect(!trace.entries.contains { $0.operation == .data })
+    }
+
     private var requestsDistInfo: URL {
         URL(fileURLWithPath: "/.pyenv/versions/3.11.7/lib/python3.11/site-packages/requests-2.31.0.dist-info")
     }
