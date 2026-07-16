@@ -22,7 +22,8 @@ struct BoundedDirectorySizerTests {
         }
         var sizer = BoundedDirectorySizer(directoryAccess: provider)
 
-        #expect(try await sizer.measure([.tree(root)]) == .complete(154))
+        let result = try await sizer.measure([.tree(root)])
+        #expect(result == .complete(154))
     }
 
     @Test("CORE-05: child symlinks are skipped without counting their targets")
@@ -39,7 +40,8 @@ struct BoundedDirectorySizerTests {
         }
         var sizer = BoundedDirectorySizer(directoryAccess: provider)
 
-        #expect(try await sizer.measure([.tree(root)]) == .complete(10))
+        let result = try await sizer.measure([.tree(root)])
+        #expect(result == .complete(10))
     }
 
     @Test("CORE-05: a symlink root is incomplete")
@@ -51,7 +53,8 @@ struct BoundedDirectorySizerTests {
         }
         var sizer = BoundedDirectorySizer(directoryAccess: provider)
 
-        #expect(try await sizer.measure([.tree(root)]) == .incomplete(.unsafeRoot))
+        let result = try await sizer.measure([.tree(root)])
+        #expect(result == .incomplete(.unsafeRoot))
     }
 
     @Test("CORE-05: an intermediate symlink cannot escape a manager size boundary")
@@ -69,8 +72,8 @@ struct BoundedDirectorySizerTests {
         }
         var sizer = BoundedDirectorySizer(directoryAccess: provider)
 
-        #expect(try await sizer.measure([.tree(escapedRoot)], constrainedTo: allowed)
-            == .incomplete(.unsafeRoot))
+        let result = try await sizer.measure([.tree(escapedRoot)], constrainedTo: allowed)
+        #expect(result == .incomplete(.unsafeRoot))
     }
 
     @Test("CORE-05: system provider identifies a final symlink without following it")
@@ -98,7 +101,8 @@ struct BoundedDirectorySizerTests {
         let limits = limits(maxEntriesPerMeasurement: 2)
         var sizer = BoundedDirectorySizer(directoryAccess: provider, limits: limits)
 
-        #expect(try await sizer.measure([.tree(root)]) == .incomplete(.entryLimit))
+        let result = try await sizer.measure([.tree(root)])
+        #expect(result == .incomplete(.entryLimit))
     }
 
     @Test("CORE-05: byte cap discards a partial result")
@@ -111,7 +115,8 @@ struct BoundedDirectorySizerTests {
             limits: limits(maxBytesPerMeasurement: 10)
         )
 
-        #expect(try await sizer.measure([.tree(root)]) == .incomplete(.byteLimit))
+        let result = try await sizer.measure([.tree(root)])
+        #expect(result == .incomplete(.byteLimit))
     }
 
     @Test("CORE-05: zero duration budget performs no traversal")
@@ -125,7 +130,8 @@ struct BoundedDirectorySizerTests {
             limits: limits(maxDurationPerMeasurement: .zero)
         )
 
-        #expect(try await sizer.measure([.tree(root)]) == .incomplete(.timeLimit))
+        let result = try await sizer.measure([.tree(root)])
+        #expect(result == .incomplete(.timeLimit))
     }
 
     @Test("CORE-05: unreadable child discards a partial result")
@@ -138,7 +144,8 @@ struct BoundedDirectorySizerTests {
         }
         var sizer = BoundedDirectorySizer(directoryAccess: provider)
 
-        #expect(try await sizer.measure([.tree(root)]) == .incomplete(.unreadable))
+        let result = try await sizer.measure([.tree(root)])
+        #expect(result == .incomplete(.unreadable))
     }
 
     @Test("CORE-05: a readable empty directory reports zero bytes")
@@ -148,7 +155,8 @@ struct BoundedDirectorySizerTests {
         }
         var sizer = BoundedDirectorySizer(directoryAccess: provider)
 
-        #expect(try await sizer.measure([.tree(root)]) == .complete(0))
+        let result = try await sizer.measure([.tree(root)])
+        #expect(result == .complete(0))
     }
 
     @Test("CORE-05: scan-wide exhaustion prevents later provider access")
@@ -164,8 +172,10 @@ struct BoundedDirectorySizerTests {
             limits: limits(maxEntriesPerScan: 2)
         )
 
-        #expect(try await sizer.measure([.tree(root)]) == .complete(1))
-        #expect(try await sizer.measure([.tree(second)]) == .incomplete(.scanEntryLimit))
+        let firstResult = try await sizer.measure([.tree(root)])
+        let secondResult = try await sizer.measure([.tree(second)])
+        #expect(firstResult == .complete(1))
+        #expect(secondResult == .incomplete(.scanEntryLimit))
     }
 
     @Test("CORE-05: task cancellation throws instead of returning a partial size")
