@@ -140,4 +140,11 @@ struct PackageFilterTests {
 
         #expect([scoped].matching(query: "definitely-not-present").isEmpty)
     }
+
+    @Test("APP-F4: Disk Usage selection round-trips and uses its dedicated aggregate")
+    func diskUsageSelectionRoundTripsAndSkipsRowFiltering() {
+        #expect(SidebarSelection.diskUsage.userDefaultsKey == "diskUsage")
+        #expect(SidebarSelection(userDefaultsKey: "diskUsage") == .diskUsage)
+        #expect(packages.filtered(by: .diskUsage, query: "brew").isEmpty)
+    }
 }

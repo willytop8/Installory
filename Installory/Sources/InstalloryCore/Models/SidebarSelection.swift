@@ -6,6 +6,7 @@ public enum SidebarSelection: Hashable, Sendable {
     case readOnly
     case duplicates
     case orphans
+    case diskUsage
     case aiInstalled
     case snapshot(UUID)
 }
@@ -18,6 +19,7 @@ extension SidebarSelection {
         case .readOnly: "readOnly"
         case .duplicates: "duplicates"
         case .orphans: "orphans"
+        case .diskUsage: "diskUsage"
         case .aiInstalled: "aiInstalled"
         case .snapshot: ""  // snapshot selections are never persisted
         }
@@ -29,6 +31,7 @@ extension SidebarSelection {
         case "readOnly": self = .readOnly
         case "duplicates": self = .duplicates
         case "orphans": self = .orphans
+        case "diskUsage": self = .diskUsage
         case "aiInstalled": self = .aiInstalled
         default:
             guard userDefaultsKey.hasPrefix("manager.") else { return nil }
@@ -64,6 +67,9 @@ extension [Package] {
             return []
         case .orphans:
             // OrphansView reads coordinator.orphanedPackages directly; filteredPackages is not consulted.
+            return []
+        case .diskUsage:
+            // DiskUsageView reads a generation-keyed aggregate instead of package rows.
             return []
         case .aiInstalled:
             // AIInstalledView reads coordinator.aiInstalledPackages directly; filteredPackages is not consulted.
