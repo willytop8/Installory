@@ -27,6 +27,7 @@ struct PackageTableView: View {
             ) { package in
                 HStack(spacing: 6) {
                     CleanupSelectionToggle(package: package)
+                        .environment(coordinator)
                     Text(package.name)
                         .lineLimit(1)
                         .help(package.name)
@@ -92,6 +93,7 @@ struct PackageTableView: View {
                                 Task { await coordinator.requestRemoval([package]) }
                             } : nil
                         )
+                        .environment(coordinator)
                     }
             }
         }
