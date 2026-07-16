@@ -1,13 +1,12 @@
 import Foundation
-import Testing
+import XCTest
 @testable import InstalloryCore
 
-@Suite("BoundedDirectorySizer")
-struct BoundedDirectorySizerTests {
+@MainActor
+final class BoundedDirectorySizerTests: XCTestCase {
     private let root = URL(fileURLWithPath: "/packages/example")
 
-    @Test("CORE-05: nested regular files produce their exact logical-byte sum")
-    func nestedFilesProduceExactLogicalSize() async throws {
+    func testCORE05NestedFilesProduceExactLogicalSize() async throws {
         let provider = InMemoryDirectoryAccessProvider.make { builder in
             builder.addFile(
                 at: root.appendingPathComponent("bin/tool"),
@@ -23,11 +22,10 @@ struct BoundedDirectorySizerTests {
         var sizer = BoundedDirectorySizer(directoryAccess: provider)
 
         let result = try await sizer.measure([.tree(root)])
-        #expect(result == .complete(154))
+        XCTAssertEqual(result, .complete(154))
     }
 
-    @Test("CORE-05: child symlinks are skipped without counting their targets")
-    func childSymlinksAreSkipped() async throws {
+    func testCORE05ChildSymlinksAreSkipped() async throws {
         let outside = URL(fileURLWithPath: "/outside/large.bin")
         let provider = InMemoryDirectoryAccessProvider.make { builder in
             builder.addFile(
@@ -41,11 +39,10 @@ struct BoundedDirectorySizerTests {
         var sizer = BoundedDirectorySizer(directoryAccess: provider)
 
         let result = try await sizer.measure([.tree(root)])
-        #expect(result == .complete(10))
+        XCTAssertEqual(result, .complete(10))
     }
 
-    @Test("CORE-05: a symlink root is incomplete")
-    func symlinkRootIsIncomplete() async throws {
+    func testCORE05SymlinkRootIsIncomplete() async throws {
         let target = URL(fileURLWithPath: "/real/example")
         let provider = InMemoryDirectoryAccessProvider.make { builder in
             builder.addDirectory(at: target)
@@ -54,11 +51,10 @@ struct BoundedDirectorySizerTests {
         var sizer = BoundedDirectorySizer(directoryAccess: provider)
 
         let result = try await sizer.measure([.tree(root)])
-        #expect(result == .incomplete(.unsafeRoot))
+        XCTAssertEqual(result, .incomplete(.unsafeRoot))
     }
 
-    @Test("CORE-05: an intermediate symlink cannot escape a manager size boundary")
-    func intermediateSymlinkCannotEscapeBoundary() async throws {
+    func testCORE05IntermediateSymlinkCannotEscapeBoundary() async throws {
         let allowed = URL(fileURLWithPath: "/allowed")
         let outside = URL(fileURLWithPath: "/outside")
         let escapedRoot = allowed.appendingPathComponent("linked/package")
@@ -73,11 +69,10 @@ struct BoundedDirectorySizerTests {
         var sizer = BoundedDirectorySizer(directoryAccess: provider)
 
         let result = try await sizer.measure([.tree(escapedRoot)], constrainedTo: allowed)
-        #expect(result == .incomplete(.unsafeRoot))
+        XCTAssertEqual(result, .incomplete(.unsafeRoot))
     }
 
-    @Test("CORE-05: system provider identifies a final symlink without following it")
-    func systemProviderDoesNotFollowFinalSymlink() throws {
+    func testCORE05SystemProviderDoesNotFollowFinalSymlink() throws {
         let temporaryRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("InstallorySizer-\(UUID().uuidString)", isDirectory: true)
         let target = temporaryRoot.appendingPathComponent("target", isDirectory: true)
@@ -88,12 +83,11 @@ struct BoundedDirectorySizerTests {
 
         let metadata = try SystemDirectoryAccessProvider().metadata(at: link)
 
-        #expect(metadata.kind == .symbolicLink)
-        #expect(metadata.logicalSizeBytes == nil)
+        XCTAssertEqual(metadata.kind, .symbolicLink)
+        XCTAssertNil(metadata.logicalSizeBytes)
     }
 
-    @Test("CORE-05: entry cap discards a partial result")
-    func entryCapDiscardsPartialResult() async throws {
+    func testCORE05EntryCapDiscardsPartialResult() async throws {
         let provider = InMemoryDirectoryAccessProvider.make { builder in
             builder.addFile(at: root.appendingPathComponent("one"), data: Data([1]))
             builder.addFile(at: root.appendingPathComponent("two"), data: Data([2]))
@@ -102,11 +96,10 @@ struct BoundedDirectorySizerTests {
         var sizer = BoundedDirectorySizer(directoryAccess: provider, limits: limits)
 
         let result = try await sizer.measure([.tree(root)])
-        #expect(result == .incomplete(.entryLimit))
+        XCTAssertEqual(result, .incomplete(.entryLimit))
     }
 
-    @Test("CORE-05: byte cap discards a partial result")
-    func byteCapDiscardsPartialResult() async throws {
+    func testCORE05ByteCapDiscardsPartialResult() async throws {
         let provider = InMemoryDirectoryAccessProvider.make { builder in
             builder.addFile(at: root.appendingPathComponent("large"), data: Data(), logicalSizeBytes: 11)
         }
@@ -116,11 +109,10 @@ struct BoundedDirectorySizerTests {
         )
 
         let result = try await sizer.measure([.tree(root)])
-        #expect(result == .incomplete(.byteLimit))
+        XCTAssertEqual(result, .incomplete(.byteLimit))
     }
 
-    @Test("CORE-05: zero duration budget performs no traversal")
-    func zeroDurationBudgetPerformsNoTraversal() async throws {
+    func testCORE05ZeroDurationBudgetPerformsNoTraversal() async throws {
         let provider = InMemoryDirectoryAccessProvider.make { builder in
             builder.addDirectory(at: root)
             builder.makeUnreadable(at: root)
@@ -131,11 +123,10 @@ struct BoundedDirectorySizerTests {
         )
 
         let result = try await sizer.measure([.tree(root)])
-        #expect(result == .incomplete(.timeLimit))
+        XCTAssertEqual(result, .incomplete(.timeLimit))
     }
 
-    @Test("CORE-05: unreadable child discards a partial result")
-    func unreadableChildDiscardsPartialResult() async throws {
+    func testCORE05UnreadableChildDiscardsPartialResult() async throws {
         let blocked = root.appendingPathComponent("blocked")
         let provider = InMemoryDirectoryAccessProvider.make { builder in
             builder.addFile(at: root.appendingPathComponent("readable"), data: Data([1]))
@@ -145,22 +136,20 @@ struct BoundedDirectorySizerTests {
         var sizer = BoundedDirectorySizer(directoryAccess: provider)
 
         let result = try await sizer.measure([.tree(root)])
-        #expect(result == .incomplete(.unreadable))
+        XCTAssertEqual(result, .incomplete(.unreadable))
     }
 
-    @Test("CORE-05: a readable empty directory reports zero bytes")
-    func readableEmptyDirectoryReportsZero() async throws {
+    func testCORE05ReadableEmptyDirectoryReportsZero() async throws {
         let provider = InMemoryDirectoryAccessProvider.make { builder in
             builder.addDirectory(at: root)
         }
         var sizer = BoundedDirectorySizer(directoryAccess: provider)
 
         let result = try await sizer.measure([.tree(root)])
-        #expect(result == .complete(0))
+        XCTAssertEqual(result, .complete(0))
     }
 
-    @Test("CORE-05: scan-wide exhaustion prevents later provider access")
-    func scanWideExhaustionPreventsLaterAccess() async throws {
+    func testCORE05ScanWideExhaustionPreventsLaterAccess() async throws {
         let second = URL(fileURLWithPath: "/packages/blocked")
         let provider = InMemoryDirectoryAccessProvider.make { builder in
             builder.addFile(at: root.appendingPathComponent("file"), data: Data([1]))
@@ -174,12 +163,11 @@ struct BoundedDirectorySizerTests {
 
         let firstResult = try await sizer.measure([.tree(root)])
         let secondResult = try await sizer.measure([.tree(second)])
-        #expect(firstResult == .complete(1))
-        #expect(secondResult == .incomplete(.scanEntryLimit))
+        XCTAssertEqual(firstResult, .complete(1))
+        XCTAssertEqual(secondResult, .incomplete(.scanEntryLimit))
     }
 
-    @Test("CORE-05: task cancellation throws instead of returning a partial size")
-    func taskCancellationThrows() async {
+    func testCORE05TaskCancellationThrows() async {
         let provider = InMemoryDirectoryAccessProvider.make { builder in
             builder.addDirectory(at: root)
         }
@@ -190,8 +178,13 @@ struct BoundedDirectorySizerTests {
             return try await sizer.measure([.tree(root)])
         }
 
-        await #expect(throws: CancellationError.self) {
-            try await task.value
+        do {
+            _ = try await task.value
+            XCTFail("Expected CancellationError")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
         }
     }
 
