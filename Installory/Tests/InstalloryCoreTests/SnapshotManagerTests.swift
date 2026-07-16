@@ -198,18 +198,19 @@ struct SnapshotManagerTests {
             note: nil
         )
 
-        let row = try db.pool.read { conn in
-            try Row.fetchOne(
+        let persistedValues = try await db.pool.read { conn -> (id: String, reason: String)? in
+            guard let row = try Row.fetchOne(
                 conn,
                 sql: "SELECT * FROM snapshots WHERE id = ?",
                 arguments: [snapshot.id.uuidString]
-            )
+            ) else {
+                return nil
+            }
+            return (row["id"], row["reason"])
         }
 
-        let r = try #require(row)
-        let idInRow: String = r["id"]
-        let reasonInRow: String = r["reason"]
-        #expect(idInRow == snapshot.id.uuidString)
-        #expect(reasonInRow == "manual")
+        let values = try #require(persistedValues)
+        #expect(values.id == snapshot.id.uuidString)
+        #expect(values.reason == "manual")
     }
 }
