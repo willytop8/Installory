@@ -1,9 +1,9 @@
 # Installory 1.4.0 release
 
-Version `1.4.0` (build `10`) passed local pre-submission QA on 2026-07-15. Core,
-app, description-tool, invariant, Release-build, archive-inspection, and
-hands-on UI gates are green. The remaining work requires the owner's Apple
-Distribution identity and App Store Connect access.
+Version `1.4.0` (build `11`) passed automated local pre-submission QA on
+2026-07-16. Core, app, description-tool, invariant, and unsigned Release-build
+gates are green. Build 10 passed the prior archive inspection and hands-on UI
+gates; build 11 needs a fresh distribution archive and final owner smoke test.
 
 Do not upload a local unsigned or ad-hoc QA archive. Create a fresh distribution
 archive from the merged, clean `main` branch.
@@ -37,7 +37,7 @@ evaluate the app without granting filesystem access.
 1. Refresh the description corpus from fresh API responses using its
    [runbook](scripts/generate-descriptions/README.md). If it changes, rerun every
    verification gate.
-2. Confirm `project.yml` contains version `1.4.0`, build `10`, bundle identifier
+2. Confirm `project.yml` contains version `1.4.0`, build `11`, bundle identifier
    `app.installory.mac`, and `ITSAppUsesNonExemptEncryption: false`; regenerate
    the Xcode project.
 3. Run the Core and app commands in [README.md](README.md), the description-tool
@@ -51,13 +51,13 @@ evaluate the app without granting filesystem access.
    `descriptions.json` in Organizer.
 6. Run Validate App, then choose Distribute App → App Store Connect → Upload.
    Resolve any signing or App Store Connect validation finding before upload.
-7. In App Store Connect, create or select macOS version 1.4.0, attach build 10,
+7. In App Store Connect, create or select macOS version 1.4.0, attach build 11,
    paste the text above, keep App Privacy at **Data Not Collected**, and answer
    export compliance consistently with the Info property-list declaration.
 8. Submit for review and choose the intended manual or automatic release mode.
 
-Build numbers cannot be reused. Confirm build 10 has not already been uploaded
-and that App Store agreements are active before archiving.
+Build numbers cannot be reused. Build 10 predates the final macOS 15 size-walk
+compatibility fix; archive and upload build 11 from the merged `main` branch.
 
 ## Known advisory
 

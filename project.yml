@@ -27,7 +27,7 @@ targets:
         CFBundleName: $(PRODUCT_NAME)
         CFBundlePackageType: APPL
         CFBundleShortVersionString: "1.4.0"
-        CFBundleVersion: "10"
+        CFBundleVersion: "11"
         ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.developer-tools
     entitlements:
