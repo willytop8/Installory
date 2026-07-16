@@ -118,7 +118,9 @@ matches_pattern '\.securityScopeAllowOnlyReadAccess' App/Sources/FolderAccessMan
 
 require_file scripts/regenerate-xcode.sh
 [ -x scripts/regenerate-xcode.sh ] || fail "scripts/regenerate-xcode.sh must be executable"
-git check-ignore -q Installory.xcodeproj || \
+git check-ignore -q Installory.xcodeproj/__installory_ignore_probe__ || \
     fail "Installory.xcodeproj must remain gitignored; project.yml is the source of truth"
+[ -z "$(git ls-files -- 'Installory.xcodeproj/**')" ] || \
+    fail "Installory.xcodeproj contains tracked files; project.yml is the source of truth"
 
 echo "✓ Installory product invariants verified"
