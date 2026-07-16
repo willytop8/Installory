@@ -33,6 +33,15 @@ jobs:
         working-directory: Installory
         run: swift test --no-parallel
 
+      - name: Diagnose core crash
+        if: failure()
+        working-directory: Installory
+        run: |
+          xctest="$(xcrun --find xctest)"
+          bundle="$(find .build -path '*/debug/InstalloryPackageTests.xctest' -type d -print -quit)"
+          test -n "$bundle"
+          lldb --batch -o run -k 'thread backtrace all' -- "$xctest" "$bundle"
+
   app:
     name: InstalloryApp
     runs-on: macos-15
