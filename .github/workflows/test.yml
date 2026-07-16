@@ -63,7 +63,7 @@ jobs:
       - name: Verify generated product invariants
         run: ./scripts/check-invariants.sh
 
-      - name: Build app (Debug)
+      - name: Test app (Debug)
         run: >-
           xcodebuild
           -project Installory.xcodeproj
@@ -72,7 +72,7 @@ jobs:
           -destination 'platform=macOS'
           CODE_SIGNING_ALLOWED=NO
           CODE_SIGNING_REQUIRED=NO
-          build
+          test
 
       - name: Build app (Release)
         run: >-
