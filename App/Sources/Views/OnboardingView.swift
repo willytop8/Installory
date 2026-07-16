@@ -3,6 +3,8 @@ import InstalloryCore
 import SwiftUI
 
 struct OnboardingView: View {
+    static let managerOverview = "Installory scans your Mac for packages installed by Homebrew, pip, pipx, persistent uv tools, npm, Cargo, RubyGems, and the Mac App Store — giving you a clear picture of what's installed."
+
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(\.dismiss) private var dismiss
     @State private var page = 0
@@ -44,7 +46,7 @@ struct OnboardingView: View {
             OnboardingPanel(
                 systemImage: "shippingbox.fill",
                 title: "Meet Installory",
-                message: "Installory scans your Mac for packages installed by Homebrew, pip, pipx, npm, Cargo, RubyGems, and the Mac App Store — giving you a clear picture of what's installed."
+                message: Self.managerOverview
             )
         case 1:
             OnboardingPanel(
