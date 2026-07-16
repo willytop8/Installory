@@ -128,10 +128,15 @@ extension InMemoryDirectoryAccessProvider {
             modificationDate: Date? = nil,
             logicalSizeBytes: Int64? = nil
         ) {
+            trace("addFile entered")
             fileData[url.path] = data
+            trace("stored file data")
             logicalSizes[url.path] = logicalSizeBytes ?? Int64(data.count)
+            trace("stored logical size")
             if let date = modificationDate { modificationDates[url.path] = date }
+            trace("starting ancestor registration")
             addToContents(child: url, parent: url.deletingLastPathComponent())
+            trace("finished addFile")
         }
 
         /// Registers a symlink so that `resolvingSymlinks(at:)` and `fileExists(at:)` follow it.
@@ -174,6 +179,10 @@ extension InMemoryDirectoryAccessProvider {
                 logicalSizes: logicalSizes,
                 unreadablePaths: unreadablePaths
             )
+        }
+
+        private func trace(_ message: String) {
+            FileHandle.standardError.write(Data("INSTALLORY_PROVIDER_TRACE: \(message)\n".utf8))
         }
     }
 }
