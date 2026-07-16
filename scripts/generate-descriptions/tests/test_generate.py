@@ -91,7 +91,7 @@ class PartialModeSafetyTests(unittest.TestCase):
             {"brew": 1, "brewCask": 1, "pip": 1, "npm": 1},
         )
 
-    def test_check_mode_never_writes(self) -> None:
+    def test_check_mode_never_replaces_output_corpus(self) -> None:
         original = self.production.read_bytes()
         homebrew, pypi, npm = self.fetch_mocks()
         with mock.patch.object(generate, "OUTPUT", self.production), homebrew, pypi, npm:

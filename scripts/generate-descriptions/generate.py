@@ -11,7 +11,7 @@ Output: ../../App/Resources/descriptions.json
 
 Usage:
   python3 generate.py                  full run (all registries, all packages)
-  python3 generate.py --check          full validation without writing
+  python3 generate.py --check          validate without replacing the corpus
   python3 generate.py --limit 500 --output /tmp/descriptions.json
   python3 generate.py --no-pip --output /tmp/descriptions.json
 
@@ -61,9 +61,8 @@ MAX_DESC_LEN = 200  # Characters; longer descriptions are truncated with "…"
 MANAGER_PREFIXES = ("brew", "brewCask", "pip", "npm")
 
 # A full production generation must remain plausibly complete even when there is
-# no prior corpus to compare against. These deliberately sit below the 2026-05
-# corpus (8,354 formulae, 4,986 casks, 1,092 PyPI, 260 npm) so normal registry
-# churn is accepted while an empty or badly truncated registry is not.
+# no prior corpus to compare against. They are intentionally conservative;
+# last-good retention below provides the tighter release-to-release guard.
 PRODUCTION_MIN_COUNTS = {
     "brew": 6_000,
     "brewCask": 3_500,
@@ -739,7 +738,10 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Fetch and validate the corpus without writing any output.",
+        help=(
+            "Fetch and validate without replacing an output corpus. "
+            "Ignored caches and missing seed files may still be updated."
+        ),
     )
     parser.add_argument(
         "--allow-partial",
@@ -806,7 +808,7 @@ def main(argv: list[str] | None = None) -> int:
     assert isinstance(counts, dict)
     total = sum(counts.values())
     if args.check:
-        print(f"\n✓ {total} descriptions validated; --check wrote no output")
+        print(f"\n✓ {total} descriptions validated; output corpus unchanged")
     else:
         write_corpus_atomic(corpus, output)
         try:
