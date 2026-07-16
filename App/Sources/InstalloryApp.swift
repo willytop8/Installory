@@ -65,6 +65,12 @@ struct InstalloryApp: App {
                 .disabled(coordinator.packages.isEmpty)
                 .keyboardShortcut("e", modifiers: [.command, .shift])
 
+                Button("Export Inventory as JSON\u{2026}") {
+                    Task { await coordinator.exportInventory(format: .json) }
+                }
+                .disabled(coordinator.packages.isEmpty)
+                .keyboardShortcut("e", modifiers: [.command, .option])
+
                 Button("Show Data Folder in Finder") {
                     coordinator.revealDataFolder()
                 }

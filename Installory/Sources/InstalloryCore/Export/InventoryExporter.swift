@@ -1,6 +1,6 @@
 import Foundation
 
-/// Renders a package inventory as a CSV or Markdown report.
+/// Renders a package inventory as CSV, Markdown, or JSON.
 ///
 /// Pure formatter — no filesystem access. The caller persists the returned
 /// string. CSV is RFC 4180 quoting: fields containing comma, quote, or newline
@@ -12,11 +12,13 @@ public struct InventoryExporter: Sendable {
     public enum Format: String, Sendable, CaseIterable {
         case csv
         case markdown
+        case json
 
         public var fileExtension: String {
             switch self {
             case .csv:      "csv"
             case .markdown: "md"
+            case .json:     "json"
             }
         }
     }
@@ -27,7 +29,29 @@ public struct InventoryExporter: Sendable {
         switch format {
         case .csv:      renderCSV(packages)
         case .markdown: renderMarkdown(packages)
+        case .json:     renderJSON(packages)
         }
+    }
+
+    // MARK: - JSON
+
+    private func renderJSON(_ packages: [Package]) -> String {
+        guard !packages.isEmpty else { return "[]\n" }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .secondsSince1970
+
+        // Package IDs are the inventory's stable primary keys. Sorting here
+        // keeps exports reproducible even when scanner completion order differs.
+        let orderedPackages = packages.sorted { $0.id < $1.id }
+        guard let data = try? encoder.encode(orderedPackages) else {
+            // Package's shipped Codable shape contains only Foundation JSON
+            // primitives. Keep the existing non-throwing exporter contract if
+            // that model changes incompatibly in the future.
+            return "[]\n"
+        }
+        return String(decoding: data, as: UTF8.self) + "\n"
     }
 
     // MARK: - CSV

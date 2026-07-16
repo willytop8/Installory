@@ -102,6 +102,11 @@ private struct ScanningTab: View {
                 }
                 .disabled(coordinator.packages.isEmpty)
 
+                Button("Export Inventory as JSON\u{2026}") {
+                    Task { await coordinator.exportInventory(format: .json) }
+                }
+                .disabled(coordinator.packages.isEmpty)
+
                 Button("Export Environment Report\u{2026}") {
                     Task { await coordinator.exportEnvironmentReport() }
                 }
