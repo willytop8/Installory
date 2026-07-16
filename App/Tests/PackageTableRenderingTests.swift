@@ -8,7 +8,7 @@ import Testing
 @MainActor
 struct PackageTableRenderingTests {
     @Test("APP-F3: table cells retain the coordinator environment during layout")
-    func tableCellsRetainCoordinatorEnvironmentDuringLayout() throws {
+    func tableCellsRetainCoordinatorEnvironmentDuringLayout() async throws {
         let dataDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("InstalloryTableRenderingTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -35,20 +35,24 @@ struct PackageTableRenderingTests {
         defer { window.close() }
         window.contentView = hostingView
         window.setContentSize(NSSize(width: 1_000, height: 700))
-        window.makeKeyAndOrderFront(nil)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        await settleLayout(in: window, hostingView: hostingView)
 
         let selectedPackage = try #require(coordinator.packages.first { $0.name == "ruff" })
         coordinator.selectedPackage = selectedPackage
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        await settleLayout(in: window, hostingView: hostingView)
         coordinator.inventoryViewMode = .table
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        window.layoutIfNeeded()
-        hostingView.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        await settleLayout(in: window, hostingView: hostingView)
 
         let tableView = hostingView.firstDescendant(ofType: NSTableView.self)
         #expect(tableView?.numberOfRows == coordinator.packages.count)
+    }
+
+    private func settleLayout(in window: NSWindow, hostingView: NSView) async {
+        for _ in 0..<3 {
+            window.layoutIfNeeded()
+            hostingView.layoutSubtreeIfNeeded()
+            await Task.yield()
+        }
     }
 }
 
