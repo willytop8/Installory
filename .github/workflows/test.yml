@@ -13,8 +13,8 @@ jobs:
   test:
     name: InstalloryCore
     # Package.swift declares swift-tools-version 6.1, which needs Xcode 16.3+.
-    # The macos-14 image ships an older toolchain and cannot resolve the manifest.
-    runs-on: macos-15
+    # The Intel runner also verifies the architecture supported by the universal app.
+    runs-on: macos-15-intel
 
     steps:
       - uses: actions/checkout@v7
