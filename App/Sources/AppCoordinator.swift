@@ -327,7 +327,7 @@ final class AppCoordinator {
         switch sidebarSelection {
         case nil, .all, .manager, .readOnly:
             true
-        case .duplicates, .orphans, .aiInstalled, .snapshot:
+        case .duplicates, .orphans, .diskUsage, .aiInstalled, .snapshot:
             false
         }
     }
@@ -369,6 +369,10 @@ final class AppCoordinator {
         )
     }
 
+    var diskUsageSummary: DiskUsageSummary {
+        inventoryDerivedCache.diskUsageSummary(for: packages)
+    }
+
     func duplicateAnalysis(pathComponents: [String]) -> DuplicateAnalysisState {
         inventoryDerivedCache.duplicateAnalysis(
             for: packages,
@@ -394,7 +398,7 @@ final class AppCoordinator {
             candidates = packages.filter { ids.contains($0.id) }
         case .orphans:
             candidates = orphanedPackages
-        case .readOnly, .aiInstalled, .snapshot:
+        case .readOnly, .diskUsage, .aiInstalled, .snapshot:
             candidates = []
         }
         return candidates.filter(\.isRemovalScriptEligible)
@@ -470,6 +474,10 @@ final class AppCoordinator {
         case .orphans:
             remainsVisible = matchesSearch
                 && orphanedPackages.contains { $0.id == selectedPackage.id }
+        case .diskUsage:
+            remainsVisible = diskUsageSummary.largestPackages.contains {
+                $0.id == selectedPackage.id
+            }
         case .aiInstalled:
             remainsVisible = matchesSearch
                 && aiInstalledPackages.contains { $0.id == selectedPackage.id }

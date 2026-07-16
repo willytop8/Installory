@@ -47,7 +47,7 @@ extension SidebarSelection {
         switch self {
         case .all, .manager, .duplicates, .orphans:
             return true
-        case .readOnly, .aiInstalled, .snapshot:
+        case .readOnly, .diskUsage, .aiInstalled, .snapshot:
             return false
         }
     }
@@ -114,6 +114,8 @@ struct RootView: View {
                 DuplicatesView()
             } else if case .orphans = coordinator.sidebarSelection {
                 OrphansView()
+            } else if case .diskUsage = coordinator.sidebarSelection {
+                DiskUsageView()
             } else if case .aiInstalled = coordinator.sidebarSelection {
                 AIInstalledView()
             } else {

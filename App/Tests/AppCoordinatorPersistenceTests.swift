@@ -130,7 +130,8 @@ struct AppCoordinatorPersistenceTests {
         manager: PackageManager,
         name: String,
         qualifier: String? = nil,
-        isReadOnly: Bool = false
+        isReadOnly: Bool = false,
+        sizeBytes: Int64? = 512
     ) -> Package {
         Package(
             id: id,
@@ -141,7 +142,7 @@ struct AppCoordinatorPersistenceTests {
             installPath: qualifier.map { URL(fileURLWithPath: $0) },
             installedAt: Date(timeIntervalSince1970: 1_720_000_000),
             installedAtConfidence: .medium,
-            sizeBytes: 512,
+            sizeBytes: sizeBytes,
             isExplicit: true,
             isReadOnly: isReadOnly,
             dependencies: [],
@@ -598,6 +599,7 @@ struct AppCoordinatorPersistenceTests {
         #expect(SidebarSelection.duplicates.supportsCleanupControls)
         #expect(SidebarSelection.orphans.supportsCleanupControls)
         #expect(!SidebarSelection.readOnly.supportsCleanupControls)
+        #expect(!SidebarSelection.diskUsage.supportsCleanupControls)
         #expect(!SidebarSelection.aiInstalled.supportsCleanupControls)
         #expect(!SidebarSelection.snapshot(UUID()).supportsCleanupControls)
     }
@@ -791,6 +793,7 @@ struct AppCoordinatorPersistenceTests {
         for selection in [
             SidebarSelection.duplicates,
             .orphans,
+            .diskUsage,
             .aiInstalled,
             .snapshot(UUID()),
         ] {
@@ -853,6 +856,80 @@ struct AppCoordinatorPersistenceTests {
         #expect(secondCounts.inventoryIndex == firstCounts.inventoryIndex + 1)
         #expect(secondCounts.duplicateGroups == firstCounts.duplicateGroups + 1)
         #expect(secondCounts.orphanedPackages == firstCounts.orphanedPackages + 1)
+    }
+
+    @Test("APP-F4: disk-usage aggregation cache reuses and invalidates by inventory generation")
+    func diskUsageSummaryUsesInventoryCache() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = AppCoordinator(dataDirectoryOverride: directory)
+        coordinator.enterDemoMode()
+
+        _ = coordinator.diskUsageSummary
+        _ = coordinator.diskUsageSummary
+        let firstCounts = coordinator.inventoryDerivedComputationCounts
+        #expect(firstCounts.diskUsageSummary == 1)
+
+        coordinator.enterDemoMode()
+        _ = coordinator.diskUsageSummary
+        let secondCounts = coordinator.inventoryDerivedComputationCounts
+        #expect(secondCounts.diskUsageSummary == firstCounts.diskUsageSummary + 1)
+    }
+
+    @Test("APP-F4: Disk Usage sidebar selection persists through coordinator preferences")
+    func diskUsageSidebarSelectionPersists() throws {
+        let defaults = UserDefaults.standard
+        let key = "app.installory.ui.sidebarSelection"
+        let previous = defaults.object(forKey: key)
+        defaults.set("diskUsage", forKey: key)
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let restored = AppCoordinator(dataDirectoryOverride: directory)
+        #expect(restored.sidebarSelection == .diskUsage)
+
+        restored.sidebarSelection = .all
+        restored.persistUIPreferences()
+        #expect(defaults.string(forKey: key) == "all")
+        restored.sidebarSelection = .diskUsage
+        restored.persistUIPreferences()
+        #expect(defaults.string(forKey: key) == "diskUsage")
+    }
+
+    @Test("APP-F4: Disk Usage detail selection must remain in the current top ten")
+    func diskUsageSelectionReconcilesToLargestPackages() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try Database(directory: directory)
+        let packages = (1...11).map { rank in
+            scopedPackage(
+                id: "brew::rank-\(rank)",
+                manager: .brew,
+                name: "rank-\(rank)",
+                sizeBytes: Int64(rank)
+            )
+        }
+        try PackageDAO(database: database).replaceAll(with: packages)
+
+        let coordinator = AppCoordinator(dataDirectoryOverride: directory)
+        await coordinator.hydratePersistedState()
+        coordinator.sidebarSelection = .diskUsage
+
+        coordinator.selectedPackage = packages[0]
+        coordinator.reconcileSelectedPackageForCurrentSidebar()
+        #expect(coordinator.selectedPackage == nil)
+
+        let largest = try #require(coordinator.diskUsageSummary.largestPackages.first)
+        coordinator.selectedPackage = largest
+        coordinator.reconcileSelectedPackageForCurrentSidebar()
+        #expect(coordinator.selectedPackage?.id == largest.id)
     }
 
     @Test("PERF25-009: provenance mutation invalidates AI state only")

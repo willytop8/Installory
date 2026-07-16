@@ -65,6 +65,12 @@ struct SidebarView: View {
                 }
             }
 
+            if !coordinator.packages.isEmpty {
+                NavigationLink(value: SidebarSelection.diskUsage) {
+                    Label("Disk Usage", systemImage: "chart.bar.xaxis")
+                }
+            }
+
             if coordinator.isDemoMode || coordinator.provenanceCollection {
                 let aiCount = coordinator.aiInstalledPackages.count
                 if aiCount > 0 {

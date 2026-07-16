@@ -108,6 +108,7 @@ struct InventoryDerivedComputationCounts: Equatable {
     fileprivate(set) var duplicateGroups = 0
     fileprivate(set) var multiLocationGroups = 0
     fileprivate(set) var orphanedPackages = 0
+    fileprivate(set) var diskUsageSummary = 0
     fileprivate(set) var aiInstalledPackages = 0
     fileprivate(set) var duplicatePathAnalysis = 0
 }
@@ -126,6 +127,7 @@ final class InventoryDerivedCache {
     private var cachedDuplicateGroups: (generation: Int, value: [DuplicateGroup])?
     private var cachedMultiLocationGroups: (generation: Int, value: [MultiLocationGroup])?
     private var cachedOrphans: (generation: Int, value: [Package])?
+    private var cachedDiskUsageSummary: (generation: Int, value: DiskUsageSummary)?
     private var cachedAI: (
         inventoryGeneration: Int,
         provenanceGeneration: Int,
@@ -145,6 +147,7 @@ final class InventoryDerivedCache {
         cachedDuplicateGroups = nil
         cachedMultiLocationGroups = nil
         cachedOrphans = nil
+        cachedDiskUsageSummary = nil
         cachedAI = nil
         cachedDuplicateAnalysis = nil
     }
@@ -217,6 +220,17 @@ final class InventoryDerivedCache {
         computationCounts.orphanedPackages += 1
         let value = packages.orphanedPackages()
         cachedOrphans = (inventoryGeneration, value)
+        return value
+    }
+
+    func diskUsageSummary(for packages: [Package]) -> DiskUsageSummary {
+        if let cachedDiskUsageSummary,
+           cachedDiskUsageSummary.generation == inventoryGeneration {
+            return cachedDiskUsageSummary.value
+        }
+        computationCounts.diskUsageSummary += 1
+        let value = InstalloryCore.diskUsageSummary(for: packages)
+        cachedDiskUsageSummary = (inventoryGeneration, value)
         return value
     }
 
