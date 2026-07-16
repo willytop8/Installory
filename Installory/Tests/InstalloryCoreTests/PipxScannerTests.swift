@@ -5,6 +5,7 @@ import Testing
 @Suite("PipxScanner")
 struct PipxScannerTests {
     private let home = URL(fileURLWithPath: "/Users/tester")
+    private let isolatedEnvironment = PackageManagerEnvironment(values: [:])
 
     @Test("TEST25-009: pipx metadata selects the main dist-info fixture")
     func reportsMainToolOnly() async throws {
@@ -14,7 +15,11 @@ struct PipxScannerTests {
             mappedTo: venv
         )
 
-        let packages = try await PipxScanner(directoryAccess: provider, homeDirectory: home).scan()
+        let packages = try await PipxScanner(
+            directoryAccess: provider,
+            homeDirectory: home,
+            environment: isolatedEnvironment
+        ).scan()
 
         #expect(packages.count == 1)
         let package = try #require(packages.first)
@@ -70,7 +75,8 @@ struct PipxScannerTests {
         let package = try #require(
             try await PipxScanner(
                 directoryAccess: provider,
-                homeDirectory: home
+                homeDirectory: home,
+                environment: isolatedEnvironment
             ).scan().first
         )
 
@@ -99,7 +105,11 @@ struct PipxScannerTests {
             builder.addFile(at: dist.appendingPathComponent("METADATA"), data: Data(metadata.utf8))
         }
 
-        let packages = try await PipxScanner(directoryAccess: provider, homeDirectory: home).scan()
+        let packages = try await PipxScanner(
+            directoryAccess: provider,
+            homeDirectory: home,
+            environment: isolatedEnvironment
+        ).scan()
 
         #expect(packages.map(\.name) == ["httpie"])
     }
@@ -107,7 +117,11 @@ struct PipxScannerTests {
     @Test("availability follows the pipx venvs root")
     func availabilityFollowsVenvRoot() async throws {
         let missing = InMemoryDirectoryAccessProvider.make { _ in }
-        #expect(await PipxScanner(directoryAccess: missing, homeDirectory: home).isAvailable() == false)
+        #expect(await PipxScanner(
+            directoryAccess: missing,
+            homeDirectory: home,
+            environment: isolatedEnvironment
+        ).isAvailable() == false)
 
         let present = InMemoryDirectoryAccessProvider.make { builder in
             builder.addFile(
@@ -115,7 +129,11 @@ struct PipxScannerTests {
                 data: Data()
             )
         }
-        #expect(await PipxScanner(directoryAccess: present, homeDirectory: home).isAvailable() == true)
+        #expect(await PipxScanner(
+            directoryAccess: present,
+            homeDirectory: home,
+            environment: isolatedEnvironment
+        ).isAvailable() == true)
     }
 
     @Test("CORE-08: PIPX_HOME relocates pipx discovery")
@@ -186,7 +204,8 @@ struct PipxScannerTests {
 
         let packages = try await PipxScanner(
             directoryAccess: provider,
-            homeDirectory: home
+            homeDirectory: home,
+            environment: isolatedEnvironment
         ).scan()
         let ruff = try #require(packages.first)
 
@@ -205,7 +224,8 @@ struct PipxScannerTests {
 
         let packages = try await PipxScanner(
             directoryAccess: provider,
-            homeDirectory: home
+            homeDirectory: home,
+            environment: isolatedEnvironment
         ).scan()
         let package = try #require(packages.first)
 
@@ -226,7 +246,11 @@ struct PipxScannerTests {
                 data: Data(#"{"main_package":{"package":"black","package_version":"24.4.2"}}"#.utf8)
             )
         }
-        let scanner = PipxScanner(directoryAccess: provider, homeDirectory: home)
+        let scanner = PipxScanner(
+            directoryAccess: provider,
+            homeDirectory: home,
+            environment: isolatedEnvironment
+        )
         let task = Task {
             withUnsafeCurrentTask { $0?.cancel() }
             return try await scanner.scan()
@@ -271,7 +295,11 @@ struct PipxScannerTests {
                 )
             }
         }
-        let scanner = PipxScanner(directoryAccess: provider, homeDirectory: home)
+        let scanner = PipxScanner(
+            directoryAccess: provider,
+            homeDirectory: home,
+            environment: isolatedEnvironment
+        )
 
         let firstScan = try await scanner.scan()
         let secondScan = try await scanner.scan()
