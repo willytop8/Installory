@@ -9,11 +9,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  # Match the Xcode 26 toolchain generation used for App Store archives while
-  # retaining macOS 15 runners for deployment-target coverage.
-  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-
 jobs:
   test:
     name: InstalloryCore
