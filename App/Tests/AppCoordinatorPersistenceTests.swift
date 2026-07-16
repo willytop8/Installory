@@ -505,6 +505,26 @@ struct AppCoordinatorPersistenceTests {
         #expect(coordinator.selectedPackage == nil)
     }
 
+    @Test("APP-F1: search reconciliation clears a detail that is no longer visible")
+    func searchReconcilesSelectedPackage() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try Database(directory: directory)
+        let storedPackage = package()
+        try PackageDAO(database: database).replaceAll(with: [storedPackage])
+
+        let coordinator = AppCoordinator(dataDirectoryOverride: directory)
+        await coordinator.hydratePersistedState()
+        coordinator.selectedPackage = storedPackage
+        coordinator.searchQuery = "CELLAR/FFMPEG"
+        coordinator.reconcileSelectedPackageForCurrentSidebar()
+        #expect(coordinator.selectedPackage?.id == storedPackage.id)
+
+        coordinator.searchQuery = "not-in-any-search-field"
+        coordinator.reconcileSelectedPackageForCurrentSidebar()
+        #expect(coordinator.selectedPackage == nil)
+    }
+
     @Test("APP25-010: analysis emptiness requires complete successful scan coverage")
     func analysisEmptyStateReflectsCoverage() {
         let completeCoverage = Dictionary(

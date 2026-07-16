@@ -26,16 +26,37 @@ struct AIInstalledView: View {
     }
 
     var body: some View {
-        if aiInstalledPackages.isEmpty {
-            emptyState
-        } else {
-            packageList
+        @Bindable var coordinator = coordinator
+        let allPackages = aiInstalledPackages
+        let visiblePackages = allPackages.matching(query: coordinator.searchQuery)
+
+        Group {
+            if allPackages.isEmpty {
+                emptyState
+            } else if visiblePackages.isEmpty {
+                ContentUnavailableView.search(text: coordinator.searchQuery)
+            } else {
+                packageList(visiblePackages)
+            }
+        }
+        .searchable(
+            text: $coordinator.searchQuery,
+            placement: .toolbar,
+            prompt: "Search AI-attributed packages"
+        )
+        .onChange(of: coordinator.searchQuery) { _, query in
+            let visible = aiInstalledPackages.matching(query: query)
+            guard let selectedID = coordinator.selectedPackage?.id,
+                  !visible.contains(where: { $0.id == selectedID }) else {
+                return
+            }
+            coordinator.selectedPackage = nil
         }
     }
 
     // MARK: - Package list
 
-    private var packageList: some View {
+    private func packageList(_ packages: [Package]) -> some View {
         @Bindable var coordinator = coordinator
 
         return List(
@@ -52,7 +73,7 @@ struct AIInstalledView: View {
             .selectionDisabled()
 
             Section {
-                ForEach(aiInstalledPackages) { pkg in
+                ForEach(packages) { pkg in
                     AIInstalledPackageRow(
                         package: pkg,
                         context: coordinator.provenanceByPackageId[pkg.id]?.claudeCodeContext

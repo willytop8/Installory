@@ -11,15 +11,17 @@ struct PackageFilterTests {
     private func pkg(
         _ name: String,
         manager: PackageManager,
+        qualifier: String? = nil,
+        installPath: URL? = nil,
         isReadOnly: Bool = false
     ) -> Package {
         Package(
             id: "\(manager.rawValue)::\(name)",
             manager: manager,
-            qualifier: nil,
+            qualifier: qualifier,
             name: name,
             version: "1.0.0",
-            installPath: nil,
+            installPath: installPath,
             installedAt: Self.ref,
             installedAtConfidence: .low,
             sizeBytes: nil,
@@ -98,5 +100,44 @@ struct PackageFilterTests {
     func emptyQueryAll() {
         let result = packages.filtered(by: .all, query: "")
         #expect(result.count == packages.count)
+    }
+
+    @Test("APP-F1: search matches a manager qualifier")
+    func queryMatchesQualifier() {
+        let scoped = pkg(
+            "ruff",
+            manager: .pip,
+            qualifier: "/Users/test/.pyenv/versions/3.12/bin/python"
+        )
+
+        #expect([scoped].matching(query: "PYENV").map(\.id) == [scoped.id])
+    }
+
+    @Test("APP-F1: search matches an install path case-insensitively")
+    func queryMatchesInstallPath() {
+        let scoped = pkg(
+            "typescript",
+            manager: .npm,
+            installPath: URL(fileURLWithPath: "/Users/Test/.nvm/versions/node/v22/lib/node_modules/typescript")
+        )
+
+        #expect([scoped].matching(query: ".NVM/VERSIONS").map(\.id) == [scoped.id])
+    }
+
+    @Test("APP-F1: whitespace-only search preserves every package in input order")
+    func whitespaceQueryPreservesInput() {
+        #expect(packages.matching(query: "  \n\t ").map(\.id) == packages.map(\.id))
+    }
+
+    @Test("APP-F1: unrelated search matches no package fields")
+    func unrelatedQueryMatchesNothing() {
+        let scoped = pkg(
+            "ruff",
+            manager: .pip,
+            qualifier: "/Users/test/.pyenv/versions/3.12/bin/python",
+            installPath: URL(fileURLWithPath: "/Users/test/.pyenv/versions/3.12/lib/python/site-packages/ruff")
+        )
+
+        #expect([scoped].matching(query: "definitely-not-present").isEmpty)
     }
 }

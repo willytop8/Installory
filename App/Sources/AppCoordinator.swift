@@ -380,25 +380,37 @@ final class AppCoordinator {
             return
         }
         self.selectedPackage = selectedPackage
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matchesSearch = query.isEmpty || selectedPackage.matchesSearchQuery(query)
 
         let remainsVisible: Bool
         switch sidebarSelection {
         case nil, .all:
-            remainsVisible = true
+            remainsVisible = matchesSearch
         case .manager(let manager):
-            remainsVisible = selectedPackage.manager == manager
+            remainsVisible = selectedPackage.manager == manager && matchesSearch
         case .readOnly:
-            remainsVisible = selectedPackage.isReadOnly
+            remainsVisible = selectedPackage.isReadOnly && matchesSearch
         case .duplicates:
             let duplicateIDs = Set(
-                duplicateGroups.flatMap { $0.packages.map(\.id) }
-                    + multiLocationGroups.flatMap { $0.packages.map(\.id) }
+                duplicateGroups
+                    .filter { group in
+                        query.isEmpty || group.packages.contains { $0.matchesSearchQuery(query) }
+                    }
+                    .flatMap { $0.packages.map(\.id) }
+                    + multiLocationGroups
+                        .filter { group in
+                            query.isEmpty || group.packages.contains { $0.matchesSearchQuery(query) }
+                        }
+                        .flatMap { $0.packages.map(\.id) }
             )
             remainsVisible = duplicateIDs.contains(selectedPackage.id)
         case .orphans:
-            remainsVisible = orphanedPackages.contains { $0.id == selectedPackage.id }
+            remainsVisible = matchesSearch
+                && orphanedPackages.contains { $0.id == selectedPackage.id }
         case .aiInstalled:
-            remainsVisible = aiInstalledPackages.contains { $0.id == selectedPackage.id }
+            remainsVisible = matchesSearch
+                && aiInstalledPackages.contains { $0.id == selectedPackage.id }
         case .snapshot:
             remainsVisible = false
         }

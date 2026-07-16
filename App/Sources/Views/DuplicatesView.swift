@@ -37,28 +37,32 @@ struct DuplicatesView: View {
 
     var body: some View {
         @Bindable var coordinator = coordinator
-        let data = grouped
+        let allData = grouped
+        let data = allData.matching(query: coordinator.searchQuery)
         let hasCrossManager = !data.active.isEmpty
             || !data.potential.isEmpty
             || !data.benign.isEmpty
         let hasMultiLocation = !data.multiLocation.isEmpty
 
-        if !hasCrossManager && !hasMultiLocation {
-            AnalysisEmptyStateView(
-                state: analysisEmptyState,
-                noResultsTitle: "No Duplicates",
-                noResultsSystemImage: "checkmark.circle",
-                noResultsDescription: "No scanned tools are installed by more than one package manager or in multiple managed locations."
-            )
-        } else {
-            List(
+        Group {
+            if allData.isEmpty {
+                AnalysisEmptyStateView(
+                    state: analysisEmptyState,
+                    noResultsTitle: "No Duplicates",
+                    noResultsSystemImage: "checkmark.circle",
+                    noResultsDescription: "No scanned tools are installed by more than one package manager or in multiple managed locations."
+                )
+            } else if !hasCrossManager && !hasMultiLocation {
+                ContentUnavailableView.search(text: coordinator.searchQuery)
+            } else {
+                List(
                 selection: Binding(
                     get: { coordinator.selectedPackage?.id },
                     set: { id in
                         coordinator.selectedPackage = id.flatMap(coordinator.package(id:))
                     }
                 )
-            ) {
+                ) {
                 // ── Intro text ───────────────────────────────────────────
                 if hasCrossManager {
                     Section {
@@ -171,10 +175,69 @@ struct DuplicatesView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                }
+                .listStyle(.inset)
+                .navigationTitle("Duplicates")
             }
-            .listStyle(.inset)
-            .navigationTitle("Duplicates")
         }
+        .searchable(
+            text: $coordinator.searchQuery,
+            placement: .toolbar,
+            prompt: "Search duplicates"
+        )
+        .onChange(of: coordinator.searchQuery) { _, query in
+            let visibleIDs = grouped.matching(query: query).packageIDs
+            guard let selectedID = coordinator.selectedPackage?.id,
+                  !visibleIDs.contains(selectedID) else {
+                return
+            }
+            coordinator.selectedPackage = nil
+        }
+    }
+}
+
+private extension DuplicateAnalysisState {
+    var isEmpty: Bool {
+        active.isEmpty && potential.isEmpty && benign.isEmpty && multiLocation.isEmpty
+    }
+
+    var packageIDs: Set<String> {
+        var ids: Set<String> = []
+        for entry in active {
+            ids.formUnion(entry.group.packages.map(\.id))
+        }
+        for entry in potential {
+            ids.formUnion(entry.group.packages.map(\.id))
+        }
+        for entry in benign {
+            ids.formUnion(entry.group.packages.map(\.id))
+        }
+        for group in multiLocation {
+            ids.formUnion(group.packages.map(\.id))
+        }
+        return ids
+    }
+
+    /// A matching member keeps its whole group visible so search never removes
+    /// the companion install needed to understand the duplicate relationship.
+    func matching(query: String) -> DuplicateAnalysisState {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return self }
+
+        return DuplicateAnalysisState(
+            active: active.filter { entry in
+                entry.group.packages.contains { $0.matchesSearchQuery(query) }
+            },
+            potential: potential.filter { entry in
+                entry.group.packages.contains { $0.matchesSearchQuery(query) }
+            },
+            benign: benign.filter { entry in
+                entry.group.packages.contains { $0.matchesSearchQuery(query) }
+            },
+            multiLocation: multiLocation.filter { group in
+                group.packages.contains { $0.matchesSearchQuery(query) }
+            }
+        )
     }
 }
 

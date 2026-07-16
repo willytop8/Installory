@@ -22,12 +22,30 @@ struct OrphansView: View {
 
     var body: some View {
         @Bindable var coordinator = coordinator
-        let orphans = coordinator.orphanedPackages
+        let allOrphans = coordinator.orphanedPackages
+        let orphans = allOrphans.matching(query: coordinator.searchQuery)
 
-        if orphans.isEmpty {
-            emptyState
-        } else {
-            listView(orphans: orphans)
+        Group {
+            if allOrphans.isEmpty {
+                emptyState
+            } else if orphans.isEmpty {
+                ContentUnavailableView.search(text: coordinator.searchQuery)
+            } else {
+                listView(orphans: orphans)
+            }
+        }
+        .searchable(
+            text: $coordinator.searchQuery,
+            placement: .toolbar,
+            prompt: "Search review candidates"
+        )
+        .onChange(of: coordinator.searchQuery) { _, query in
+            let visible = coordinator.orphanedPackages.matching(query: query)
+            guard let selectedID = coordinator.selectedPackage?.id,
+                  !visible.contains(where: { $0.id == selectedID }) else {
+                return
+            }
+            coordinator.selectedPackage = nil
         }
     }
 

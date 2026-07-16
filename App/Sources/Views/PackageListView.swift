@@ -47,6 +47,13 @@ struct PackageListView: View {
         .onChange(of: coordinator.sortOrder) { _, _ in
             coordinator.persistUIPreferences()
         }
+        .onChange(of: coordinator.searchQuery) { _, _ in
+            guard let selectedID = coordinator.selectedPackage?.id,
+                  !coordinator.filteredPackages.contains(where: { $0.id == selectedID }) else {
+                return
+            }
+            coordinator.selectedPackage = nil
+        }
         // Sidebar selection is persisted by RootView, which stays mounted. This view
         // unmounts when the user navigates to Duplicates, Review Candidates, or
         // AI Installed — so an onChange here would never fire for those sections.

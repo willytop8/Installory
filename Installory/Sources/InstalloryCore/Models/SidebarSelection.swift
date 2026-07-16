@@ -40,6 +40,14 @@ extension SidebarSelection {
 }
 
 extension [Package] {
+    /// Returns packages whose name, manager scope, or install path matches the
+    /// query, preserving input order. Whitespace-only queries are inactive.
+    public func matching(query: String) -> [Package] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return self }
+        return filter { $0.matchesSearchQuery(query) }
+    }
+
     /// Returns packages matching `selection` and `query`, preserving order.
     /// The sort step is the caller's responsibility.
     public func filtered(by selection: SidebarSelection?, query: String) -> [Package] {
@@ -64,9 +72,15 @@ extension [Package] {
             // Snapshot content is rendered by SnapshotContentView, not this filter.
             return []
         }
-        if !query.isEmpty {
-            result = result.filter { $0.name.localizedCaseInsensitiveContains(query) }
-        }
-        return result
+        return result.matching(query: query)
+    }
+}
+
+extension Package {
+    /// Shared in-memory search predicate for every live-inventory view.
+    public func matchesSearchQuery(_ query: String) -> Bool {
+        name.localizedCaseInsensitiveContains(query)
+            || qualifier?.localizedCaseInsensitiveContains(query) == true
+            || installPath?.path.localizedCaseInsensitiveContains(query) == true
     }
 }
