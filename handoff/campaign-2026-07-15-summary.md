@@ -4,17 +4,19 @@
 
 - App repository branch: `campaign/2026-07-audit`
 - Baseline: `bada41d` (`v1.3.1`, build 9)
-- Campaign commits: 26 before this handoff/documentation unit
+- Campaign commits: 32 before this handoff/documentation unit
 - Separate website repository: `main` at `9a2f045`
 - Production website deploy: complete, Netlify deploy `6a5833cc0b1dbbd4c29d7e0f`
-- Version bump: intentionally not applied
-- App Store submission: not initiated
+- Release version: `1.4.0` (build `10`)
+- App Store candidate: local QA complete; Apple Distribution signing, Organizer
+  validation, upload, and submission remain owner-side actions
 
 The campaign completed the fresh six-lane audit, all accepted correctness,
 security, privacy, performance, infrastructure, and test-health repairs, the
 approved website pass and production deployment, and the prioritized feature
-expansion. The only audit refactor deferred by owner decision is APP-11. The
-explicitly conditional scanner/content backlog is listed below.
+expansion, release metadata, and local App Store candidate QA. The only audit
+refactor deferred by owner decision is APP-11. The explicitly conditional
+scanner/content backlog is listed below.
 
 ## Verification delta
 
@@ -22,10 +24,10 @@ explicitly conditional scanner/content backlog is listed below.
 |---|---:|---:|
 | Swift Testing cases | 480 in 48 suites | 691 in 61 suites |
 | XCTest cases in the Core package | 21 | 21 |
-| App-target logic tests | 0 | 41 |
+| App-target tests | 0 | 46 |
 | Core failures | 0 | 0 |
 | App-test failures | n/a | 0 |
-| Release build | not part of baseline | passed, signing disabled |
+| Release candidate | not part of baseline | universal archive + ad-hoc signed QA app; 0 warnings |
 | Production `Process(` / runtime network APIs | 0 / 0 | 0 / 0 |
 
 Final commands:
@@ -40,11 +42,12 @@ xcodebuild -project Installory.xcodeproj -scheme Installory \
 python3 -m unittest discover -s scripts/generate-descriptions/tests -p 'test_*.py'
 ```
 
-Results: 691 Swift Testing cases plus 21 XCTest cases passed; 41 app tests
-passed; 18 description-tool tests passed; Release built successfully; the
-invariant gate passed. Xcode emitted no compiler warnings. Its only diagnostic
-was the scheme-level destination metadata notice already produced by the
-generated local project.
+Results: 691 Swift Testing cases plus 21 XCTest cases passed; 46 app tests
+passed; 18 description-tool tests passed; the universal Release archive and
+ad-hoc signed QA app built successfully; the invariant gate passed. The final
+build and archive result bundles contain zero errors, compiler warnings, and
+analyzer warnings. See `handoff/app-store-qa-1.4.0.md` for artifact evidence and
+the completed hands-on smoke test.
 
 ## What shipped on the branch
 
@@ -99,8 +102,8 @@ generated local project.
 
 ### Infrastructure and website
 
-- CI regenerates the ignored Xcode project, runs Core tests, builds Debug and
-  Release app targets with signing disabled, and enforces subprocess/network,
+- CI regenerates the ignored Xcode project, runs Core and app tests, builds the
+  Release app target with signing disabled, and enforces subprocess/network,
   entitlement, read-only bookmark, and XcodeGen source-of-truth invariants.
 - A real v1 database fixture now migrates through v2 with row, foreign-key, and
   schema assertions.
@@ -143,7 +146,7 @@ campaign disposition.
 | PERF25-007/009/012 | Fixed by `065d8f8` and `cbdc50d`. |
 | PERF25-011 | Fixed by `38874b2` and the METADATA follow-up `15a54e8`. |
 | TEST25-001/002 | Fixed by `ae0b220`. |
-| TEST25-003 | Fixed with the generated `InstalloryTests` target and 41 app logic tests. |
+| TEST25-003 | Fixed with the generated `InstalloryTests` target and 46 app logic/rendering tests. |
 | TEST25-004 | Fixed by `3e3edf0`. |
 | WEB-01–WEB-11, SEC25-004, WEB25-002–008, WEB-F1/F2/F3 | Fixed in separate website commits `3f67a45` and `9a2f045`, then deployed and verified. |
 | APP-F1/F2/F3/F4/F5 and uv scanner | Implemented with specs and regression coverage in `ccba530`, `7463879`, `d2db275`, `4fea1fe`, `11f431e`, `311de9c`, and `67abf94`. |
@@ -159,21 +162,38 @@ campaign disposition.
 - **Go binary inventory:** deliberate product gap. Reliable module/version
   inspection generally requires executing `go version -m`; that would violate the
   zero-subprocess invariant.
-- **WEB-F4 demo video:** requires representative release footage, editing, poster,
-  and reduced-motion verification after the app version is finalized.
-- **WEB-F5 changelog:** defer until the release version and public release date are
-  chosen, so it does not announce an unshipped version.
+- **WEB-F4 demo video:** requires representative App Store release footage,
+  editing, a poster, and reduced-motion verification.
+- **WEB-F5 changelog:** defer until the public release date is chosen, so it does
+  not announce an unshipped version.
 - **WEB-F6 manager documentation and WEB-F7 provenance explainer:** useful larger
   content projects, but outside the approved one-pass WEB-F1/F2/F3 content scope.
 - **WEB-F8 dark screenshots:** requires final-version App Store/marketing capture.
 - **WEB-F9 social proof/press kit:** defer until ratings, review quotes, press assets,
   or a meaningful public star count exist; no placeholder proof was invented.
-- **Version and submission:** no version/build change and no App Store submission
-  were made. Recommendation: **1.4.0 (build 10)** because this is a user-visible
-  feature release, followed by manual QA and an App Store submission only after
-  owner confirmation.
+- **Distribution signing and submission:** version **1.4.0 (build 10)** and the
+  local QA candidate are complete. This machine has no owner development team in
+  the project and only an Apple Development identity, so an Apple Distribution
+  archive could not be validated or uploaded. No App Store Connect upload or
+  submission was attempted.
+- **Command-F search shortcut:** the native `.searchable` fields work by click and
+  screen-reader focus, but the final smoke test found that Command-F does not move
+  focus to search. This is a low-priority macOS polish follow-up, not a data-loss,
+  crash, accessibility-label, or submission blocker.
 
 ## Manual QA checklist
+
+The signed Release smoke pass completed on 2026-07-15. It covered sample-data
+onboarding, List/Table switching, selection preservation, sorting, the Table
+context menu, scoped search in Duplicates/Review Candidates/AI Installed, bulk
+cleanup script generation without execution, Disk Usage keyboard navigation,
+snapshot capture, CSV/Markdown/JSON Save panels (cancelled), Settings privacy and
+About metadata, dark appearance, demo exit, and restoration of the real
+inventory. The selected-row Table crash found during QA was fixed with a
+deterministic rendering regression before the candidate was rebuilt and retested.
+The broader environment and assistive-technology permutations below remain a
+recommended maintainer pass. Full evidence is in
+`handoff/app-store-qa-1.4.0.md`.
 
 ### Launch, state, and grants
 
@@ -245,8 +265,12 @@ campaign disposition.
       including the support form, dark mode, keyboard focus, reduced motion, and
       responsive images.
 
-## Owner decision remaining
+## Owner action remaining
 
-Approve or change the proposed **1.4.0 (build 10)** version, and state whether the
-manual-QA-approved build should be prepared for App Store submission. No release
-metadata or submission action should occur before that decision.
+Select the owner Apple Developer team and managed distribution signing in Xcode,
+create a fresh App Store distribution archive for **1.4.0 (build 10)**, validate
+it in Organizer, and upload it to App Store Connect. Attach the uploaded build,
+confirm the privacy and export-compliance answers, paste the prepared version and
+review notes from `handoff/app-store-version-notes-1.4.0.md`, and submit only when
+the owner chooses. The local ad-hoc QA app and unsigned archive are evidence
+artifacts and cannot themselves be submitted.

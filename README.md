@@ -46,7 +46,7 @@ It's built for people — especially those working with AI coding tools like Cla
 
 ## Project status
 
-Installory is **live on the Mac App Store** and free. The core scanning/provenance/script-generation library has **712 passing tests** (691 Swift Testing cases plus 21 XCTest cases), and the app layer has 41 logic tests. Issues and pull requests are welcome — feedback on which package managers or workflows to support next is especially appreciated.
+Installory is **live on the Mac App Store** and free. The core scanning/provenance/script-generation library has **712 passing tests** (691 Swift Testing cases plus 21 XCTest cases), and the app layer has 46 logic and rendering regression tests. Issues and pull requests are welcome — feedback on which package managers or workflows to support next is especially appreciated.
 
 ## Building
 
