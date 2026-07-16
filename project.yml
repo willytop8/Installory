@@ -28,6 +28,7 @@ targets:
         CFBundlePackageType: APPL
         CFBundleShortVersionString: "1.4.0"
         CFBundleVersion: "10"
+        ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.developer-tools
     entitlements:
       path: App/Installory.entitlements
