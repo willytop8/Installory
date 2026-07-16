@@ -25,7 +25,11 @@ reject_swift_pattern() {
     local raw_matches
     local code_matches
 
-    raw_matches="$(rg -n --no-heading --glob '*.swift' "$pattern" "${SOURCE_DIRS[@]}" || true)"
+    if command -v rg >/dev/null 2>&1; then
+        raw_matches="$(rg -n --no-heading --glob '*.swift' "$pattern" "${SOURCE_DIRS[@]}" || true)"
+    else
+        raw_matches="$(find "${SOURCE_DIRS[@]}" -type f -name '*.swift' -exec grep -EnH "$pattern" {} + || true)"
+    fi
     code_matches="$(printf '%s\n' "$raw_matches" | awk '
         {
             source = $0
@@ -43,7 +47,30 @@ reject_swift_pattern() {
     fi
 }
 
-command -v rg >/dev/null 2>&1 || fail "ripgrep (rg) is required"
+matches_pattern() {
+    local pattern="$1"
+    local file="$2"
+
+    if command -v rg >/dev/null 2>&1; then
+        rg -q "$pattern" "$file"
+    else
+        grep -Eq "$pattern" "$file"
+    fi
+}
+
+count_pattern() {
+    local pattern="$1"
+    local file="$2"
+
+    if command -v rg >/dev/null 2>&1; then
+        rg -c "$pattern" "$file" || true
+    else
+        grep -Ec "$pattern" "$file" || true
+    fi
+}
+
+command -v grep >/dev/null 2>&1 || fail "grep is required"
+command -v find >/dev/null 2>&1 || fail "find is required"
 command -v git >/dev/null 2>&1 || fail "git is required"
 
 for directory in "${SOURCE_DIRS[@]}"; do
@@ -55,7 +82,7 @@ reject_swift_pattern \
     '(^|[^[:alnum:]_])Process[[:space:]]*\('
 reject_swift_pattern \
     "Networking API usage" \
-    '\b(URLSession|URLRequest|URLProtocol|NWConnection|NWListener|NWBrowser|NWPathMonitor|CFNetwork)\b|^[[:space:]]*import[[:space:]]+Network\b'
+    '(^|[^[:alnum:]_])(URLSession|URLRequest|URLProtocol|NWConnection|NWListener|NWBrowser|NWPathMonitor|CFNetwork)([^[:alnum:]_]|$)|^[[:space:]]*import[[:space:]]+Network([^[:alnum:]_]|$)'
 
 require_file project.yml
 require_file "$ENTITLEMENTS"
@@ -72,7 +99,7 @@ for key in "${expected_entitlements[@]}"; do
     [ "$value" = "true" ] || fail "Entitlement '$key' must exist and equal true"
 
     escaped_key="${key//./\\.}"
-    rg -q "^[[:space:]]*${escaped_key}:[[:space:]]*true[[:space:]]*$" project.yml || \
+    matches_pattern "^[[:space:]]*${escaped_key}:[[:space:]]*true[[:space:]]*$" project.yml || \
         fail "project.yml must declare entitlement '$key: true'"
 done
 
@@ -80,13 +107,13 @@ entitlement_count="$(/usr/bin/plutil -p "$ENTITLEMENTS" | /usr/bin/grep -c ' => 
 [ "$entitlement_count" -eq "${#expected_entitlements[@]}" ] || \
     fail "Entitlements changed: expected exactly ${#expected_entitlements[@]} approved keys, found $entitlement_count"
 
-project_entitlement_count="$(rg -c '^[[:space:]]*com\.apple\.security\.' project.yml || true)"
+project_entitlement_count="$(count_pattern '^[[:space:]]*com\.apple\.security\.' project.yml)"
 [ "${project_entitlement_count:-0}" -eq "${#expected_entitlements[@]}" ] || \
     fail "project.yml entitlement set changed: expected exactly ${#expected_entitlements[@]} approved keys"
 
 # The entitlement authorizes explicit save-panel destinations, but every
 # persistent scanning bookmark must remain read-only.
-rg -q '\.securityScopeAllowOnlyReadAccess' App/Sources/FolderAccessManager.swift || \
+matches_pattern '\.securityScopeAllowOnlyReadAccess' App/Sources/FolderAccessManager.swift || \
     fail "Scanning bookmarks must retain securityScopeAllowOnlyReadAccess"
 
 require_file scripts/regenerate-xcode.sh
