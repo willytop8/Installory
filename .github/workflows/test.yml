@@ -31,7 +31,7 @@ jobs:
 
       - name: Test
         working-directory: Installory
-        run: swift test
+        run: swift test --no-parallel
 
   app:
     name: InstalloryApp
@@ -70,6 +70,7 @@ jobs:
           -scheme Installory
           -configuration Debug
           -destination 'platform=macOS'
+          -parallel-testing-enabled NO
           CODE_SIGNING_ALLOWED=NO
           CODE_SIGNING_REQUIRED=NO
           test
