@@ -38,10 +38,7 @@ struct InstalloryApp: App {
                     }
                 }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
-                .disabled(
-                    coordinator.packages.isEmpty
-                        || !(coordinator.sidebarSelection?.supportsCleanupControls ?? true)
-                )
+                .disabled(!coordinator.canEnterCleanupMode)
 
                 Divider()
 

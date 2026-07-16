@@ -41,14 +41,13 @@ enum AnalysisEmptyState: Equatable {
     }
 }
 
-/// Sections backed by PackageListView currently expose Cleanup Mode controls.
-/// Duplicates and Orphans can opt in here when APP-F2 adds their bulk controls.
+/// Sections that can contain shell-removable packages and expose bulk controls.
 extension SidebarSelection {
     var supportsCleanupControls: Bool {
         switch self {
-        case .all, .manager, .readOnly:
+        case .all, .manager, .duplicates, .orphans:
             return true
-        case .duplicates, .orphans, .aiInstalled, .snapshot:
+        case .readOnly, .aiInstalled, .snapshot:
             return false
         }
     }
@@ -170,13 +169,12 @@ struct RootView: View {
                         )
                     }
                     .disabled(
-                        coordinator.packages.isEmpty
-                            || !currentSectionSupportsCleanupControls
+                        !coordinator.canEnterCleanupMode
                     )
                     .help(
-                        currentSectionSupportsCleanupControls
+                        coordinator.canEnterCleanupMode
                             ? "Select packages to generate a cleanup script (⇧⌘K)"
-                            : "Cleanup Mode isn't available in this section"
+                            : "No packages in this section have a generated removal command"
                     )
 
                     Button {
@@ -206,14 +204,14 @@ struct RootView: View {
         // Persisted here rather than in PackageListView, which unmounts whenever the
         // user navigates to one of the dedicated sections above.
         .onChange(of: coordinator.sidebarSelection) { _, _ in
-            exitCleanupModeIfUnavailable()
+            coordinator.reconcileCleanupSelectionForCurrentSidebar()
             coordinator.reconcileSelectedPackageForCurrentSidebar()
             coordinator.persistUIPreferences()
         }
         .onChange(of: coordinator.isCleanupMode) { _, _ in
-            // Also catches the global keyboard command while a dedicated view
-            // without cleanup controls is active.
-            exitCleanupModeIfUnavailable()
+            // Also catches the global keyboard command in a section without a
+            // package that can produce a removal command.
+            coordinator.reconcileCleanupSelectionForCurrentSidebar()
         }
         .sheet(isPresented: Binding(
             get: { coordinator.cleanupResult != nil },
@@ -243,17 +241,6 @@ struct RootView: View {
         .actionErrorAlert(coordinator: coordinator)
     }
 
-    private var currentSectionSupportsCleanupControls: Bool {
-        coordinator.sidebarSelection?.supportsCleanupControls ?? true
-    }
-
-    private func exitCleanupModeIfUnavailable() {
-        guard coordinator.isCleanupMode, !currentSectionSupportsCleanupControls else {
-            return
-        }
-        coordinator.isCleanupMode = false
-        coordinator.selectedForCleanup = []
-    }
 }
 
 extension View {

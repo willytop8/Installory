@@ -185,6 +185,9 @@ struct DuplicatesView: View {
             placement: .toolbar,
             prompt: "Search duplicates"
         )
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            CleanupSelectionFooter()
+        }
         .onChange(of: coordinator.searchQuery) { _, query in
             let visibleIDs = grouped.matching(query: query).packageIDs
             guard let selectedID = coordinator.selectedPackage?.id,
@@ -249,6 +252,7 @@ private struct DuplicateInstallRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            CleanupSelectionToggle(package: package)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     ManagerBadge(manager: package.manager)
@@ -285,6 +289,7 @@ private struct MultiLocationInstallRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            CleanupSelectionToggle(package: package)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     ManagerBadge(manager: package.manager)

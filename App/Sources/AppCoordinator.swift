@@ -351,6 +351,48 @@ final class AppCoordinator {
         )
     }
 
+    /// Packages the current sidebar section may include in a generated removal
+    /// script. Search does not change this scope, so an explicit selection can
+    /// remain checked while temporarily filtered from view.
+    var cleanupPackagesForCurrentSection: [Package] {
+        let candidates: [Package]
+        switch sidebarSelection {
+        case nil, .all:
+            candidates = packages
+        case .manager(let manager):
+            candidates = packages.filter { $0.manager == manager }
+        case .duplicates:
+            let ids = Set(
+                duplicateGroups.flatMap { $0.packages.map(\.id) }
+                    + multiLocationGroups.flatMap { $0.packages.map(\.id) }
+            )
+            candidates = packages.filter { ids.contains($0.id) }
+        case .orphans:
+            candidates = orphanedPackages
+        case .readOnly, .aiInstalled, .snapshot:
+            candidates = []
+        }
+        return candidates.filter(\.isRemovalScriptEligible)
+    }
+
+    var canEnterCleanupMode: Bool {
+        !cleanupPackagesForCurrentSection.isEmpty
+    }
+
+    var selectedCleanupPackages: [Package] {
+        cleanupPackagesForCurrentSection.filter { selectedForCleanup.contains($0.id) }
+    }
+
+    /// Prevents a selection made in one analysis from leaking into a script
+    /// generated from another sidebar section.
+    func reconcileCleanupSelectionForCurrentSidebar() {
+        let eligibleIDs = Set(cleanupPackagesForCurrentSection.map(\.id))
+        selectedForCleanup.formIntersection(eligibleIDs)
+        if eligibleIDs.isEmpty, isCleanupMode {
+            isCleanupMode = false
+        }
+    }
+
     /// Test instrumentation for generation reuse and invalidation. The cache is
     /// observation-ignored, so reading these counters never drives UI updates.
     var inventoryDerivedComputationCounts: InventoryDerivedComputationCounts {
@@ -361,12 +403,7 @@ final class AppCoordinator {
     /// after inventory replacement, then ensures the detail package belongs to
     /// the currently visible sidebar section.
     func reconcileInventorySelections() {
-        let removableIDs = Set(
-            packages.lazy
-                .filter { !$0.isReadOnly && $0.manager != .mas }
-                .map(\.id)
-        )
-        selectedForCleanup.formIntersection(removableIDs)
+        reconcileCleanupSelectionForCurrentSidebar()
         selectedPackage = selectedPackage.flatMap { package(id: $0.id) }
         reconcileSelectedPackageForCurrentSidebar()
     }

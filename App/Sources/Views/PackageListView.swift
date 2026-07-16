@@ -27,7 +27,7 @@ struct PackageListView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            cleanupBottomBar
+            CleanupSelectionFooter()
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
@@ -198,61 +198,6 @@ struct PackageListView: View {
         ContentUnavailableView.search(text: coordinator.searchQuery)
     }
 
-    // MARK: - Cleanup bottom bar
-
-    @ViewBuilder
-    private var cleanupBottomBar: some View {
-        if !coordinator.packages.isEmpty {
-            VStack(spacing: 0) {
-                Divider()
-                if coordinator.isCleanupMode {
-                    cleanupModeBar
-                } else {
-                    selectForCleanupBar
-                }
-            }
-        }
-    }
-
-    private var cleanupModeBar: some View {
-        HStack(spacing: 8) {
-            Button {
-                let selected = coordinator.packages.filter { coordinator.selectedForCleanup.contains($0.id) }
-                Task { await coordinator.generateAndShowCleanupScript(packages: selected, captureSnapshot: true) }
-            } label: {
-                Label(
-                    "Generate Cleanup Script (\(coordinator.selectedForCleanup.count))",
-                    systemImage: "doc.text"
-                )
-            }
-            .disabled(coordinator.selectedForCleanup.isEmpty)
-            Spacer()
-            Button("Done") {
-                coordinator.isCleanupMode = false
-                coordinator.selectedForCleanup = []
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
-    }
-
-    private var selectForCleanupBar: some View {
-        HStack {
-            Spacer()
-            Button {
-                coordinator.isCleanupMode = true
-            } label: {
-                Label("Select for Cleanup", systemImage: "checkmark.circle")
-            }
-            .buttonStyle(.borderless)
-            .help("Select packages to generate a cleanup script")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
-    }
-
     // MARK: - Package list
 
     private func packageList(_ visiblePackages: [Package]) -> some View {
@@ -267,16 +212,7 @@ struct PackageListView: View {
         ) { pkg in
             PackageRowView(
                 package: pkg,
-                isCleanupMode: coordinator.isCleanupMode,
-                isSelectedForCleanup: coordinator.selectedForCleanup.contains(pkg.id),
-                onToggleCleanup: {
-                    if coordinator.selectedForCleanup.contains(pkg.id) {
-                        coordinator.selectedForCleanup.remove(pkg.id)
-                    } else if !pkg.isReadOnly {
-                        coordinator.selectedForCleanup.insert(pkg.id)
-                    }
-                },
-                onRemove: (!pkg.isReadOnly && pkg.manager != .mas) ? {
+                onRemove: pkg.isRemovalScriptEligible ? {
                     Task { await coordinator.requestRemoval([pkg]) }
                 } : nil
             )
@@ -290,32 +226,11 @@ struct PackageListView: View {
 private struct PackageRowView: View {
     @Environment(AppCoordinator.self) private var coordinator
     let package: Package
-    var isCleanupMode: Bool = false
-    var isSelectedForCleanup: Bool = false
-    var onToggleCleanup: (() -> Void)? = nil
     var onRemove: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            if isCleanupMode {
-                if package.isReadOnly {
-                    Image(systemName: "lock")
-                        .foregroundStyle(.tertiary)
-                        .imageScale(.small)
-                        .help("Read-only system package — cannot be removed")
-                        .accessibilityLabel("Read-only system package, cannot be removed")
-                } else {
-                    Button {
-                        onToggleCleanup?()
-                    } label: {
-                        Image(systemName: isSelectedForCleanup ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(isSelectedForCleanup ? Color.accentColor : Color.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel(isSelectedForCleanup ? "Selected for cleanup" : "Not selected for cleanup")
-                    .accessibilityHint("Double-tap to toggle whether \(package.name) is included in the cleanup script")
-                }
-            }
+            CleanupSelectionToggle(package: package)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(package.name)

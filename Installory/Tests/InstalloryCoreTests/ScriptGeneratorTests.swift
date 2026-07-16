@@ -571,6 +571,20 @@ struct ScriptGeneratorTests {
         #expect(generator.removalCommand(for: pkg) == nil)
     }
 
+    @Test("APP-F2: cleanup selection eligibility matches removal-command availability")
+    func cleanupSelectionEligibilityMatchesRemovalCommands() {
+        let eligible = makePackage(manager: .brew, name: "jq")
+        let readOnly = makePackage(manager: .pip, name: "six", isReadOnly: true)
+        let appStore = makePackage(manager: .mas, name: "Xcode")
+
+        for package in [eligible, readOnly, appStore] {
+            #expect(
+                package.isRemovalScriptEligible
+                    == (generator.removalCommand(for: package) != nil)
+            )
+        }
+    }
+
     @Test func removalCommandPipWithSpecialCharsInInterpreterPath() {
         let interpreter = "/Users/my user/.pyenv/versions/3.12.0/bin/python"
         let pkg = makePackage(manager: .pip, name: "flask", qualifier: interpreter)

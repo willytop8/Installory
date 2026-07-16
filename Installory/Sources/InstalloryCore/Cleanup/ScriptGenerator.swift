@@ -24,6 +24,14 @@ public struct GeneratedScript: Sendable {
     public let warnedDenylisted: [Package]
 }
 
+extension Package {
+    /// True when Installory can generate a shell removal command for this row.
+    /// The app uses the same predicate for Cleanup Mode selection controls.
+    public var isRemovalScriptEligible: Bool {
+        !isReadOnly && manager != .mas
+    }
+}
+
 /// Turns a selection of packages into a shell script the user can paste into Terminal.
 ///
 /// This is a pure value: it reads `[Package]` and produces a `GeneratedScript` string.
@@ -58,7 +66,7 @@ public struct ScriptGenerator: Sendable {
     /// dependency sorting, or script-header generation. `renderCommand` remains
     /// private and script-oriented; this method owns the nil cases cleanly.
     public func removalCommand(for package: Package) -> String? {
-        guard !package.isReadOnly, package.manager != .mas else { return nil }
+        guard package.isRemovalScriptEligible else { return nil }
         return renderCommand(for: package)
     }
 

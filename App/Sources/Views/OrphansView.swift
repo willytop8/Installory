@@ -39,6 +39,9 @@ struct OrphansView: View {
             placement: .toolbar,
             prompt: "Search review candidates"
         )
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            CleanupSelectionFooter()
+        }
         .onChange(of: coordinator.searchQuery) { _, query in
             let visible = coordinator.orphanedPackages.matching(query: query)
             guard let selectedID = coordinator.selectedPackage?.id,
@@ -134,6 +137,7 @@ private struct OrphanRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            CleanupSelectionToggle(package: package)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(package.name)

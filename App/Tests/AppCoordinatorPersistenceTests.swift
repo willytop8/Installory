@@ -125,6 +125,30 @@ struct AppCoordinatorPersistenceTests {
         )
     }
 
+    private func scopedPackage(
+        id: String,
+        manager: PackageManager,
+        name: String,
+        qualifier: String? = nil,
+        isReadOnly: Bool = false
+    ) -> Package {
+        Package(
+            id: id,
+            manager: manager,
+            qualifier: qualifier,
+            name: name,
+            version: "1.0",
+            installPath: qualifier.map { URL(fileURLWithPath: $0) },
+            installedAt: Date(timeIntervalSince1970: 1_720_000_000),
+            installedAtConfidence: .medium,
+            sizeBytes: 512,
+            isExplicit: true,
+            isReadOnly: isReadOnly,
+            dependencies: [],
+            lastSeen: Date(timeIntervalSince1970: 1_720_100_000)
+        )
+    }
+
     private func evidence(secret: String? = nil) -> ProvenanceEvidence {
         ProvenanceEvidence(
             packageId: "brew::ffmpeg",
@@ -567,15 +591,73 @@ struct AppCoordinatorPersistenceTests {
         ) == .noResults)
     }
 
-    @Test("APP25-016: only package-list destinations expose cleanup controls")
+    @Test("APP-F2: Duplicates and Review Candidates expose cleanup controls")
     func cleanupModeDestinationCapabilities() {
         #expect(SidebarSelection.all.supportsCleanupControls)
         #expect(SidebarSelection.manager(.pip).supportsCleanupControls)
-        #expect(SidebarSelection.readOnly.supportsCleanupControls)
-        #expect(!SidebarSelection.duplicates.supportsCleanupControls)
-        #expect(!SidebarSelection.orphans.supportsCleanupControls)
+        #expect(SidebarSelection.duplicates.supportsCleanupControls)
+        #expect(SidebarSelection.orphans.supportsCleanupControls)
+        #expect(!SidebarSelection.readOnly.supportsCleanupControls)
         #expect(!SidebarSelection.aiInstalled.supportsCleanupControls)
         #expect(!SidebarSelection.snapshot(UUID()).supportsCleanupControls)
+    }
+
+    @Test("APP-F2: sidebar reconciliation removes cleanup selections outside the new scope")
+    func cleanupSelectionReconcilesToSidebarScope() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try Database(directory: directory)
+        let brew = package()
+        let npm = scopedPackage(id: "npm::typescript", manager: .npm, name: "typescript")
+        try PackageDAO(database: database).replaceAll(with: [brew, npm])
+
+        let coordinator = AppCoordinator(dataDirectoryOverride: directory)
+        await coordinator.hydratePersistedState()
+        coordinator.isCleanupMode = true
+        coordinator.selectedForCleanup = [brew.id, npm.id]
+        coordinator.sidebarSelection = .manager(.brew)
+
+        coordinator.reconcileCleanupSelectionForCurrentSidebar()
+
+        #expect(coordinator.selectedForCleanup == [brew.id])
+        #expect(coordinator.isCleanupMode)
+
+        coordinator.sidebarSelection = .readOnly
+        coordinator.reconcileCleanupSelectionForCurrentSidebar()
+        #expect(coordinator.selectedForCleanup.isEmpty)
+        #expect(!coordinator.isCleanupMode)
+    }
+
+    @Test("APP-F2: duplicate cleanup scope deduplicates overlapping analysis groups")
+    func duplicateCleanupScopeIsUnique() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try Database(directory: directory)
+        let brew = scopedPackage(id: "brew::ruff", manager: .brew, name: "ruff")
+        let pipA = scopedPackage(
+            id: "pip:/python-a:ruff",
+            manager: .pip,
+            name: "ruff",
+            qualifier: "/python-a"
+        )
+        let pipB = scopedPackage(
+            id: "pip:/python-b:ruff",
+            manager: .pip,
+            name: "ruff",
+            qualifier: "/python-b"
+        )
+        try PackageDAO(database: database).replaceAll(with: [brew, pipA, pipB])
+
+        let coordinator = AppCoordinator(dataDirectoryOverride: directory)
+        await coordinator.hydratePersistedState()
+        coordinator.sidebarSelection = .duplicates
+
+        #expect(Set(coordinator.cleanupPackagesForCurrentSection.map(\.id)) == [
+            brew.id,
+            pipA.id,
+            pipB.id,
+        ])
+        #expect(coordinator.cleanupPackagesForCurrentSection.count == 3)
     }
 
     @Test("APP25-022: every package sort has a stable identity tie-breaker")
