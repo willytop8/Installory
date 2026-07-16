@@ -31,7 +31,17 @@ jobs:
 
       - name: Test
         working-directory: Installory
+        env:
+          SWIFT_BACKTRACE: enable=yes,interactive=no,color=no
         run: swift test --no-parallel
+
+      - name: Print core crash diagnostics
+        if: failure()
+        run: |
+          reports="$HOME/Library/Logs/DiagnosticReports"
+          if [[ -d "$reports" ]]; then
+            find "$reports" -maxdepth 1 -type f -mmin -10 -print -exec cat {} \;
+          fi
 
   app:
     name: InstalloryApp
