@@ -12,8 +12,8 @@ import Foundation
 /// Records with `nil` timestamps in either collector are excluded from time-proximity
 /// matching and never contribute to `installCommand` or `claudeCodeContext`.
 ///
-/// **nearbyProjects** is always `[]` in v0. Filesystem walking for nearby git repos
-/// is deferred — see HANDOFF.md.
+/// `nearbyProjects` remains empty because Installory does not perform an extra
+/// repository walk while collecting provenance.
 public struct ProvenanceCollector: Sendable {
     private let shellCollector: ShellHistoryCollector
     private let claudeCodeCollector: ClaudeCodeLogCollector

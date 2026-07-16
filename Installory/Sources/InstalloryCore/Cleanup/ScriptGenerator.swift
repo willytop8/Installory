@@ -46,9 +46,8 @@ public struct ScriptGenerator: Sendable {
 
     /// Generates a shell script that, when run in Terminal, uninstalls the given packages.
     ///
-    /// **Callers MUST capture a snapshot via `SnapshotManager` before calling this method.**
-    /// `ScriptGenerator` does not enforce this contract — pass the snapshot metadata via
-    /// the `snapshot` parameter so the generated script references it in its header.
+    /// Snapshot policy belongs to the caller. When snapshot metadata is supplied,
+    /// the generated header references it for recovery.
     ///
     /// Behaviour:
     /// - Packages with `isReadOnly == true` are excluded and returned in `skippedReadOnly`.
@@ -144,7 +143,7 @@ public struct ScriptGenerator: Sendable {
             appendSection(manager: manager, packages: pkgs, to: &out)
         }
 
-        // Managers not in the canonical list (added in future phases)
+        // Any enum case omitted from the preferred order remains deterministic.
         let extra = Set(packages.map { $0.manager })
             .subtracting(handledSet)
             .sorted { $0.rawValue < $1.rawValue }

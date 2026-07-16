@@ -1,119 +1,108 @@
 # Installory
 
-**See what's installed on your Mac — and understand how it got there.**
+**See what is installed on your Mac—and understand how it got there.**
 
-[Download on the Mac App Store](https://apps.apple.com/us/app/installory/id6772879429?mt=12) · [installory.app](https://installory.app/) · Free · MIT licensed · macOS 14+
+[Mac App Store](https://apps.apple.com/us/app/installory/id6772879429?mt=12) ·
+[installory.app](https://installory.app/) · Free · MIT · macOS 14+
 
-Installory is a native macOS app that scans your machine for software installed by developer package managers (Homebrew, pip, pipx, uv, npm, Cargo, RubyGems, and Mac App Store apps) and turns the result into something you can actually understand: a clean inventory of every package, what each one is, when it arrived, and how it got there.
+Installory is a native macOS inventory for Homebrew, pip, pipx, persistent uv
+tools, npm, Cargo, RubyGems, and receipt-bearing Mac App Store apps. It combines
+on-disk package metadata into one explained view without modifying the system or
+contacting a server.
 
-It's built for people — especially those working with AI coding tools like Claude Code and Cursor — who've accumulated piles of packages they don't remember installing and don't fully understand. The terminal is intimidating; `brew list` is a wall of names with no context. Installory makes the invisible visible, and makes cleanup safe.
+![Installory inventory](files/screenshots/main-window.png)
 
-**Why a GUI and not just `brew list`?** Because the value isn't the list — it's the context across managers. One window unifies Homebrew, Python, JavaScript, Rust, Ruby, uv tool, and Mac App Store inventories, adds a plain-language description of what each package is, tells you *why* it's there (provenance), flags cross-manager duplicates, and generates a reviewable removal script you run yourself. It is read-only and makes no network connections. The whole point is to make the system legible without changing it.
+## Capabilities
 
-## What it does
+- Unified List and sortable Table views with search by name, scope, or path.
+- Package descriptions, install timing, dependencies, and bounded payload sizes
+  when that metadata is available.
+- Cross-manager duplicate analysis, review candidates, cleanup scoring, and a
+  measured-payload Disk Usage view.
+- Optional local provenance from matching shell history and Claude Code session
+  records, enabled explicitly in Settings → Privacy.
+- Snapshots, change timelines, and CSV, Markdown, JSON, and environment-report
+  exports.
+- Exact single or bulk cleanup scripts for the user to review and run manually.
+  Bulk cleanup snapshots first; single-package generation follows the selected
+  Always, Ask, or Never snapshot preference.
 
-**Unified inventory.** One window showing every package across Homebrew, pip, pipx, persistent uv tools, npm, Cargo, RubyGems, and Mac App Store apps — name, version, install location, dependencies, measured payload, and a plain-language description of what each package actually is. Search covers names, manager scopes, and install paths; List and native sortable Table modes share the same inventory and detail selection.
+![Generated cleanup script](files/screenshots/cleanup-script.png)
 
-**Provenance _(opt-in)_.** Cross-references your shell history and Claude Code session logs — behind an explicit consent toggle in Settings → Privacy — to answer the question package managers never do: *why is this here?* Everything stays on your Mac; nothing is sent anywhere. Enable it to see plain-language install traces in each package's detail view, and to filter to packages installed during an AI coding session.
+## Safety guarantees
 
-**Duplicate analysis.** Cross-manager duplicates (e.g. `node` in both Homebrew and npm) are classified by severity: *active conflict* (two versions fighting over `$PATH` with a clear winner and shadowed losers), *potential conflict*, or *benign*. Same-manager multi-location installs (the same pip package across multiple Python interpreters) are surfaced separately as informational context.
+- **Read-only scanning:** Installory never installs, removes, or changes software.
+- **No command execution:** production code contains no subprocess calls.
+- **No runtime network:** package descriptions are bundled with the app.
+- **Sandboxed access:** external folders require user-granted, read-only,
+  security-scoped bookmarks. Read-write access applies only to a destination the
+  user selects in a Save panel.
+- **Local privacy:** provenance is off by default, redacted before persistence,
+  and never leaves the Mac.
 
-**Orphan detection.** "Review Candidates" lists explicitly-installed packages that nothing else in your inventory depends on — the lowest-risk first candidates to review for removal. System essentials are excluded.
+CI enforces these boundaries with `scripts/check-invariants.sh`.
 
-**Cleanup signals.** Sort the package list by largest, oldest, or combined cleanup score. Each row shows bounded measured payload and estimated install age, while Disk Usage explains measurement coverage, compares manager totals, and surfaces the ten largest measured packages without presenting unknown sizes as zero.
+## Build and test
 
-**Safe removal.** When you want to clean up, Installory helps — but it **never deletes anything itself.** It generates exact uninstall commands or a reviewable bulk shell script, which you run yourself in your terminal. You stay in control; nothing is destructive without your hand on it.
-
-**Snapshots and timeline.** Before generating a removal script, Installory saves a snapshot. If a removal causes a problem, you can generate a reinstall script from that snapshot. The Changes tab on any snapshot shows what was added, removed, or version-bumped since that point — turning snapshots from a recovery tool into an ongoing awareness tool.
-
-**Exports.** Export the inventory as CSV, Markdown, or deterministic JSON. A separate environment report includes per-manager counts, duplicate groups, review candidates, and the full inventory table for sharing with an AI assistant or forum.
-
-## Screenshots
-
-**The main window** — a unified, three-pane inventory across every supported manager, with a Scan Coverage section that surfaces exactly what was checked and what was skipped:
-
-![Installory main window](files/screenshots/main-window.png)
-
-**Cleanup, the safe way** — Installory captures a snapshot before generating a removal script. The script stays on screen for you to review; you copy it into Terminal yourself when you're ready:
-
-![Installory cleanup script sheet](files/screenshots/cleanup-script.png)
-
-## Design principles
-
-- **Read-only and sandboxed.** Installory inspects your system; it never modifies it. Scan bookmarks are explicitly read-only. The read-write sandbox entitlement is used only for a file destination the user chooses in a Save panel.
-- **No network.** Installory makes no network connections. It collects nothing, sends nothing. Package descriptions are bundled with the app.
-- **You run the commands.** Installory generates scripts and commands. It never executes them. Removal always happens in your terminal, under your review.
-
-## Project status
-
-Installory is **live on the Mac App Store** and free. The core scanning/provenance/script-generation library has **712 passing tests** (691 Swift Testing cases plus 21 XCTest cases), and the app layer has 46 logic and rendering regression tests. Issues and pull requests are welcome — feedback on which package managers or workflows to support next is especially appreciated.
-
-## Building
-
-**Prerequisites**
-
-- macOS 14 (Sonoma) or later
-- Xcode 16 or later
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen) — `brew install xcodegen`
-
-**Steps**
+Installory runs on macOS 14 or newer. Building requires Xcode 16.3 or newer on a
+macOS release supported by that Xcode, plus
+[XcodeGen](https://github.com/yonaskolb/XcodeGen):
 
 ```bash
-./scripts/regenerate-xcode.sh   # generates Installory.xcodeproj from project.yml
+brew install xcodegen
+./scripts/regenerate-xcode.sh
 open Installory.xcodeproj
 ```
 
-In Xcode: select the Installory target → Signing & Capabilities → set your Development Team, then press ⌘R.
+Select a Development Team in Xcode before running the app. The generated
+`Installory.xcodeproj` is intentionally ignored; `project.yml` is the source of
+truth and must be regenerated after app-target files are added, moved, or
+renamed.
 
-> `Installory.xcodeproj` is gitignored intentionally — `project.yml` is the source of truth. Regenerate the project any time you pull changes that touch project structure or add new source files.
-
-## Running the library tests
-
-`InstalloryCore` — the package-scanning, provenance, and script-generation engine — is a standalone Swift package with its own test suite. It runs without Xcode:
+Run the Core suite without Xcode:
 
 ```bash
 cd Installory
 swift test
 ```
 
-The generated app target and its logic tests run with:
+Run the app suite without signing:
 
 ```bash
 ./scripts/regenerate-xcode.sh
-xcodebuild -project Installory.xcodeproj -scheme Installory test
+xcodebuild \
+  -project Installory.xcodeproj \
+  -scheme Installory \
+  -destination 'platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_REQUIRED=NO \
+  test
 ```
 
-The bundled package-description corpus was last refreshed on **2026-07-15**.
-Run `python3 scripts/generate-descriptions/generate.py` before every release so
-the offline descriptions stay current; partial runs are never release input.
+The offline description corpus has its own
+[maintenance runbook](scripts/generate-descriptions/README.md).
 
-## Architecture
+## Structure
 
-Installory is split into a pure Swift library and a thin app shell:
+- `Installory/` — standalone Swift package containing scanners, models,
+  persistence, provenance, snapshots, exports, and script generation.
+- `App/Sources/` — SwiftUI shell and `AppCoordinator` integration layer.
+- `App/Resources/` — app assets, privacy manifest, legal notices, and bundled
+  descriptions.
+- `project.yml` — XcodeGen source of truth.
+- `.github/workflows/test.yml` — Core, app, Release-build, and invariant gates.
 
-- **`InstalloryCore`** — all the real logic: package scanners, provenance collection, snapshot management, script generation, and disk-usage aggregation. No UI, no AppKit, covered by 712 tests.
-- **App layer (`App/Sources/`)** — the SwiftUI interface and the coordinator that wires the library to the screen.
+The only package dependency is GRDB, pinned to the 7.10 minor series. New
+scanners must remain filesystem-only; managers that require executing a command
+are deliberate gaps.
 
-The library is deliberately UI-free so it can be tested in isolation and reasoned about independently of the interface.
+## Release
 
-## Repo layout
-
-```
-project.yml              XcodeGen source of truth for the Xcode project
-Installory/              Swift package — the InstalloryCore library + tests
-App/
-├── Sources/             App-layer SwiftUI sources
-├── Resources/           Assets.xcassets (app icon, bundled descriptions)
-├── Installory.entitlements
-└── Info.plist
-scripts/
-├── regenerate-xcode.sh          regenerates the Xcode project from project.yml
-└── generate-descriptions/       build-time tool that builds the bundled
-                                 package-description corpus
-files/
-└── screenshots/                 README screenshots
-```
+The current 1.4.0 submission notes and archive checklist are in
+[RELEASE.md](RELEASE.md). Historical audits and implementation plans live in Git
+history rather than the working tree.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Free to use, modify, and distribute.
+Installory is available under the [MIT License](LICENSE). Bundled dependency and
+asset notices are in `App/Resources/ThirdPartyNotices.txt`.

@@ -1,12 +1,7 @@
 import InstalloryCore
 import SwiftUI
 
-/// Displays packages whose provenance was attributed to an AI assistant coding session.
-///
-/// Visibility is controlled by the sidebar (orchestrator wires the navigation link):
-/// the link is hidden outside demo mode when `provenanceCollection == false`, or when
-/// `aiInstalledPackages` is empty. This view only renders when the user navigated to it,
-/// so it always has data.
+/// Displays packages with provenance linked to matching Claude Code sessions.
 struct AIInstalledView: View {
     @Environment(AppCoordinator.self) private var coordinator
 

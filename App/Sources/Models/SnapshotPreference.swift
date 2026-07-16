@@ -1,8 +1,7 @@
 /// How Installory handles snapshot capture before a per-package removal.
 ///
-/// Stored in UserDefaults under `backshelf.settings.snapshotBeforeRemoval`.
-/// The "backshelf." prefix is retained intentionally from the prior product name
-/// to avoid silently resetting existing users' preferences on update.
+/// Stored under the canonical `app.installory.settings.snapshotBeforeRemoval`
+/// UserDefaults key. A one-time migration imports the legacy Backshelf value.
 /// Batch cleanup is always snapshotted regardless of this setting.
 enum SnapshotPreference: String, CaseIterable {
     case always = "always"

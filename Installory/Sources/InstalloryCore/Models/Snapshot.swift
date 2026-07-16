@@ -64,7 +64,7 @@ extension SnapshotPayload: Codable {
         var result: [PackageManager: [SnapshotPackage]] = [:]
         for key in container.allKeys {
             // Unknown manager keys are silently skipped for forward compatibility
-            // (a snapshot written by a newer version may include post-v0 managers).
+            // (a snapshot written by a newer version may include new managers).
             guard let manager = PackageManager(rawValue: key.stringValue) else { continue }
             result[manager] = try container.decode([SnapshotPackage].self, forKey: key)
         }

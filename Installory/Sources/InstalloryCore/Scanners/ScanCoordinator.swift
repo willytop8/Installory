@@ -10,9 +10,8 @@ public enum ScanEvent: Sendable {
 /// Runs all registered `PackageScanner`s concurrently and streams `ScanEvent`s
 /// as each scanner starts, finishes, and when all are done.
 ///
-/// This is a pure actor — no `@Observable`, no `@MainActor`. A future
-/// `@MainActor @Observable` view-model layer (Phase 5) will subscribe to the
-/// event stream and project state into SwiftUI.
+/// This actor has no UI isolation. `AppCoordinator` consumes its event stream on
+/// the main actor and projects scan state into SwiftUI.
 public actor ScanCoordinator {
     private let scanners: [any PackageScanner]
     private let timeouts: [PackageManager: TimeInterval]

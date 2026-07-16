@@ -28,10 +28,8 @@ public struct DenylistEntry: Sendable {
 /// Identifies packages that, while removable, are so commonly required that Installory
 /// renders them as commented-out warnings rather than active uninstall commands.
 ///
-/// **Phase 3a note:** entries are hardcoded in Swift. A future phase will load them
-/// from a bundled JSON file once the app target has a `Bundle.main` available.
-/// The migration path: decode `[DenylistEntry]` from a JSON resource and pass to
-/// `Denylist(entries:)`.
+/// Default entries are defined in Core so cleanup behavior is deterministic and
+/// does not depend on an app bundle resource.
 public struct Denylist: Sendable {
     private let entries: [DenylistEntry]
 

@@ -174,9 +174,8 @@ final class AppCoordinator {
     private var isHydratingPersistedState = false
     @ObservationIgnored private var hydrationWaiters: [CheckedContinuation<Void, Never>] = []
 
-    /// Provenance evidence keyed by package ID. Populated at the end of each
-    /// scan when `provenanceCollection` is true. Empty in demo mode until the
-    /// orchestrator wires `DemoData.demoProvenanceByPackageId()`.
+    /// Provenance evidence keyed by package ID. Populated after opted-in scans;
+    /// demo mode supplies its own bundled sample evidence.
     private(set) var provenanceByPackageId: [String: ProvenanceEvidence] = [:] {
         didSet { inventoryDerivedCache.invalidateProvenance() }
     }
