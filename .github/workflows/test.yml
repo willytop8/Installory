@@ -29,18 +29,13 @@ jobs:
         working-directory: Installory
         run: swift build
 
-      - name: Test
+      - name: Test XCTest
         working-directory: Installory
-        run: swift test --no-parallel
+        run: swift test --no-parallel --disable-swift-testing
 
-      - name: Diagnose core crash
-        if: failure()
+      - name: Test Swift Testing
         working-directory: Installory
-        run: |
-          xctest="$(xcrun --find xctest)"
-          bundle="$(find .build -path '*/debug/InstalloryPackageTests.xctest' -type d -print -quit)"
-          test -n "$bundle"
-          lldb --batch -o run -k 'thread backtrace all' -- "$xctest" "$bundle"
+        run: swift test --no-parallel --disable-xctest
 
   app:
     name: InstalloryApp
