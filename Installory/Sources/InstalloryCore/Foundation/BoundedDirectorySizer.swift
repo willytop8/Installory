@@ -207,7 +207,7 @@ struct BoundedDirectorySizer {
         if scanStartedAt.duration(to: now) >= limits.maxDurationPerScan {
             return .scanTimeLimit
         }
-        if measurementEntries.isMultiple(of: 32) {
+        if measurementEntries > 0 && measurementEntries.isMultiple(of: 32) {
             await Task.yield()
             try Task.checkCancellation()
         }
