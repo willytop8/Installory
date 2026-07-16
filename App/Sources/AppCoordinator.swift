@@ -43,6 +43,8 @@ private enum PersistenceInitializationResult: Sendable {
 private enum DefaultsKey {
     static let onboardingCompleted   = "app.installory.onboarding.completed"
     static let sortOrder             = "app.installory.ui.sortOrder"
+    static let inventoryViewMode     = "app.installory.ui.inventoryViewMode"
+    static let tableSortOrder        = "app.installory.ui.tableSortOrder"
     static let sidebarSelection      = "app.installory.ui.sidebarSelection"
     static let snapshotBeforeRemoval = "app.installory.settings.snapshotBeforeRemoval"
     static let scanOnLaunch          = "app.installory.settings.scanOnLaunch"
@@ -77,6 +79,8 @@ final class AppCoordinator {
     var searchQuery: String = ""
     var sidebarSelection: SidebarSelection? = .all
     var sortOrder: PackageSortOrder = .recentlyInstalled
+    var inventoryViewMode: InventoryViewMode = .list
+    var tableSortOrder: [PackageTableSortDescriptor] = PackageTableSortDescriptor.defaultOrder
     var selectedPackage: Package?
 
     /// A user-initiated action failed. Presented as an alert and cleared on dismiss.
@@ -310,7 +314,28 @@ final class AppCoordinator {
     // MARK: - Computed: packages
 
     var filteredPackages: [Package] {
-        packages.filtered(by: sidebarSelection, query: searchQuery).sorted(by: sortOrder)
+        filteredPackageSource.sorted(by: sortOrder)
+    }
+
+    /// Order-preserving source shared by List and Table presentation. Each mode
+    /// applies only its own persisted sort preference after filtering.
+    var filteredPackageSource: [Package] {
+        packages.filtered(by: sidebarSelection, query: searchQuery)
+    }
+
+    var supportsInventoryViewMode: Bool {
+        switch sidebarSelection {
+        case nil, .all, .manager, .readOnly:
+            true
+        case .duplicates, .orphans, .aiInstalled, .snapshot:
+            false
+        }
+    }
+
+    func showInventory(as mode: InventoryViewMode) {
+        guard supportsInventoryViewMode else { return }
+        inventoryViewMode = mode
+        persistUIPreferences()
     }
 
     var inventoryIndex: InventoryIndex {
@@ -777,6 +802,14 @@ final class AppCoordinator {
 
     func persistUIPreferences() {
         UserDefaults.standard.set(sortOrder.rawValue, forKey: DefaultsKey.sortOrder)
+        InventoryPresentationPreferences(
+            viewMode: inventoryViewMode,
+            tableSortOrder: tableSortOrder
+        ).persist(
+            to: UserDefaults.standard,
+            viewModeKey: DefaultsKey.inventoryViewMode,
+            tableSortOrderKey: DefaultsKey.tableSortOrder
+        )
         if let sel = sidebarSelection, case .snapshot = sel {
             return  // do not persist snapshot selection — the ID may not exist on next launch
         }
@@ -1136,6 +1169,13 @@ final class AppCoordinator {
            let sort = PackageSortOrder(rawValue: raw) {
             sortOrder = sort
         }
+        let presentation = InventoryPresentationPreferences.restore(
+            from: UserDefaults.standard,
+            viewModeKey: DefaultsKey.inventoryViewMode,
+            tableSortOrderKey: DefaultsKey.tableSortOrder
+        )
+        inventoryViewMode = presentation.viewMode
+        tableSortOrder = presentation.tableSortOrder
         if let raw = UserDefaults.standard.string(forKey: DefaultsKey.sidebarSelection),
            let sel = SidebarSelection(userDefaultsKey: raw) {
             sidebarSelection = sel

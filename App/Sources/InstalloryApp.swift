@@ -11,6 +11,26 @@ struct InstalloryApp: App {
                 .environment(coordinator)
         }
         .commands {
+            CommandGroup(after: .sidebar) {
+                Button("Show as List") {
+                    coordinator.showInventory(as: .list)
+                }
+                .keyboardShortcut("1", modifiers: .command)
+                .disabled(
+                    !coordinator.supportsInventoryViewMode
+                        || coordinator.inventoryViewMode == .list
+                )
+
+                Button("Show as Table") {
+                    coordinator.showInventory(as: .table)
+                }
+                .keyboardShortcut("2", modifiers: .command)
+                .disabled(
+                    !coordinator.supportsInventoryViewMode
+                        || coordinator.inventoryViewMode == .table
+                )
+            }
+
             CommandMenu("Inventory") {
                 Button("Refresh") {
                     Task { await coordinator.refresh() }

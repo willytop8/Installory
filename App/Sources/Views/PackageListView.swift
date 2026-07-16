@@ -7,7 +7,7 @@ struct PackageListView: View {
 
     var body: some View {
         @Bindable var coordinator = coordinator
-        let visiblePackages = coordinator.filteredPackages
+        let visiblePackages = coordinator.filteredPackageSource
 
         Group {
             if coordinator.packages.isEmpty {
@@ -15,7 +15,7 @@ struct PackageListView: View {
             } else if visiblePackages.isEmpty {
                 noMatchState
             } else {
-                packageList(visiblePackages)
+                packageContent(visiblePackages)
             }
         }
         .searchable(text: $coordinator.searchQuery, placement: .toolbar, prompt: "Filter packages")
@@ -31,7 +31,19 @@ struct PackageListView: View {
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
-                if !coordinator.isCleanupMode {
+                Picker("Inventory view", selection: $coordinator.inventoryViewMode) {
+                    Label("List", systemImage: "list.bullet")
+                        .tag(InventoryViewMode.list)
+                    Label("Table", systemImage: "tablecells")
+                        .tag(InventoryViewMode.table)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityLabel("Inventory view")
+                .help("Show packages as a list or sortable table")
+            }
+            ToolbarItem(placement: .automatic) {
+                if coordinator.inventoryViewMode == .list, !coordinator.isCleanupMode {
                     Picker("Sort", selection: $coordinator.sortOrder) {
                         ForEach(PackageSortOrder.allCases, id: \.self) { order in
                             Text(order.displayName).tag(order)
@@ -47,9 +59,15 @@ struct PackageListView: View {
         .onChange(of: coordinator.sortOrder) { _, _ in
             coordinator.persistUIPreferences()
         }
+        .onChange(of: coordinator.inventoryViewMode) { _, _ in
+            coordinator.persistUIPreferences()
+        }
+        .onChange(of: coordinator.tableSortOrder) { _, _ in
+            coordinator.persistUIPreferences()
+        }
         .onChange(of: coordinator.searchQuery) { _, _ in
             guard let selectedID = coordinator.selectedPackage?.id,
-                  !coordinator.filteredPackages.contains(where: { $0.id == selectedID }) else {
+                  !visiblePackages.contains(where: { $0.id == selectedID }) else {
                 return
             }
             coordinator.selectedPackage = nil
@@ -200,6 +218,20 @@ struct PackageListView: View {
 
     // MARK: - Package list
 
+    @ViewBuilder
+    private func packageContent(_ visiblePackages: [Package]) -> some View {
+        switch coordinator.inventoryViewMode {
+        case .list:
+            packageList(visiblePackages.sorted(by: coordinator.sortOrder))
+        case .table:
+            @Bindable var coordinator = coordinator
+            PackageTableView(
+                packages: visiblePackages,
+                sortOrder: $coordinator.tableSortOrder
+            )
+        }
+    }
+
     private func packageList(_ visiblePackages: [Package]) -> some View {
         List(
             visiblePackages,
@@ -224,7 +256,6 @@ struct PackageListView: View {
 // MARK: - Row
 
 private struct PackageRowView: View {
-    @Environment(AppCoordinator.self) private var coordinator
     let package: Package
     var onRemove: (() -> Void)? = nil
 
@@ -247,25 +278,38 @@ private struct PackageRowView: View {
         }
         .padding(.vertical, 2)
         .contextMenu {
-            Button("Copy Name", systemImage: "doc.on.doc") {
-                copy(package.name)
+            PackageContextMenu(package: package, onRemove: onRemove)
+        }
+    }
+}
+
+/// Shared row actions for List and Table inventory presentations. Filesystem
+/// existence and reveal behavior stay behind the coordinator's granted-path
+/// checks, and removal remains a generated-script request only.
+struct PackageContextMenu: View {
+    @Environment(AppCoordinator.self) private var coordinator
+
+    let package: Package
+    var onRemove: (() -> Void)? = nil
+
+    var body: some View {
+        Button("Copy Name", systemImage: "doc.on.doc") {
+            copy(package.name)
+        }
+        if let installPath = package.installPath {
+            Button("Copy Install Path", systemImage: "doc.on.doc.fill") {
+                copy(installPath.path)
             }
-            if let path = package.installPath?.path {
-                Button("Copy Install Path", systemImage: "doc.on.doc.fill") {
-                    copy(path)
-                }
-                let installPath = URL(fileURLWithPath: path)
-                let exists = coordinator.packageInstallPathExists(at: installPath)
-                Button("Reveal in Finder", systemImage: "folder") {
-                    coordinator.revealPackageInstallPath(at: installPath)
-                }
-                .disabled(!exists)
+            let exists = coordinator.packageInstallPathExists(at: installPath)
+            Button("Reveal in Finder", systemImage: "folder") {
+                coordinator.revealPackageInstallPath(at: installPath)
             }
-            if let onRemove {
-                Divider()
-                Button("Create Removal Script\u{2026}", systemImage: "doc.text") {
-                    onRemove()
-                }
+            .disabled(!exists)
+        }
+        if let onRemove {
+            Divider()
+            Button("Create Removal Script\u{2026}", systemImage: "doc.text") {
+                onRemove()
             }
         }
     }
@@ -273,20 +317,6 @@ private struct PackageRowView: View {
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-    }
-
-    private func installDateText(_ date: Date) -> String {
-        let days = Calendar.current.dateComponents([.day], from: date, to: .now).day ?? 0
-        if days < 14 {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.unitsStyle = .abbreviated
-            return formatter.localizedString(for: date, relativeTo: .now)
-        } else {
-            let formatter = DateFormatter()
-            formatter.dateStyle = .medium
-            formatter.timeStyle = .none
-            return formatter.string(from: date)
-        }
     }
 }
 

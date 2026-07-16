@@ -674,6 +674,133 @@ struct AppCoordinatorPersistenceTests {
         }
     }
 
+    @Test("APP-F3: coordinator round-trips independent List and Table presentation preferences")
+    func inventoryPresentationPreferencesRoundTrip() throws {
+        let defaults = UserDefaults.standard
+        let keys = [
+            "app.installory.ui.sortOrder",
+            "app.installory.ui.inventoryViewMode",
+            "app.installory.ui.tableSortOrder",
+        ]
+        var previous: [String: Any] = [:]
+        for key in keys {
+            previous[key] = defaults.object(forKey: key)
+        }
+        for key in keys { defaults.removeObject(forKey: key) }
+        defer {
+            for key in keys {
+                if let value = previous[key] {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = AppCoordinator(dataDirectoryOverride: directory)
+        first.sortOrder = .oldestFirst
+        first.inventoryViewMode = .table
+        first.tableSortOrder = [
+            PackageTableSortDescriptor(column: .size, direction: .descending),
+            PackageTableSortDescriptor(column: .name, direction: .ascending),
+        ]
+        first.persistUIPreferences()
+
+        let restored = AppCoordinator(dataDirectoryOverride: directory)
+        #expect(restored.sortOrder == .oldestFirst)
+        #expect(restored.inventoryViewMode == .table)
+        #expect(restored.tableSortOrder == first.tableSortOrder)
+    }
+
+    @Test("APP-F3: corrupt Table preferences restore safely without changing List sort")
+    func corruptInventoryPresentationPreferencesRestoreSafely() throws {
+        let defaults = UserDefaults.standard
+        let sortKey = "app.installory.ui.sortOrder"
+        let modeKey = "app.installory.ui.inventoryViewMode"
+        let tableKey = "app.installory.ui.tableSortOrder"
+        let keys = [sortKey, modeKey, tableKey]
+        var previous: [String: Any] = [:]
+        for key in keys {
+            previous[key] = defaults.object(forKey: key)
+        }
+        defer {
+            for key in keys {
+                if let value = previous[key] {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+
+        defaults.set(PackageSortOrder.managerThenName.rawValue, forKey: sortKey)
+        defaults.set("future-mode", forKey: modeKey)
+        defaults.set(Data("not valid descriptor JSON".utf8), forKey: tableKey)
+
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = AppCoordinator(dataDirectoryOverride: directory)
+
+        #expect(coordinator.sortOrder == .managerThenName)
+        #expect(coordinator.inventoryViewMode == .list)
+        #expect(coordinator.tableSortOrder == PackageTableSortDescriptor.defaultOrder)
+    }
+
+    @Test("APP-F3: view-mode commands only affect ordinary inventory sections")
+    func inventoryViewModeScopeIsTruthful() throws {
+        let defaults = UserDefaults.standard
+        let keys = [
+            "app.installory.ui.sortOrder",
+            "app.installory.ui.inventoryViewMode",
+            "app.installory.ui.tableSortOrder",
+            "app.installory.ui.sidebarSelection",
+        ]
+        var previous: [String: Any] = [:]
+        for key in keys {
+            previous[key] = defaults.object(forKey: key)
+        }
+        defer {
+            for key in keys {
+                if let value = previous[key] {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = AppCoordinator(dataDirectoryOverride: directory)
+
+        for selection in [
+            SidebarSelection.all,
+            .manager(.pip),
+            .readOnly,
+        ] {
+            coordinator.sidebarSelection = selection
+            #expect(coordinator.supportsInventoryViewMode)
+            coordinator.showInventory(as: .table)
+            #expect(coordinator.inventoryViewMode == .table)
+            coordinator.showInventory(as: .list)
+            #expect(coordinator.inventoryViewMode == .list)
+        }
+
+        for selection in [
+            SidebarSelection.duplicates,
+            .orphans,
+            .aiInstalled,
+            .snapshot(UUID()),
+        ] {
+            coordinator.sidebarSelection = selection
+            #expect(!coordinator.supportsInventoryViewMode)
+            coordinator.showInventory(as: .table)
+            #expect(coordinator.inventoryViewMode == .list)
+        }
+    }
+
     @Test("PERF25-009: repeated derived reads reuse one inventory generation")
     func repeatedDerivedReadsUseCache() throws {
         let directory = try temporaryDirectory()
