@@ -31,6 +31,7 @@ struct CanonicalDirectory: Identifiable, Sendable {
         dirs.append(.init(path: "\(home)/.nvm", managers: [.npm]))
         dirs.append(.init(path: "\(home)/.volta", managers: [.npm]))
         dirs.append(.init(path: "\(home)/.local/share/pipx", managers: [.pipx]))
+        dirs.append(.init(path: "\(home)/.local/share/uv", managers: [.uv, .pip]))
         dirs.append(.init(path: "\(home)/.cargo", managers: [.cargo]))
         dirs.append(.init(path: "\(home)/.rbenv", managers: [.gem]))
         dirs.append(.init(path: "\(home)/.gem", managers: [.gem]))

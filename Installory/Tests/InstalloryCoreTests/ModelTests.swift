@@ -149,6 +149,20 @@ struct PackageTests {
     }
 }
 
+@Suite("DemoData")
+struct DemoDataTests {
+    @Test("UV-F1: demo inventory represents every supported manager including uv tools")
+    func demoInventoryIncludesUvTools() throws {
+        let packages = DemoData.packages()
+        #expect(Set(packages.map(\.manager)) == Set(PackageManager.allCases))
+
+        let uvPackage = try #require(packages.first { $0.manager == .uv })
+        #expect(uvPackage.qualifier == "/Users/demo/.local/share/uv/tools/ruff")
+        #expect(uvPackage.installPath?.path == uvPackage.qualifier)
+        #expect(uvPackage.artifactPaths == ["/Users/demo/.local/bin/ruff"])
+    }
+}
+
 // MARK: - ProvenanceEvidence
 
 @Suite("ProvenanceEvidence")

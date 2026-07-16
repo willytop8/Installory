@@ -298,7 +298,7 @@ public struct ProvenanceCollector: Sendable {
         switch manager {
         case .brew, .brewCask:
             return "INSTALL_RECEIPT.json"
-        case .pip:
+        case .pip, .uv:
             return "dist-info mtime"
         case .npm:
             return "package.json mtime"

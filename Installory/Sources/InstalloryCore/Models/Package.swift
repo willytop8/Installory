@@ -14,6 +14,7 @@ import GRDB
 /// - `brewCask::visual-studio-code`
 /// - `pip:/Users/x/.pyenv/versions/3.11.7/bin/python:requests`
 /// - `pipx:/Users/x/.local/share/pipx/venvs/black:black`
+/// - `uv:/Users/x/.local/share/uv/tools/ruff:ruff`
 /// - `cargo::ripgrep`
 /// - `gem:/Users/x/.rbenv/versions/3.2.2/lib/ruby/gems/3.2.0/specifications:bundler:2.5.6`
 /// - `mas::com.apple.dt.Xcode`
@@ -38,7 +39,7 @@ public struct Package: Identifiable, Codable, Equatable, Hashable, Sendable {
     public let isReadOnly: Bool
     /// Names of direct dependencies within the same manager.
     public let dependencies: [String]
-    /// Paths named by package-manager artifacts. Currently populated for Homebrew casks.
+    /// Paths named by package-manager artifacts, including Homebrew cask files and uv entrypoints.
     public let artifactPaths: [String]?
     /// Timestamp of the most recent scan that observed this package.
     public let lastSeen: Date

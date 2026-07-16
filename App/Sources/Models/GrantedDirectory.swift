@@ -22,6 +22,8 @@ struct GrantedDirectory: Identifiable, Sendable {
             return "npm"
         } else if path.hasPrefix("\(home)/.local/share/pipx") {
             return "pipx"
+        } else if path.hasPrefix("\(home)/.local/share/uv") {
+            return "uv tools, pip"
         } else if path.hasPrefix("\(home)/.cargo") {
             return "Cargo"
         } else if path.hasPrefix("\(home)/.rbenv") || path.hasPrefix("\(home)/.gem") {

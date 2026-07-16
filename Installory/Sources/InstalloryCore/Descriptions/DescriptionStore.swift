@@ -51,6 +51,8 @@ public struct DescriptionStore: Sendable {
         switch manager {
         case .pip, .pipx:
             normalizedName = pep503(name)
+        case .uv:
+            return "pip:\(pep503(name))"
         case .npm:
             normalizedName = name.lowercased()
         default:

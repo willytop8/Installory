@@ -28,7 +28,8 @@ extension Package {
     /// True when Installory can generate a shell removal command for this row.
     /// The app uses the same predicate for Cleanup Mode selection controls.
     public var isRemovalScriptEligible: Bool {
-        !isReadOnly && manager != .mas
+        guard !isReadOnly, manager != .mas else { return false }
+        return manager != .uv || UvToolEnvironmentIdentity.target(from: qualifier) != nil
     }
 }
 
@@ -131,7 +132,7 @@ public struct ScriptGenerator: Sendable {
 
     // Canonical output order. Managers not in this list are appended alphabetically.
     private static let managerOrder: [PackageManager] = [
-        .brew, .brewCask, .pip, .npm, .pipx, .cargo, .gem, .mas,
+        .brew, .brewCask, .pip, .npm, .pipx, .uv, .cargo, .gem, .mas,
     ]
 
     private func appendManagerSections(packages: [Package], to out: inout [String]) {
@@ -167,10 +168,10 @@ public struct ScriptGenerator: Sendable {
                 appendCommandLines(sorted: sorted.sorted, cyclePackages: sorted.cyclePackages, to: &out)
             }
         } else {
-            // pipx can contain multiple environments for the same distribution
-            // when `--suffix` is used. Name-keyed dependency sorting would collapse
-            // those rows, and pipx venv dependencies are not separate inventory rows.
-            let sorted = manager == .pipx
+            // pipx and uv can contain distinct managed environments whose internal
+            // dependencies are not separate inventory rows. Name-keyed dependency
+            // sorting would collapse those records, so keep path-qualified order.
+            let sorted = manager == .pipx || manager == .uv
                 ? SortResult(
                     sorted: packages.sorted(by: pipxPackageOrder),
                     cyclePackages: []
@@ -205,6 +206,10 @@ public struct ScriptGenerator: Sendable {
         }
 
         let cmd = renderCommand(for: pkg)
+        if cmd.hasPrefix("#") {
+            out.append(cmd)
+            return
+        }
         out.append(shellEchoLine(for: cmd))
         out.append(cmd)
 
@@ -261,6 +266,16 @@ public struct ScriptGenerator: Sendable {
             let environment = PipxEnvironmentIdentity.environmentName(from: pkg.qualifier)
                 ?? pkg.name
             return "pipx uninstall \(shellArgument(environment))"
+        case .uv:
+            guard let target = UvToolEnvironmentIdentity.target(from: pkg.qualifier) else {
+                let recordedEnvironment = pkg.qualifier.map(shellCommentText)
+                    ?? "no recorded environment path"
+                return "# Manual review required: cannot safely target uv tool "
+                    + "\(shellCommentText(pkg.name)) from \(recordedEnvironment); "
+                    + "no uninstall command generated."
+            }
+            return "UV_TOOL_DIR=\(shellArgument(target.toolsRoot)) uv tool uninstall "
+                + shellArgument(target.environmentName)
         case .cargo:
             return "cargo uninstall \(name)"
         case .gem:
@@ -283,6 +298,7 @@ public struct ScriptGenerator: Sendable {
         case .pip:     return "# === pip ==="
         case .npm:     return "# === npm (global) ==="
         case .pipx:    return "# === pipx ==="
+        case .uv:      return "# === uv tools ==="
         case .cargo:   return "# === Cargo (Rust) ==="
         case .gem:     return "# === Ruby Gems ==="
         case .mas:     return "# === Mac App Store ==="

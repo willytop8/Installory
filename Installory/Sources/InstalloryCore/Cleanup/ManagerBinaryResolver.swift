@@ -7,7 +7,7 @@ extension PackageManager {
     var groupsByQualifier: Bool {
         switch self {
         case .pip, .npm, .gem: return true
-        case .brew, .brewCask, .pipx, .cargo, .mas: return false
+        case .brew, .brewCask, .pipx, .uv, .cargo, .mas: return false
         }
     }
 }

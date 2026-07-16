@@ -281,7 +281,9 @@ public struct PythonInterpreterDiscovery: Sendable {
     /// `<id>` directory contains a `bin/python3.<minor>` executable. We accept
     /// either `bin/python3` or `bin/python3.<minor>`.
     private func uvCandidates() -> [Candidate] {
-        let root = homeDirectory.appendingPathComponent(".local/share/uv/python")
+        let root = environment.uvPythonInstallDirectory(
+            fallback: homeDirectory.appendingPathComponent(".local/share/uv/python")
+        )
         return cancellableDirectoryContents(at: root).flatMap { versionRoot -> [Candidate] in
             guard !Task.isCancelled else { return [] }
             let bin = versionRoot.appendingPathComponent("bin")

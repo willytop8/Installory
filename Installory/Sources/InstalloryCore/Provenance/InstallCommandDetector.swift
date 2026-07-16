@@ -69,11 +69,16 @@ public struct InstallCommandDetector: Sendable {
             argStartIndex = 4
             qualifierHint = pythonQualifierHint(for: executable)
         case "uv":
-            guard tokens.count >= 3, tokens[1] == "pip", tokens[2] == "install" else {
+            guard tokens.count >= 3 else { return [] }
+            if tokens[1] == "pip", tokens[2] == "install" {
+                manager = .pip
+                argStartIndex = 3
+            } else if tokens[1] == "tool", tokens[2] == "install" {
+                manager = .uv
+                argStartIndex = 3
+            } else {
                 return []
             }
-            manager = .pip
-            argStartIndex = 3
         case "pipx":
             guard tokens.count >= 2, tokens[1] == "install" else { return [] }
             manager = .pipx
@@ -192,6 +197,10 @@ public struct InstallCommandDetector: Sendable {
                 manager: manager,
                 qualifierHint: qualifierHint
             ))
+            // A persistent uv tool environment has exactly one primary target.
+            // Receipt options may name additional dependencies, but those are
+            // not independently-managed tool rows.
+            if manager == .uv { break }
         }
 
         return results
@@ -211,6 +220,14 @@ public struct InstallCommandDetector: Sendable {
             ].contains(option)
         case .pipx:
             return ["--index-url", "--pip-args", "--python", "--suffix"].contains(option)
+        case .uv:
+            return [
+                "-c", "-e", "-w", "--build-constraint", "--config-file", "--constraint",
+                "--default-index", "--editable", "--extra-index-url", "--find-links",
+                "--index", "--index-url", "--keyring-provider", "--override", "--python",
+                "--python-preference", "--resolution", "--with", "--with-editable",
+                "--with-executables-from", "--with-requirements",
+            ].contains(option)
         case .npm:
             return ["-w", "--prefix", "--registry", "--tag", "--workspace"].contains(option)
         case .cargo:
@@ -244,6 +261,8 @@ public struct InstallCommandDetector: Sendable {
             if let versionSeparator = name[versionSearchStart...].firstIndex(of: "@") {
                 name = String(name[..<versionSeparator])
             }
+        } else if manager == .uv, let versionSeparator = name.firstIndex(of: "@") {
+            name = String(name[..<versionSeparator])
         }
         if let idx = name.firstIndex(of: "[") {
             name = String(name[..<idx])

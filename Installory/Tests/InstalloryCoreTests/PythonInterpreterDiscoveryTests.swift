@@ -249,4 +249,46 @@ struct PythonInterpreterDiscoveryTests {
         #expect(pyenvInterpreters.map(\.executable) == [customPython])
         #expect(pyenvInterpreters.first?.version == .init(major: 3, minor: 12, patch: 4))
     }
+
+    @Test("UV-F1: relocated managed Python is discovered without treating tool environments as runtimes")
+    func relocatedUvPythonExcludesToolEnvironments() throws {
+        let home = URL(fileURLWithPath: "/Users/tester")
+        let pythonRoot = URL(fileURLWithPath: "/Volumes/Dev/uv-python")
+        let runtime = pythonRoot.appendingPathComponent("cpython-3.13.5-macos-aarch64-none")
+        let runtimeExecutable = runtime.appendingPathComponent("bin/python3.13")
+        let runtimeSitePackages = runtime.appendingPathComponent("lib/python3.13/site-packages")
+        let toolRoot = URL(fileURLWithPath: "/Volumes/Dev/uv-tools")
+        let toolExecutable = toolRoot.appendingPathComponent("ruff/bin/python")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: runtimeExecutable, data: Data())
+            builder.addFile(
+                at: runtimeSitePackages.appendingPathComponent("example.py"),
+                data: Data()
+            )
+            builder.addFile(at: toolExecutable, data: Data())
+            builder.addFile(
+                at: toolRoot.appendingPathComponent("ruff/lib/python3.13/site-packages/ruff.py"),
+                data: Data()
+            )
+        }
+        let discovery = PythonInterpreterDiscovery(
+            directoryAccess: provider,
+            homeDirectory: home,
+            environment: PackageManagerEnvironment(values: [
+                "UV_PYTHON_INSTALL_DIR": pythonRoot.path,
+                "UV_TOOL_DIR": toolRoot.path,
+            ])
+        )
+
+        let uvInterpreters = discovery.discover().filter { $0.kind == .uv }
+        let interpreter = try #require(uvInterpreters.only)
+        #expect(interpreter.executable == runtimeExecutable)
+        #expect(interpreter.version == .init(major: 3, minor: 13, patch: 5))
+        #expect(interpreter.sitePackages == [runtimeSitePackages])
+        #expect(!uvInterpreters.contains { $0.executable == toolExecutable })
+    }
+}
+
+private extension Collection {
+    var only: Element? { count == 1 ? first : nil }
 }

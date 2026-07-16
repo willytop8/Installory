@@ -8,7 +8,7 @@ import Foundation
 /// filesystem, the database, or the network. The data is deliberately shaped to
 /// exercise every UI surface:
 ///
-/// - packages across all eight supported managers
+/// - packages across all nine supported managers
 /// - explicit installs and pulled-in dependencies
 /// - a read-only system package (Read-only sidebar filter)
 /// - cross-manager duplicates (Duplicates view)
@@ -53,7 +53,8 @@ public enum DemoData {
             size: Int64? = nil,
             explicit: Bool = true,
             readOnly: Bool = false,
-            deps: [String] = []
+            deps: [String] = [],
+            artifacts: [String]? = nil
         ) {
             result.append(
                 Package(
@@ -69,7 +70,7 @@ public enum DemoData {
                     isExplicit: explicit,
                     isReadOnly: readOnly,
                     dependencies: deps,
-                    artifactPaths: nil,
+                    artifactPaths: artifacts,
                     lastSeen: now
                 )
             )
@@ -123,6 +124,12 @@ public enum DemoData {
             installedDaysAgo: 75, size: 22_000_000)
         pkg(.pipx, "httpie", version: "3.2.2", path: "/Users/demo/.local/pipx/venvs/httpie",
             installedDaysAgo: 4, size: 6_500_000)
+
+        // MARK: uv persistent tools
+        let uvRuffEnvironment = "/Users/demo/.local/share/uv/tools/ruff"
+        pkg(.uv, "ruff", version: "0.6.9", qualifier: uvRuffEnvironment,
+            path: uvRuffEnvironment, installedDaysAgo: 7, size: 31_000_000,
+            deps: ["click"], artifacts: ["/Users/demo/.local/bin/ruff"])
 
         // MARK: npm (global)
         pkg(.npm, "typescript", version: "5.4.5", path: "/opt/homebrew/lib/node_modules/typescript",

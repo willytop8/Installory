@@ -92,7 +92,7 @@ private struct DependencyKey: Hashable {
 enum PackageIdentity {
     static func normalizedName(_ name: String, manager: PackageManager) -> String {
         switch manager {
-        case .pip, .pipx:
+        case .pip, .pipx, .uv:
             return pep503Normalized(name)
         default:
             return name.lowercased()

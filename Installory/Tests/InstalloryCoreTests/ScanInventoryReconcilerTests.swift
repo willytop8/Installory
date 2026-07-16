@@ -97,4 +97,21 @@ struct ScanInventoryReconcilerTests {
     func brewScannerOwnsBothPartitions() {
         #expect(BrewScanner().managedPackageManagers == [.brew, .brewCask])
     }
+
+    @Test("UV-F1: malformed uv scans preserve the last-known uv partition")
+    func malformedUvScanPreservesLastKnownPartition() {
+        let uv = package("ruff", manager: .uv)
+        let brew = package("git", manager: .brew)
+
+        let reconciled = ScanInventoryReconciler.reconcile(
+            existing: [uv, brew],
+            scanned: [],
+            managedManagers: UvToolScanner(
+                toolDirectory: URL(fileURLWithPath: "/uv/tools")
+            ).managedPackageManagers,
+            status: .failed(reason: "invalid uv-receipt.toml", durationMs: 1)
+        )
+
+        #expect(reconciled == [uv, brew])
+    }
 }

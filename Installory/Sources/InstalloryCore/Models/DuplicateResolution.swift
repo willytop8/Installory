@@ -115,6 +115,26 @@ func executableDirectory(for package: Package) -> String? {
             .deletingLastPathComponent() // local-dir (e.g. ~/.local)
         return localDir.appendingPathComponent("bin").path
 
+    case .uv:
+        guard let artifacts = package.artifactPaths, !artifacts.isEmpty else { return nil }
+        let unsafeScalars = CharacterSet.controlCharacters.union(.newlines)
+        let parents = artifacts.compactMap { path -> String? in
+            guard path.hasPrefix("/"),
+                  !path.unicodeScalars.contains(where: unsafeScalars.contains) else {
+                return nil
+            }
+            return URL(fileURLWithPath: path)
+                .standardizedFileURL
+                .deletingLastPathComponent()
+                .path
+        }
+        guard parents.count == artifacts.count,
+              let first = parents.first,
+              parents.allSatisfy({ $0 == first }) else {
+            return nil
+        }
+        return first
+
     case .gem:
         // Expected layout:
         //   {ruby-root}/lib/ruby/gems/{gemspec-ver}/gems/{gem-name}-{version}
@@ -245,7 +265,7 @@ func looksLikeCommandLineTool(_ package: Package) -> Bool {
 
     // Manager-level fallback (conservative: treat unknown as CLI-capable).
     switch package.manager {
-    case .brew, .cargo, .npm, .pipx, .gem:
+    case .brew, .cargo, .npm, .pipx, .uv, .gem:
         return true
     case .pip:
         return false  // primarily libraries

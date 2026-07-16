@@ -28,6 +28,7 @@ public struct GeneratedReinstallScript: Sendable {
 ///
 /// Version fidelity per manager:
 /// - pip / npm / pipx / gem: pins the exact recorded version.
+/// - uv: emits manual-review guidance because snapshots do not retain full receipts.
 /// - cargo: preserves the recorded registry, git revision, or local path; registry
 ///   installs also pin the recorded version.
 /// - brew / brewCask: cannot pin; installs the current version. An inline comment
@@ -57,7 +58,7 @@ public struct ReinstallScriptGenerator: Sendable {
     // MARK: - Manager sections
 
     private static let managerOrder: [PackageManager] = [
-        .brew, .brewCask, .pip, .npm, .pipx, .cargo, .gem, .mas,
+        .brew, .brewCask, .pip, .npm, .pipx, .uv, .cargo, .gem, .mas,
     ]
 
     private func appendManagerSections(missing: [MissingPackage], to out: inout [String]) {
@@ -90,7 +91,7 @@ public struct ReinstallScriptGenerator: Sendable {
         } else {
             out.append("")
             out.append(sectionHeader(for: manager))
-            let orderedPackages = manager == .pipx
+            let orderedPackages = manager == .pipx || manager == .uv
                 ? packages.sorted(by: pipxPackageOrder)
                 : packages
             for mp in orderedPackages { appendInstallLine(for: mp, to: &out) }
@@ -164,6 +165,16 @@ public struct ReinstallScriptGenerator: Sendable {
                 )
             }
 
+        case .uv:
+            let recordedEnvironment = mp.package.qualifier
+                .map(shellCommentText) ?? "no recorded environment path"
+            out.append(
+                "# Manual review required: uv tool \(shellCommentText(mp.package.name)) "
+                    + "\(shellCommentText(mp.package.version)) was recorded at "
+                    + "\(recordedEnvironment), but its full install receipt is not in the snapshot; "
+                    + "no install command generated."
+            )
+
         case .cargo:
             guard let source = CargoRestoreSource(recordedSource: mp.package.qualifier) else {
                 let recordedSource = mp.package.qualifier
@@ -202,6 +213,7 @@ public struct ReinstallScriptGenerator: Sendable {
         case .pip:      return "# === pip ==="
         case .npm:      return "# === npm (global) ==="
         case .pipx:     return "# === pipx ==="
+        case .uv:       return "# === uv tools ==="
         case .cargo:    return "# === Cargo (Rust) ==="
         case .gem:      return "# === Ruby Gems ==="
         case .mas:      return "# === Mac App Store ==="

@@ -1,0 +1,6 @@
+[tool]
+requirements = [{ name = "httpie" }]
+entrypoints = [
+  { name = "http", install-path = "/Volumes/Developer Tools/bin/http", from = "httpie" },
+  { name = "https", install-path = "/Volumes/Developer Tools/bin/https", from = "httpie" },
+]

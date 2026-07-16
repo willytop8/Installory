@@ -1199,13 +1199,21 @@ final class AppCoordinator {
             for url in accessedURLs { folderAccess.stopAccessing(url) }
         }
 
+        let managerEnvironment = PackageManagerEnvironment.current
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
         let pythonDiscovery = PythonInterpreterDiscovery(
+            homeDirectory: homeDirectory,
+            environment: managerEnvironment,
             projectVenvRoots: accessedURLs
         )
         let scanners: [any PackageScanner] = [
             BrewScanner(),
             PipScanner(discovery: pythonDiscovery),
             PipxScanner(),
+            UvToolScanner(
+                homeDirectory: homeDirectory,
+                environment: managerEnvironment
+            ),
             NpmScanner(),
             CargoScanner(),
             GemScanner(),
@@ -1370,10 +1378,22 @@ final class AppCoordinator {
     }
 
     private func scanner(for manager: PackageManager, grantedURLs: [URL]) -> (any PackageScanner)? {
+        let environment = PackageManagerEnvironment.current
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
         switch manager {
         case .brew, .brewCask: return BrewScanner()
-        case .pip:             return PipScanner(discovery: PythonInterpreterDiscovery(projectVenvRoots: grantedURLs))
+        case .pip:
+            return PipScanner(discovery: PythonInterpreterDiscovery(
+                homeDirectory: homeDirectory,
+                environment: environment,
+                projectVenvRoots: grantedURLs
+            ))
         case .pipx:            return PipxScanner()
+        case .uv:
+            return UvToolScanner(
+                homeDirectory: homeDirectory,
+                environment: environment
+            )
         case .npm:             return NpmScanner()
         case .cargo:           return CargoScanner()
         case .gem:             return GemScanner()

@@ -22,7 +22,7 @@ public actor ScanCoordinator {
     // longer than the other scanners' filesystem walks.
     private static let defaultTimeouts: [PackageManager: TimeInterval] = [
         .brew: 5, .brewCask: 5, .pip: 8, .npm: 30,
-        .pipx: 5, .cargo: 5, .gem: 5, .mas: 5,
+        .pipx: 5, .uv: 8, .cargo: 5, .gem: 5, .mas: 5,
     ]
 
     public init(

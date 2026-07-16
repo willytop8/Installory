@@ -1,3 +1,5 @@
+import Foundation
+import InstalloryCore
 import Testing
 @testable import Installory
 
@@ -17,5 +19,25 @@ struct CanonicalDirectoryTests {
 
         #expect(paths.filter { $0 == "/usr/local" }.count == 1)
         #expect(!paths.contains("/opt/homebrew"))
+    }
+
+    @Test("UV-F1: canonical uv grant unlocks persistent tools and managed Python")
+    func uvGrantCoversToolsAndManagedPython() throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let directory = try #require(
+            CanonicalDirectory.all(isAppleSilicon: true).first {
+                $0.path == "\(home)/.local/share/uv"
+            }
+        )
+
+        #expect(directory.managers == [.uv, .pip])
+        #expect(GrantedDirectory(path: directory.path, bookmark: Data()).managersUnlocked == "uv tools, pip")
+    }
+
+    @Test("UV-F1: uv manager has concise accessible display metadata")
+    func uvDisplayMetadata() {
+        #expect(PackageManager.uv.displayName == "uv tools")
+        #expect(PackageManager.uv.badgeLabel == "uv")
+        #expect(PackageManager.uv.sidebarSymbol == "terminal")
     }
 }
