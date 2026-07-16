@@ -4,31 +4,11 @@ import Testing
 
 @Suite("DistInfoParser")
 struct DistInfoParserTests {
-    private static let fixtureDir = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/python")
-
     private func buildProvider() throws -> InMemoryDirectoryAccessProvider {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: Self.fixtureDir,
-            includingPropertiesForKeys: [.isRegularFileKey]
-        ) else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-
-        return InMemoryDirectoryAccessProvider.make { builder in
-            while let fileURL = enumerator.nextObject() as? URL {
-                let isFile = (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) ?? false
-                guard isFile else { continue }
-
-                let relativePath = String(fileURL.path.dropFirst(Self.fixtureDir.path.count))
-                let fakeURL = URL(fileURLWithPath: relativePath)
-                if let data = try? Data(contentsOf: fileURL) {
-                    builder.addFile(at: fakeURL, data: data)
-                }
-            }
-        }
+        try FixtureResource.provider(
+            directory: "python",
+            mappedTo: URL(fileURLWithPath: "/")
+        )
     }
 
     private func parser() throws -> DistInfoParser {
@@ -46,6 +26,30 @@ struct DistInfoParserTests {
         #expect(distInfo.author == "Example Maintainers")
         #expect(distInfo.license == "Apache-2.0")
         #expect(distInfo.installer == "pip")
+        #expect(distInfo.requestedMarkerPresent == true)
+    }
+
+    @Test("empty REQUESTED marker is recognized by presence")
+    func emptyRequestedMarkerIsPresent() throws {
+        let directory = URL(fileURLWithPath: "/requested.dist-info")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: directory.appendingPathComponent("METADATA"),
+                data: Data("Metadata-Version: 2.1\nName: requested\nVersion: 1.0.0\n".utf8)
+            )
+            builder.addFile(at: directory.appendingPathComponent("REQUESTED"), data: Data())
+        }
+
+        let distInfo = try DistInfoParser(directoryAccess: provider).parse(directory: directory)
+
+        #expect(distInfo.requestedMarkerPresent == true)
+    }
+
+    @Test("missing REQUESTED marker is reported as absent")
+    func missingRequestedMarkerIsAbsent() throws {
+        let distInfo = try parser().parse(directory: urllib3DistInfo)
+
+        #expect(distInfo.requestedMarkerPresent == false)
     }
 
     @Test("METADATA missing optional fields returns nil")
@@ -160,6 +164,28 @@ struct DistInfoParserTests {
         } catch {
             Issue.record("Expected DistInfoParser.Error, got \(error)")
         }
+    }
+
+    @Test("PERF25-011: oversized METADATA is rejected before its contents are loaded")
+    func oversizedMetadataIsRejectedBeforeLoading() throws {
+        let directory = URL(fileURLWithPath: "/oversized.dist-info")
+        let metadataURL = directory.appendingPathComponent("METADATA")
+        let base = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: metadataURL,
+                data: Data("Name: oversized\nVersion: 1.0\n".utf8),
+                logicalSizeBytes: 4 * 1_024 * 1_024 + 1
+            )
+        }
+        let trace = DirectoryAccessTrace()
+        let parser = DistInfoParser(
+            directoryAccess: TracingDirectoryAccessProvider(base: base, trace: trace)
+        )
+
+        #expect(throws: DistInfoParser.Error.metadataExceedsLimits(metadataURL)) {
+            try parser.parseMetadataOnly(directory: directory)
+        }
+        #expect(!trace.entries.contains { $0.operation == .data })
     }
 
     private var requestsDistInfo: URL {

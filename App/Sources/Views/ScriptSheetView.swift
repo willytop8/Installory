@@ -3,6 +3,14 @@ import InstalloryCore
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum ScriptFileWriter {
+    static func write(_ script: String, to url: URL) async throws {
+        try await Task.detached(priority: .utility) {
+            try script.write(to: url, atomically: true, encoding: .utf8)
+        }.value
+    }
+}
+
 /// A generic sheet that displays a generated shell script with Copy, Save, and Done actions.
 ///
 /// Used by both the cleanup flow (uninstall) and the restore flow (reinstall).
@@ -15,6 +23,7 @@ struct ScriptSheetView<Warning: View>: View {
     @ViewBuilder let warningContent: () -> Warning
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
+    @State private var saveError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -28,6 +37,19 @@ struct ScriptSheetView<Warning: View>: View {
         }
         .padding(24)
         .frame(minWidth: 640, minHeight: 480)
+        .alert(
+            "Couldn't Save Script",
+            isPresented: Binding(
+                get: { saveError != nil },
+                set: { if !$0 { saveError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { saveError = nil }
+        } message: {
+            if let saveError {
+                Text(saveError)
+            }
+        }
     }
 
     private var scriptSection: some View {
@@ -74,7 +96,7 @@ struct ScriptSheetView<Warning: View>: View {
             .help("Copy the whole script (\u{21E7}\u{2318}C)")
 
             Button {
-                saveScript()
+                Task { await saveScript() }
             } label: {
                 Label("Save as .sh\u{2026}", systemImage: "square.and.arrow.down")
             }
@@ -89,7 +111,7 @@ struct ScriptSheetView<Warning: View>: View {
         }
     }
 
-    private func saveScript() {
+    private func saveScript() async {
         let panel = NSSavePanel()
         panel.title = "Save Script"
         panel.nameFieldStringValue = filename
@@ -97,8 +119,14 @@ struct ScriptSheetView<Warning: View>: View {
             panel.allowedContentTypes = [shellType]
         }
         panel.canCreateDirectories = true
-        if panel.runModal() == .OK, let url = panel.url {
-            try? scriptText.write(to: url, atomically: true, encoding: .utf8)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // NSSavePanel implicitly starts security-scoped access for its URL.
+        defer { url.stopAccessingSecurityScopedResource() }
+        do {
+            try await ScriptFileWriter.write(scriptText, to: url)
+            saveError = nil
+        } catch {
+            saveError = "The script wasn't written to \(url.lastPathComponent). \(error.localizedDescription)"
         }
     }
 }

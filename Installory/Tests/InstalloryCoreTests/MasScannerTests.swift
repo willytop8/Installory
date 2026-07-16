@@ -6,39 +6,30 @@ import Testing
 struct MasScannerTests {
     private let home = URL(fileURLWithPath: "/Users/tester")
 
-    @Test("reads Mac App Store apps from receipt-bearing app bundles")
+    @Test("TEST25-009: reads a bundled Info.plist and MAS receipt layout")
     func readsReceiptBearingApps() async throws {
-        let xcode = URL(fileURLWithPath: "/Applications/Xcode.app")
-        let receipt = xcode.appendingPathComponent("Contents/_MASReceipt/receipt")
+        let applications = URL(fileURLWithPath: "/Applications")
+        let fixtureApp = applications.appendingPathComponent("Fixture Reader.app")
         let receiptDate = Date(timeIntervalSince1970: 1_717_000_000)
-        let info = try infoPlistData([
-            "CFBundleIdentifier": "com.apple.dt.Xcode",
-            "CFBundleName": "Xcode",
-            "CFBundleShortVersionString": "16.4",
-            "CFBundleVersion": "16F6",
-        ])
-
-        let provider = InMemoryDirectoryAccessProvider.make { builder in
-            builder.addFile(at: receipt, data: Data("receipt".utf8), modificationDate: receiptDate)
-            builder.addFile(at: xcode.appendingPathComponent("Contents/Info.plist"), data: info)
-            builder.addFile(
-                at: URL(fileURLWithPath: "/Applications/NotFromStore.app/Contents/Info.plist"),
-                data: try! infoPlistData(["CFBundleName": "NotFromStore"])
-            )
-        }
+        let provider = try FixtureResource.provider(
+            directory: "mas",
+            mappedTo: applications,
+            modificationDate: receiptDate
+        )
 
         let packages = try await MasScanner(directoryAccess: provider, homeDirectory: home).scan()
 
         #expect(packages.count == 1)
         let app = try #require(packages.first)
-        #expect(app.id == "mas::com.apple.dt.Xcode")
+        #expect(app.id == "mas::app.installory.fixture-reader")
         #expect(app.manager == .mas)
-        #expect(app.name == "Xcode")
-        #expect(app.version == "16.4")
-        #expect(app.installPath == xcode)
+        #expect(app.name == "Fixture Reader")
+        #expect(app.version == "3.2.1")
+        #expect(app.installPath?.path == fixtureApp.path)
         #expect(app.installedAt == receiptDate)
         #expect(app.installedAtConfidence == .low)
-        #expect(app.artifactPaths == [xcode.path])
+        #expect(app.artifactPaths == [fixtureApp.path])
+        #expect((app.sizeBytes ?? 0) > 0)
     }
 
     @Test("falls back to bundle version and app bundle name")
@@ -72,6 +63,115 @@ struct MasScannerTests {
             )
         }
         #expect(await MasScanner(directoryAccess: present, homeDirectory: home).isAvailable() == true)
+    }
+
+    @Test("CORE-05: MAS size includes the entire app bundle")
+    func sizeIncludesEntireAppBundle() async throws {
+        let applications = URL(fileURLWithPath: "/Applications")
+        let app = applications.appendingPathComponent("Sized.app")
+        let info = try infoPlistData([
+            "CFBundleIdentifier": "app.installory.sized",
+            "CFBundleName": "Sized",
+            "CFBundleShortVersionString": "1.0",
+        ])
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: app.appendingPathComponent("Contents/_MASReceipt/receipt"),
+                data: Data(),
+                logicalSizeBytes: 3
+            )
+            builder.addFile(
+                at: app.appendingPathComponent("Contents/Info.plist"),
+                data: info,
+                logicalSizeBytes: 5
+            )
+            builder.addFile(
+                at: app.appendingPathComponent("Contents/Resources/archive.bin"),
+                data: Data(),
+                logicalSizeBytes: 12
+            )
+        }
+
+        let packages = try await MasScanner(
+            directoryAccess: provider,
+            homeDirectory: home,
+            applicationDirectories: [applications]
+        ).scan()
+        let package = try #require(packages.first)
+
+        #expect(package.sizeBytes == 20)
+    }
+
+    @Test("CORE-05: MAS size skips internal symlinks and their targets")
+    func sizeSkipsInternalSymlinksAndTargets() async throws {
+        let applications = URL(fileURLWithPath: "/Applications")
+        let app = applications.appendingPathComponent("Linked.app")
+        let external = URL(fileURLWithPath: "/External/Large.framework")
+        let info = try infoPlistData([
+            "CFBundleIdentifier": "app.installory.linked",
+            "CFBundleName": "Linked",
+            "CFBundleShortVersionString": "1.0",
+        ])
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: app.appendingPathComponent("Contents/_MASReceipt/receipt"),
+                data: Data(),
+                logicalSizeBytes: 2
+            )
+            builder.addFile(
+                at: app.appendingPathComponent("Contents/Info.plist"),
+                data: info,
+                logicalSizeBytes: 3
+            )
+            builder.addFile(
+                at: app.appendingPathComponent("Contents/MacOS/Linked"),
+                data: Data(),
+                logicalSizeBytes: 5
+            )
+            builder.addFile(
+                at: external.appendingPathComponent("payload.bin"),
+                data: Data(),
+                logicalSizeBytes: 90_000
+            )
+            builder.addSymlink(
+                at: app.appendingPathComponent("Contents/Frameworks/Large.framework"),
+                target: external
+            )
+        }
+
+        let packages = try await MasScanner(
+            directoryAccess: provider,
+            homeDirectory: home,
+            applicationDirectories: [applications]
+        ).scan()
+        let package = try #require(packages.first)
+
+        #expect(package.sizeBytes == 10)
+    }
+
+    @Test("CORE-05: MAS scan cancellation propagates")
+    func cancellationPropagates() async {
+        let applications = URL(fileURLWithPath: "/Applications")
+        let app = applications.appendingPathComponent("Cancelled.app")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: app.appendingPathComponent("Contents/_MASReceipt/receipt"),
+                data: Data()
+            )
+        }
+        let scanner = MasScanner(
+            directoryAccess: provider,
+            homeDirectory: home,
+            applicationDirectories: [applications]
+        )
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await scanner.scan()
+        }
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
     }
 
     @Test("explicit empty application directories disable scanning")

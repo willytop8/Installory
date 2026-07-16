@@ -40,6 +40,12 @@ struct SnapshotChoiceSheet: View {
             Divider()
 
             HStack(spacing: 10) {
+                Button("Cancel") {
+                    coordinator.cancelRemoval()
+                }
+                .buttonStyle(.bordered)
+                .keyboardShortcut(.cancelAction)
+
                 Button("Skip Snapshot") {
                     Task {
                         await coordinator.confirmRemoval(
@@ -50,7 +56,6 @@ struct SnapshotChoiceSheet: View {
                     }
                 }
                 .buttonStyle(.bordered)
-                .keyboardShortcut(.escape)
 
                 Spacer()
 

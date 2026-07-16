@@ -27,7 +27,10 @@ public struct GeneratedReinstallScript: Sendable {
 /// a common essential is harmless.
 ///
 /// Version fidelity per manager:
-/// - pip / npm / pipx / cargo / gem: pins the exact recorded version.
+/// - pip / npm / pipx / gem: pins the exact recorded version.
+/// - uv: emits manual-review guidance because snapshots do not retain full receipts.
+/// - cargo: preserves the recorded registry, git revision, or local path; registry
+///   installs also pin the recorded version.
 /// - brew / brewCask: cannot pin; installs the current version. An inline comment
 ///   names the recorded version so the user can assess the difference.
 /// - mas: no CLI reinstall path; emits a comment directing the user to the App Store.
@@ -55,7 +58,7 @@ public struct ReinstallScriptGenerator: Sendable {
     // MARK: - Manager sections
 
     private static let managerOrder: [PackageManager] = [
-        .brew, .brewCask, .pip, .npm, .pipx, .cargo, .gem, .mas,
+        .brew, .brewCask, .pip, .npm, .pipx, .uv, .cargo, .gem, .mas,
     ]
 
     private func appendManagerSections(missing: [MissingPackage], to out: inout [String]) {
@@ -88,16 +91,20 @@ public struct ReinstallScriptGenerator: Sendable {
         } else {
             out.append("")
             out.append(sectionHeader(for: manager))
-            for mp in packages { appendInstallLine(for: mp, to: &out) }
+            let orderedPackages = manager == .pipx || manager == .uv
+                ? packages.sorted(by: pipxPackageOrder)
+                : packages
+            for mp in orderedPackages { appendInstallLine(for: mp, to: &out) }
         }
     }
 
     private func qualifiedSectionHeader(for manager: PackageManager, qualifier: String) -> String {
         guard !qualifier.isEmpty else { return sectionHeader(for: manager) }
+        let commentQualifier = shellCommentText(qualifier)
         switch manager {
-        case .pip: return "# === pip (interpreter: \(qualifier)) ==="
-        case .npm: return "# === npm (global: \(qualifier)) ==="
-        case .gem: return "# === Ruby Gems (\(qualifier)) ==="
+        case .pip: return "# === pip (interpreter: \(commentQualifier)) ==="
+        case .npm: return "# === npm (global: \(commentQualifier)) ==="
+        case .gem: return "# === Ruby Gems (\(commentQualifier)) ==="
         default:   return sectionHeader(for: manager)
         }
     }
@@ -105,17 +112,17 @@ public struct ReinstallScriptGenerator: Sendable {
     private func appendInstallLine(for mp: MissingPackage, to out: inout [String]) {
         switch mp.manager {
         case .mas:
-            out.append("# \(mp.package.name): reinstall from the Mac App Store (no CLI reinstall path)")
+            out.append("# \(shellCommentText(mp.package.name)): reinstall from the Mac App Store (no CLI reinstall path)")
 
         case .brew:
             let cmd = "brew install \(shellArgument(mp.package.name))"
-            out.append("# snapshot recorded \(mp.package.version); Homebrew installs the current version")
+            out.append("# snapshot recorded \(shellCommentText(mp.package.version)); Homebrew installs the current version")
             out.append(shellEchoLine(for: cmd))
             out.append(cmd)
 
         case .brewCask:
             let cmd = "brew install --cask \(shellArgument(mp.package.name))"
-            out.append("# snapshot recorded \(mp.package.version); Homebrew installs the current version")
+            out.append("# snapshot recorded \(shellCommentText(mp.package.version)); Homebrew installs the current version")
             out.append(shellEchoLine(for: cmd))
             out.append(cmd)
 
@@ -135,14 +142,57 @@ public struct ReinstallScriptGenerator: Sendable {
 
         case .pipx:
             let spec = "\(mp.package.name)==\(mp.package.version)"
-            let cmd = "pipx install \(shellArgument(spec))"
-            out.append(shellEchoLine(for: cmd))
-            out.append(cmd)
+            let target = PipxEnvironmentIdentity.reinstallTarget(
+                distributionName: mp.package.name,
+                qualifier: mp.package.qualifier
+            )
+            switch target {
+            case .base:
+                appendCommand("pipx install \(shellArgument(spec))", to: &out)
+            case .suffixed(let suffix):
+                let suffixOption = shellArgument("--suffix=\(suffix)")
+                appendCommand(
+                    "pipx install \(shellArgument(spec)) \(suffixOption)",
+                    to: &out
+                )
+            case .manualReview:
+                let recordedEnvironment = mp.package.qualifier
+                    .map(shellCommentText) ?? "no recorded environment path"
+                out.append(
+                    "# Manual review required: cannot safely derive pipx --suffix for "
+                        + "\(shellCommentText(spec)) from \(recordedEnvironment); "
+                        + "no install command generated."
+                )
+            }
+
+        case .uv:
+            let recordedEnvironment = mp.package.qualifier
+                .map(shellCommentText) ?? "no recorded environment path"
+            out.append(
+                "# Manual review required: uv tool \(shellCommentText(mp.package.name)) "
+                    + "\(shellCommentText(mp.package.version)) was recorded at "
+                    + "\(recordedEnvironment), but its full install receipt is not in the snapshot; "
+                    + "no install command generated."
+            )
 
         case .cargo:
-            let cmd = "cargo install \(shellArgument(mp.package.name)) --version \(shellArgument(mp.package.version))"
-            out.append(shellEchoLine(for: cmd))
-            out.append(cmd)
+            guard let source = CargoRestoreSource(recordedSource: mp.package.qualifier) else {
+                let recordedSource = mp.package.qualifier
+                    .map(shellCommentText) ?? "no recorded source"
+                out.append(
+                    "# Manual review required: cannot faithfully restore Cargo package "
+                        + "\(shellCommentText(mp.package.name)) \(shellCommentText(mp.package.version)) "
+                        + "from \(recordedSource); no install command generated."
+                )
+                return
+            }
+            appendCommand(
+                source.installCommand(
+                    packageName: mp.package.name,
+                    version: mp.package.version
+                ),
+                to: &out
+            )
 
         case .gem:
             let gem = ManagerBinaryResolver.gem(forQualifier: mp.package.qualifier)
@@ -163,15 +213,165 @@ public struct ReinstallScriptGenerator: Sendable {
         case .pip:      return "# === pip ==="
         case .npm:      return "# === npm (global) ==="
         case .pipx:     return "# === pipx ==="
+        case .uv:       return "# === uv tools ==="
         case .cargo:    return "# === Cargo (Rust) ==="
         case .gem:      return "# === Ruby Gems ==="
         case .mas:      return "# === Mac App Store ==="
         }
     }
 
+    private func appendCommand(_ command: String, to out: inout [String]) {
+        out.append(shellEchoLine(for: command))
+        out.append(command)
+    }
+
+    private func pipxPackageOrder(_ lhs: MissingPackage, _ rhs: MissingPackage) -> Bool {
+        let lhsQualifier = lhs.package.qualifier ?? ""
+        let rhsQualifier = rhs.package.qualifier ?? ""
+        if lhsQualifier != rhsQualifier { return lhsQualifier < rhsQualifier }
+        if lhs.package.name != rhs.package.name {
+            return lhs.package.name < rhs.package.name
+        }
+        return lhs.package.version < rhs.package.version
+    }
+
     private func makeISO8601Formatter() -> ISO8601DateFormatter {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
         return f
+    }
+}
+
+private enum CargoRestoreSource {
+    enum GitSelector {
+        case branch(String)
+        case tag(String)
+        case revision(String)
+    }
+
+    case cratesIO
+    case registry(index: String)
+    case git(url: String, selector: GitSelector?)
+    case path(String)
+
+    init?(recordedSource: String?) {
+        guard let recordedSource, Self.isSafe(recordedSource) else { return nil }
+
+        if recordedSource.hasPrefix("registry+") {
+            let index = String(recordedSource.dropFirst("registry+".count))
+            guard Self.isValidURL(index) else { return nil }
+            self = Self.isCratesIOIndex(index) ? .cratesIO : .registry(index: index)
+            return
+        }
+
+        if recordedSource.hasPrefix("git+") {
+            let sourceURL = String(recordedSource.dropFirst("git+".count))
+            guard var components = URLComponents(string: sourceURL),
+                  let scheme = components.scheme, !scheme.isEmpty else {
+                return nil
+            }
+
+            let queryItems = components.queryItems ?? []
+            guard queryItems.count <= 1 else { return nil }
+            let querySelector: GitSelector?
+            if let item = queryItems.first {
+                guard let value = item.value, Self.isSafe(value) else { return nil }
+                switch item.name {
+                case "branch": querySelector = .branch(value)
+                case "tag": querySelector = .tag(value)
+                case "rev": querySelector = .revision(value)
+                default: return nil
+                }
+            } else {
+                querySelector = nil
+            }
+
+            let preciseRevision = components.fragment
+            if let preciseRevision, !Self.isSafe(preciseRevision) { return nil }
+            components.query = nil
+            components.fragment = nil
+            guard let gitURL = components.string, Self.isValidURL(gitURL) else { return nil }
+
+            self = .git(
+                url: gitURL,
+                selector: preciseRevision.map(GitSelector.revision) ?? querySelector
+            )
+            return
+        }
+
+        if recordedSource.hasPrefix("path+") {
+            let sourceURL = String(recordedSource.dropFirst("path+".count))
+            guard var components = URLComponents(string: sourceURL),
+                  components.scheme == "file",
+                  components.query == nil else {
+                return nil
+            }
+            components.fragment = nil
+            guard let fileURLString = components.string,
+                  let fileURL = URL(string: fileURLString),
+                  fileURL.isFileURL,
+                  fileURL.host == nil || fileURL.host == "",
+                  fileURL.path.hasPrefix("/"),
+                  Self.isSafe(fileURL.path) else {
+                return nil
+            }
+            self = .path(fileURL.path)
+            return
+        }
+
+        return nil
+    }
+
+    func installCommand(packageName: String, version: String) -> String {
+        switch self {
+        case .cratesIO:
+            return "cargo install \(shellArgument(packageName)) --version \(shellArgument(version))"
+
+        case .registry(let index):
+            return "cargo install \(shellArgument(packageName)) --version \(shellArgument(version))"
+                + " --index \(shellArgument(index))"
+
+        case .git(let url, let selector):
+            var command = "cargo install --git \(shellArgument(url))"
+            if let selector {
+                switch selector {
+                case .branch(let branch):
+                    command += " --branch \(shellArgument(branch))"
+                case .tag(let tag):
+                    command += " --tag \(shellArgument(tag))"
+                case .revision(let revision):
+                    command += " --rev \(shellArgument(revision))"
+                }
+            }
+            return command + " \(shellArgument(packageName))"
+
+        case .path(let path):
+            return "cargo install --path \(shellArgument(path))"
+        }
+    }
+
+    private static func isCratesIOIndex(_ index: String) -> Bool {
+        let normalized = index.hasSuffix("/") ? String(index.dropLast()) : index
+        return normalized == "https://github.com/rust-lang/crates.io-index"
+            || normalized == "https://index.crates.io"
+            || normalized == "sparse+https://index.crates.io"
+    }
+
+    private static func isValidURL(_ value: String) -> Bool {
+        guard isSafe(value) else { return false }
+        let transportURL = value.hasPrefix("sparse+")
+            ? String(value.dropFirst("sparse+".count))
+            : value
+        guard let components = URLComponents(string: transportURL),
+              let scheme = components.scheme, !scheme.isEmpty else {
+            return false
+        }
+        return components.host != nil || scheme == "file"
+    }
+
+    private static func isSafe(_ value: String) -> Bool {
+        guard !value.isEmpty else { return false }
+        let unsafeScalars = CharacterSet.controlCharacters.union(.newlines)
+        return value.unicodeScalars.allSatisfy { !unsafeScalars.contains($0) }
     }
 }

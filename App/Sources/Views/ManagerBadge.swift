@@ -9,9 +9,13 @@ struct ManagerBadge: View {
             .font(.system(.caption2, design: .default, weight: .medium))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(manager.badgeColor.opacity(0.15))
-            .foregroundStyle(manager.badgeColor)
-            .clipShape(Capsule())
+            .background(manager.badgeColor.opacity(0.15), in: Capsule())
+            // System primary text maintains readable contrast in both
+            // appearances; the manager color remains a redundant accent.
+            .foregroundStyle(.primary)
+            .overlay {
+                Capsule().stroke(manager.badgeColor.opacity(0.45), lineWidth: 0.5)
+            }
             .accessibilityLabel(manager.displayName)
             .accessibilityAddTraits(.isStaticText)
             .help(manager.displayName)

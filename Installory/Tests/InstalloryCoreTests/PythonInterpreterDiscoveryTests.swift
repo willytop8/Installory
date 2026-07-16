@@ -4,38 +4,19 @@ import Testing
 
 @Suite("PythonInterpreterDiscovery")
 struct PythonInterpreterDiscoveryTests {
-    private static let fixtureDir = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/python")
-
     private func buildProvider() throws -> InMemoryDirectoryAccessProvider {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: Self.fixtureDir,
-            includingPropertiesForKeys: [.isRegularFileKey]
-        ) else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-
-        return InMemoryDirectoryAccessProvider.make { builder in
-            while let fileURL = enumerator.nextObject() as? URL {
-                let isFile = (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) ?? false
-                guard isFile else { continue }
-
-                let relativePath = String(fileURL.path.dropFirst(Self.fixtureDir.path.count))
-                let fakeURL = URL(fileURLWithPath: relativePath)
-                if let data = try? Data(contentsOf: fileURL) {
-                    builder.addFile(at: fakeURL, data: data)
-                }
-            }
-        }
+        try FixtureResource.provider(
+            directory: "python",
+            mappedTo: URL(fileURLWithPath: "/")
+        )
     }
 
     private func discover() throws -> [PythonInterpreter] {
         let provider = try buildProvider()
         let discovery = PythonInterpreterDiscovery(
             directoryAccess: provider,
-            homeDirectory: URL(fileURLWithPath: "/")
+            homeDirectory: URL(fileURLWithPath: "/"),
+            environment: .empty
         )
         return discovery.discover()
     }
@@ -135,7 +116,8 @@ struct PythonInterpreterDiscoveryTests {
         let provider = InMemoryDirectoryAccessProvider.make { _ in }
         let discovery = PythonInterpreterDiscovery(
             directoryAccess: provider,
-            homeDirectory: URL(fileURLWithPath: "/")
+            homeDirectory: URL(fileURLWithPath: "/"),
+            environment: .empty
         )
 
         #expect(discovery.discover().isEmpty)
@@ -156,7 +138,8 @@ struct PythonInterpreterDiscoveryTests {
 
         let discovery = PythonInterpreterDiscovery(
             directoryAccess: provider,
-            homeDirectory: URL(fileURLWithPath: "/")
+            homeDirectory: URL(fileURLWithPath: "/"),
+            environment: .empty
         )
 
         let interpreters = discovery.discover()
@@ -164,4 +147,148 @@ struct PythonInterpreterDiscoveryTests {
         // The opt candidate is processed first (homebrewOptCandidates before homebrewCellarCandidates).
         #expect(interpreters.first?.executable == symlink)
     }
+
+    @Test("CORE25-012: a granted project root includes its own .venv")
+    func grantedProjectRootIncludesOwnVenv() throws {
+        let projectRoot = URL(fileURLWithPath: "/Users/tester/Code/installory-site")
+        let venv = projectRoot.appendingPathComponent(".venv")
+        let python = venv.appendingPathComponent("bin/python3")
+        let sitePackages = venv.appendingPathComponent("lib/python3.12/site-packages")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: python, data: Data())
+            builder.addFile(
+                at: sitePackages.appendingPathComponent("example/__init__.py"),
+                data: Data()
+            )
+        }
+        let discovery = PythonInterpreterDiscovery(
+            directoryAccess: provider,
+            homeDirectory: URL(fileURLWithPath: "/Users/tester"),
+            environment: .empty,
+            projectVenvRoots: [projectRoot]
+        )
+
+        let interpreter = try #require(
+            discovery.discover().first { $0.kind == .projectVenv }
+        )
+
+        #expect(interpreter.executable == python)
+        #expect(interpreter.version == .init(major: 3, minor: 12, patch: 0))
+        #expect(interpreter.sitePackages == [sitePackages])
+    }
+
+    @Test("CORE-07: cancelled discovery does not walk or memoize a partial result")
+    func cancelledDiscoveryDoesNotCachePartialResult() async throws {
+        let python = URL(fileURLWithPath: "/Users/tester/.pyenv/versions/3.12.4/bin/python")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: python, data: Data())
+        }
+        let discovery = PythonInterpreterDiscovery(
+            directoryAccess: provider,
+            homeDirectory: URL(fileURLWithPath: "/Users/tester"),
+            environment: .empty
+        )
+
+        let cancelled = await Task { () -> [PythonInterpreter] in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return discovery.discover()
+        }.value
+        let subsequent = discovery.discover()
+
+        #expect(cancelled.isEmpty)
+        #expect(subsequent.contains { $0.executable == python })
+    }
+
+    @Test("project venv discovery does not follow symlinks outside a granted root")
+    func projectVenvSymlinkCannotEscapeGrantedRoot() {
+        let grantedRoot = URL(fileURLWithPath: "/Users/tester/Code")
+        let project = grantedRoot.appendingPathComponent("project")
+        let externalVenv = URL(fileURLWithPath: "/Volumes/External/project-venv")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: externalVenv.appendingPathComponent("bin/python3"),
+                data: Data()
+            )
+            builder.addFile(
+                at: externalVenv.appendingPathComponent("lib/python3.12/site-packages/example.py"),
+                data: Data()
+            )
+            builder.addSymlink(
+                at: project.appendingPathComponent(".venv"),
+                target: externalVenv
+            )
+        }
+        let discovery = PythonInterpreterDiscovery(
+            directoryAccess: provider,
+            homeDirectory: URL(fileURLWithPath: "/Users/tester"),
+            environment: .empty,
+            projectVenvRoots: [grantedRoot]
+        )
+
+        #expect(discovery.discover().allSatisfy { $0.kind != .projectVenv })
+    }
+
+    @Test("CORE-08: PYENV_ROOT overrides the default pyenv root")
+    func pyenvRootOverridesDefaultRoot() throws {
+        let home = URL(fileURLWithPath: "/Users/tester")
+        let customPyenv = URL(fileURLWithPath: "/Volumes/Dev/pyenv")
+        let customPython = customPyenv.appendingPathComponent("versions/3.12.4/bin/python")
+        let defaultPython = home.appendingPathComponent(".pyenv/versions/3.11.9/bin/python")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: customPython, data: Data())
+            builder.addFile(at: defaultPython, data: Data())
+        }
+
+        let discovery = PythonInterpreterDiscovery(
+            directoryAccess: provider,
+            homeDirectory: home,
+            environment: PackageManagerEnvironment(values: ["PYENV_ROOT": customPyenv.path])
+        )
+        let pyenvInterpreters = discovery.discover().filter { $0.kind == .pyenv }
+
+        #expect(pyenvInterpreters.map(\.executable) == [customPython])
+        #expect(pyenvInterpreters.first?.version == .init(major: 3, minor: 12, patch: 4))
+    }
+
+    @Test("UV-F1: relocated managed Python is discovered without treating tool environments as runtimes")
+    func relocatedUvPythonExcludesToolEnvironments() throws {
+        let home = URL(fileURLWithPath: "/Users/tester")
+        let pythonRoot = URL(fileURLWithPath: "/Volumes/Dev/uv-python")
+        let runtime = pythonRoot.appendingPathComponent("cpython-3.13.5-macos-aarch64-none")
+        let runtimeExecutable = runtime.appendingPathComponent("bin/python3.13")
+        let runtimeSitePackages = runtime.appendingPathComponent("lib/python3.13/site-packages")
+        let toolRoot = URL(fileURLWithPath: "/Volumes/Dev/uv-tools")
+        let toolExecutable = toolRoot.appendingPathComponent("ruff/bin/python")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: runtimeExecutable, data: Data())
+            builder.addFile(
+                at: runtimeSitePackages.appendingPathComponent("example.py"),
+                data: Data()
+            )
+            builder.addFile(at: toolExecutable, data: Data())
+            builder.addFile(
+                at: toolRoot.appendingPathComponent("ruff/lib/python3.13/site-packages/ruff.py"),
+                data: Data()
+            )
+        }
+        let discovery = PythonInterpreterDiscovery(
+            directoryAccess: provider,
+            homeDirectory: home,
+            environment: PackageManagerEnvironment(values: [
+                "UV_PYTHON_INSTALL_DIR": pythonRoot.path,
+                "UV_TOOL_DIR": toolRoot.path,
+            ])
+        )
+
+        let uvInterpreters = discovery.discover().filter { $0.kind == .uv }
+        let interpreter = try #require(uvInterpreters.only)
+        #expect(interpreter.executable == runtimeExecutable)
+        #expect(interpreter.version == .init(major: 3, minor: 13, patch: 5))
+        #expect(interpreter.sitePackages == [runtimeSitePackages])
+        #expect(!uvInterpreters.contains { $0.executable == toolExecutable })
+    }
+}
+
+private extension Collection {
+    var only: Element? { count == 1 ? first : nil }
 }

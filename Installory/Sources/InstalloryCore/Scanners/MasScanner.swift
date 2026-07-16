@@ -24,7 +24,13 @@ public struct MasScanner: PackageScanner, Sendable {
     }
 
     public func isAvailable() async -> Bool {
-        applicationDirectories().contains { (try? directoryAccess.contentsOfDirectory(at: $0)) != nil }
+        for directory in applicationDirectories() {
+            guard !Task.isCancelled else { return false }
+            let isReadable = (try? directoryAccess.contentsOfDirectory(at: directory)) != nil
+            guard !Task.isCancelled else { return false }
+            if isReadable { return true }
+        }
+        return false
     }
 
     public var unavailableReason: String {
@@ -32,11 +38,25 @@ public struct MasScanner: PackageScanner, Sendable {
     }
 
     public func scan() async throws -> [Package] {
+        try Task.checkCancellation()
+        var sizer = BoundedDirectorySizer(directoryAccess: directoryAccess)
         var seen: Set<String> = []
-        return applicationDirectories()
-            .flatMap(packagesInApplicationsDir)
-            .filter { seen.insert($0.id).inserted }
-            .sorted { $0.name < $1.name }
+        var packages: [Package] = []
+
+        for directory in applicationDirectories().sorted(by: { $0.path < $1.path }) {
+            try Task.checkCancellation()
+            for package in try await packagesInApplicationsDir(directory, sizer: &sizer) {
+                try Task.checkCancellation()
+                if seen.insert(package.id).inserted {
+                    packages.append(package)
+                }
+            }
+        }
+        let sortedPackages = packages.sorted {
+            $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name
+        }
+        try Task.checkCancellation()
+        return sortedPackages
     }
 
     private func applicationDirectories() -> [URL] {
@@ -49,14 +69,33 @@ public struct MasScanner: PackageScanner, Sendable {
         ]
     }
 
-    private func packagesInApplicationsDir(_ applicationsDir: URL) -> [Package] {
+    private func packagesInApplicationsDir(
+        _ applicationsDir: URL,
+        sizer: inout BoundedDirectorySizer
+    ) async throws -> [Package] {
+        try Task.checkCancellation()
         let apps = (try? directoryAccess.contentsOfDirectory(at: applicationsDir)) ?? []
-        return apps
-            .filter { $0.pathExtension == "app" }
-            .compactMap(makePackage(appBundle:))
+        try Task.checkCancellation()
+        var packages: [Package] = []
+        for app in apps.sorted(by: { $0.path < $1.path }) where app.pathExtension == "app" {
+            try Task.checkCancellation()
+            if let package = try await makePackage(
+                appBundle: app,
+                applicationsDir: applicationsDir,
+                sizer: &sizer
+            ) {
+                packages.append(package)
+            }
+        }
+        try Task.checkCancellation()
+        return packages
     }
 
-    private func makePackage(appBundle: URL) -> Package? {
+    private func makePackage(
+        appBundle: URL,
+        applicationsDir: URL,
+        sizer: inout BoundedDirectorySizer
+    ) async throws -> Package? {
         let receipt = appBundle
             .appendingPathComponent("Contents")
             .appendingPathComponent("_MASReceipt")
@@ -72,6 +111,11 @@ public struct MasScanner: PackageScanner, Sendable {
         let name = info.displayName ?? info.name ?? fallbackName
         let identity = info.bundleIdentifier ?? name
         let version = info.shortVersion ?? info.bundleVersion ?? "unknown"
+        try Task.checkCancellation()
+        let sizeBytes = try await sizer.measure(
+            [.tree(appBundle)],
+            constrainedTo: applicationsDir
+        ).sizeBytes
 
         return Package(
             id: "mas::\(identity)",
@@ -83,7 +127,7 @@ public struct MasScanner: PackageScanner, Sendable {
             installedAt: directoryAccess.modificationDate(at: receipt)
                 ?? directoryAccess.modificationDate(at: appBundle),
             installedAtConfidence: .low,
-            sizeBytes: nil,
+            sizeBytes: sizeBytes,
             isExplicit: true,
             isReadOnly: false,
             dependencies: [],

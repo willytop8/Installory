@@ -112,15 +112,195 @@ struct ReinstallScriptGeneratorTests {
     // MARK: - pipx (pins version)
 
     @Test func pipxPinsVersion() {
-        let result = generator.generate(missing: [makeMissing(manager: .pipx, name: "black", version: "24.4.2")])
+        let result = generator.generate(missing: [
+            makeMissing(
+                manager: .pipx,
+                name: "black",
+                version: "24.4.2",
+                qualifier: "/Users/tester/.local/share/pipx/venvs/black"
+            ),
+        ])
         #expect(result.scriptText.contains("pipx install black==24.4.2"))
+    }
+
+    @Test("CORE25-004: same-name suffixed pipx installs reproduce distinct suffixes")
+    func suffixedPipxInstallsReproduceDistinctSuffixes() {
+        let script = generator.generate(missing: [
+            makeMissing(
+                manager: .pipx,
+                name: "black",
+                version: "24.4.2",
+                qualifier: "/Users/tester/.local/share/pipx/venvs/black-3-12"
+            ),
+            makeMissing(
+                manager: .pipx,
+                name: "black",
+                version: "24.4.2",
+                qualifier: "/Users/tester/.local/share/pipx/venvs/black-3-11"
+            ),
+        ]).scriptText
+        let commands = lines(of: script).filter { $0.hasPrefix("pipx install ") }
+
+        #expect(commands == [
+            "pipx install black==24.4.2 --suffix=-3-11",
+            "pipx install black==24.4.2 --suffix=-3-12",
+        ])
+    }
+
+    @Test("CORE25-004: pipx reinstall shell quotes the complete suffix option")
+    func pipxReinstallShellQuotesSuffixOption() {
+        let script = generator.generate(missing: [
+            makeMissing(
+                manager: .pipx,
+                name: "black",
+                version: "24.4.2",
+                qualifier: "/Users/tester/.local/share/pipx/venvs/black-qa'$(touch PWNED)"
+            ),
+        ]).scriptText
+
+        #expect(lines(of: script).contains(
+            #"pipx install black==24.4.2 '--suffix=-qa'\''$(touch PWNED)'"#
+        ))
+    }
+
+    @Test("CORE25-004: unsafe or ambiguous pipx qualifiers require manual review")
+    func unsafeOrAmbiguousPipxQualifiersRequireManualReview() {
+        let script = generator.generate(missing: [
+            makeMissing(manager: .pipx, name: "black", version: "24.4.2", qualifier: nil),
+            makeMissing(
+                manager: .pipx,
+                name: "ruff",
+                version: "0.5.0",
+                qualifier: "/Users/tester/.local/share/pipx/venvs/unrelated-environment"
+            ),
+            makeMissing(
+                manager: .pipx,
+                name: "poetry",
+                version: "1.8.3",
+                qualifier: "/Users/tester/.local/share/pipx/venvs/poetry\nprintf PWNED"
+            ),
+        ]).scriptText
+
+        #expect(lines(of: script).filter { $0.hasPrefix("# Manual review required:") }.count == 3)
+        #expect(!lines(of: script).contains { $0.hasPrefix("pipx install ") })
+        #expect(!lines(of: script).contains { $0.hasPrefix("printf PWNED") })
     }
 
     // MARK: - cargo (pins version)
 
-    @Test func cargoPinsVersion() {
-        let result = generator.generate(missing: [makeMissing(manager: .cargo, name: "ripgrep", version: "14.1.0")])
+    @Test("CORE25-009: crates.io Cargo restore pins the recorded version")
+    func cargoCratesIOPinsVersion() {
+        let result = generator.generate(missing: [
+            makeMissing(
+                manager: .cargo,
+                name: "ripgrep",
+                version: "14.1.0",
+                qualifier: "registry+https://github.com/rust-lang/crates.io-index"
+            ),
+        ])
         #expect(result.scriptText.contains("cargo install ripgrep --version 14.1.0"))
+    }
+
+    @Test("CORE25-009: Cargo git restore preserves branch, tag, revision, and precise commit")
+    func cargoGitRestorePreservesSelectors() {
+        let script = generator.generate(missing: [
+            makeMissing(
+                manager: .cargo,
+                name: "branch-tool",
+                qualifier: "git+https://github.com/example/tools?branch=stable"
+            ),
+            makeMissing(
+                manager: .cargo,
+                name: "tag-tool",
+                qualifier: "git+https://github.com/example/tools?tag=v1.0.0"
+            ),
+            makeMissing(
+                manager: .cargo,
+                name: "rev-tool",
+                qualifier: "git+https://github.com/example/tools?rev=deadbeef"
+            ),
+            makeMissing(
+                manager: .cargo,
+                name: "precise-tool",
+                qualifier: "git+https://github.com/example/tools?branch=stable#0123456789abcdef"
+            ),
+        ]).scriptText
+
+        #expect(script.contains("cargo install --git https://github.com/example/tools --branch stable branch-tool"))
+        #expect(script.contains("cargo install --git https://github.com/example/tools --tag v1.0.0 tag-tool"))
+        #expect(script.contains("cargo install --git https://github.com/example/tools --rev deadbeef rev-tool"))
+        #expect(script.contains("cargo install --git https://github.com/example/tools --rev 0123456789abcdef precise-tool"))
+    }
+
+    @Test("CORE25-009: Cargo path restore uses the recorded local path")
+    func cargoPathRestoreUsesRecordedPath() {
+        let script = generator.generate(missing: [
+            makeMissing(
+                manager: .cargo,
+                name: "local-tool",
+                version: "0.4.0",
+                qualifier: "path+file:///Users/tester/Code/local-tool"
+            ),
+        ]).scriptText
+
+        #expect(lines(of: script).contains("cargo install --path /Users/tester/Code/local-tool"))
+        #expect(!script.contains("cargo install local-tool --version"))
+    }
+
+    @Test("CORE25-009: custom Cargo registry uses its recorded index")
+    func cargoCustomRegistryUsesRecordedIndex() {
+        let script = generator.generate(missing: [
+            makeMissing(
+                manager: .cargo,
+                name: "corp-tool",
+                version: "2.3.4",
+                qualifier: "registry+sparse+https://cargo.example/index/"
+            ),
+        ]).scriptText
+
+        #expect(lines(of: script).contains(
+            "cargo install corp-tool --version 2.3.4 --index sparse+https://cargo.example/index/"
+        ))
+    }
+
+    @Test("CORE25-009: unknown or missing Cargo sources require manual review")
+    func cargoUnknownSourcesRequireManualReview() {
+        let script = generator.generate(missing: [
+            makeMissing(manager: .cargo, name: "legacy-tool", qualifier: nil),
+            makeMissing(
+                manager: .cargo,
+                name: "unknown-tool",
+                qualifier: "future+https://example.invalid/source\nprintf PWNED"
+            ),
+        ]).scriptText
+
+        #expect(lines(of: script).filter { $0.hasPrefix("# Manual review required:") }.count == 2)
+        #expect(!lines(of: script).contains { $0.hasPrefix("cargo install ") })
+        #expect(!lines(of: script).contains { $0.hasPrefix("printf PWNED") })
+    }
+
+    @Test("CORE25-009: Cargo source arguments are shell quoted end-to-end")
+    func cargoSourceArgumentsAreShellQuoted() {
+        let script = generator.generate(missing: [
+            makeMissing(
+                manager: .cargo,
+                name: "local-tool",
+                qualifier: "path+file:///Users/tester/Code/tool%20dir%27%24%28touch%20PWNED%29"
+            ),
+            makeMissing(
+                manager: .cargo,
+                name: "git-tool",
+                qualifier: "git+ssh://git@example.com/team/tools.git?branch=release%2Fqa%27%24%28touch%20PWNED%29"
+            ),
+        ]).scriptText
+
+        #expect(lines(of: script).contains(
+            #"cargo install --path '/Users/tester/Code/tool dir'\''$(touch PWNED)'"#
+        ))
+        #expect(lines(of: script).contains(
+            #"cargo install --git ssh://git@example.com/team/tools.git --branch 'release/qa'\''$(touch PWNED)' git-tool"#
+        ))
+        #expect(!lines(of: script).contains { $0.hasPrefix("touch PWNED") })
     }
 
     // MARK: - gem (pins version)
@@ -138,6 +318,39 @@ struct ReinstallScriptGeneratorTests {
         #expect(script.contains("# Xcode: reinstall from the Mac App Store"))
         #expect(!script.contains("mas install"))
         #expect(!script.contains("echo \"→"))
+    }
+
+    // MARK: - CORE25-003 / SEC25-003: comment injection
+
+    @Test("CORE25-003/SEC25-003: hostile reinstall qualifier stays inside its section comment")
+    func hostileQualifierCannotEscapeSectionComment() {
+        let qualifier = "/tmp/python\nprintf REINSTALL_QUALIFIER_PWNED\u{001B}"
+        let script = generator.generate(missing: [
+            makeMissing(manager: .pip, name: "requests", qualifier: qualifier),
+        ]).scriptText
+
+        #expect(script.contains("# === pip (interpreter: /tmp/python printf REINSTALL_QUALIFIER_PWNED ) ==="))
+        #expect(!script.contains("# === pip (interpreter: /tmp/python\n"))
+    }
+
+    @Test("CORE25-003/SEC25-003: hostile reinstall MAS name stays inside its comment")
+    func hostileMASNameCannotEscapeComment() {
+        let script = generator.generate(missing: [
+            makeMissing(manager: .mas, name: "Xcode\nprintf REINSTALL_MAS_PWNED\u{0007}"),
+        ]).scriptText
+
+        #expect(script.contains("# Xcode printf REINSTALL_MAS_PWNED : reinstall from the Mac App Store"))
+        #expect(!lines(of: script).contains(where: { $0.hasPrefix("printf REINSTALL_MAS_PWNED") }))
+    }
+
+    @Test("CORE25-003/SEC25-003: hostile recorded version stays inside its Homebrew comment")
+    func hostileRecordedVersionCannotEscapeComment() {
+        let script = generator.generate(missing: [
+            makeMissing(manager: .brew, name: "ffmpeg", version: "7.0\nprintf VERSION_PWNED\u{001B}"),
+        ]).scriptText
+
+        #expect(script.contains("# snapshot recorded 7.0 printf VERSION_PWNED ; Homebrew installs the current version"))
+        #expect(!lines(of: script).contains(where: { $0.hasPrefix("printf VERSION_PWNED") }))
     }
 
     // MARK: - Echo lines

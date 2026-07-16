@@ -24,6 +24,15 @@ public struct GeneratedScript: Sendable {
     public let warnedDenylisted: [Package]
 }
 
+extension Package {
+    /// True when Installory can generate a shell removal command for this row.
+    /// The app uses the same predicate for Cleanup Mode selection controls.
+    public var isRemovalScriptEligible: Bool {
+        guard !isReadOnly, manager != .mas else { return false }
+        return manager != .uv || UvToolEnvironmentIdentity.target(from: qualifier) != nil
+    }
+}
+
 /// Turns a selection of packages into a shell script the user can paste into Terminal.
 ///
 /// This is a pure value: it reads `[Package]` and produces a `GeneratedScript` string.
@@ -37,9 +46,8 @@ public struct ScriptGenerator: Sendable {
 
     /// Generates a shell script that, when run in Terminal, uninstalls the given packages.
     ///
-    /// **Callers MUST capture a snapshot via `SnapshotManager` before calling this method.**
-    /// `ScriptGenerator` does not enforce this contract — pass the snapshot metadata via
-    /// the `snapshot` parameter so the generated script references it in its header.
+    /// Snapshot policy belongs to the caller. When snapshot metadata is supplied,
+    /// the generated header references it for recovery.
     ///
     /// Behaviour:
     /// - Packages with `isReadOnly == true` are excluded and returned in `skippedReadOnly`.
@@ -58,7 +66,7 @@ public struct ScriptGenerator: Sendable {
     /// dependency sorting, or script-header generation. `renderCommand` remains
     /// private and script-oriented; this method owns the nil cases cleanly.
     public func removalCommand(for package: Package) -> String? {
-        guard !package.isReadOnly, package.manager != .mas else { return nil }
+        guard package.isRemovalScriptEligible else { return nil }
         return renderCommand(for: package)
     }
 
@@ -123,7 +131,7 @@ public struct ScriptGenerator: Sendable {
 
     // Canonical output order. Managers not in this list are appended alphabetically.
     private static let managerOrder: [PackageManager] = [
-        .brew, .brewCask, .pip, .npm, .pipx, .cargo, .gem, .mas,
+        .brew, .brewCask, .pip, .npm, .pipx, .uv, .cargo, .gem, .mas,
     ]
 
     private func appendManagerSections(packages: [Package], to out: inout [String]) {
@@ -135,7 +143,7 @@ public struct ScriptGenerator: Sendable {
             appendSection(manager: manager, packages: pkgs, to: &out)
         }
 
-        // Managers not in the canonical list (added in future phases)
+        // Any enum case omitted from the preferred order remains deterministic.
         let extra = Set(packages.map { $0.manager })
             .subtracting(handledSet)
             .sorted { $0.rawValue < $1.rawValue }
@@ -159,7 +167,15 @@ public struct ScriptGenerator: Sendable {
                 appendCommandLines(sorted: sorted.sorted, cyclePackages: sorted.cyclePackages, to: &out)
             }
         } else {
-            let sorted = topologicalSort(packages)
+            // pipx and uv can contain distinct managed environments whose internal
+            // dependencies are not separate inventory rows. Name-keyed dependency
+            // sorting would collapse those records, so keep path-qualified order.
+            let sorted = manager == .pipx || manager == .uv
+                ? SortResult(
+                    sorted: packages.sorted(by: pipxPackageOrder),
+                    cyclePackages: []
+                )
+                : topologicalSort(packages)
             out.append("")
             out.append(sectionHeader(for: manager))
             appendCommandLines(sorted: sorted.sorted, cyclePackages: sorted.cyclePackages, to: &out)
@@ -184,11 +200,15 @@ public struct ScriptGenerator: Sendable {
 
     private func appendSinglePackageLines(for pkg: Package, to out: inout [String]) {
         if pkg.manager == .mas {
-            out.append("# \(pkg.name): mas does not support CLI uninstall; remove the .app manually from /Applications")
+            out.append("# \(shellCommentText(pkg.name)): mas does not support CLI uninstall; remove the .app manually from /Applications")
             return
         }
 
         let cmd = renderCommand(for: pkg)
+        if cmd.hasPrefix("#") {
+            out.append(cmd)
+            return
+        }
         out.append(shellEchoLine(for: cmd))
         out.append(cmd)
 
@@ -196,7 +216,7 @@ public struct ScriptGenerator: Sendable {
         if pkg.manager == .brewCask, let paths = pkg.artifactPaths, !paths.isEmpty {
             out.append("# Files brew may not remove automatically:")
             for path in paths {
-                out.append("#   \(path)")
+                out.append("#   \(shellCommentText(path))")
             }
         }
     }
@@ -211,11 +231,14 @@ public struct ScriptGenerator: Sendable {
         out.append(bar)
 
         for pkg in packages {
-            let reasonSuffix = denylist.reason(for: pkg).map { "  # reason: \($0)" } ?? ""
+            let reasonSuffix = denylist.reason(for: pkg)
+                .map { "  # reason: \(shellCommentText($0))" } ?? ""
             if pkg.manager == .mas {
-                out.append("# \(pkg.name): mas does not support CLI uninstall; remove the .app manually from /Applications\(reasonSuffix)")
+                out.append("# \(shellCommentText(pkg.name)): mas does not support CLI uninstall; remove the .app manually from /Applications\(reasonSuffix)")
             } else {
-                let cmd = renderCommand(for: pkg)
+                // `shellArgument` protects active commands, but this copy is embedded
+                // after `#` and therefore must never contain a physical line break.
+                let cmd = shellCommentText(renderCommand(for: pkg))
                 out.append("# \(cmd)\(reasonSuffix)")
             }
         }
@@ -239,15 +262,28 @@ public struct ScriptGenerator: Sendable {
             let npm = ManagerBinaryResolver.npm(forQualifier: pkg.qualifier)
             return "\(shellArgument(npm)) uninstall -g \(name)"
         case .pipx:
-            return "pipx uninstall \(name)"
+            let environment = PipxEnvironmentIdentity.environmentName(from: pkg.qualifier)
+                ?? pkg.name
+            return "pipx uninstall \(shellArgument(environment))"
+        case .uv:
+            guard let target = UvToolEnvironmentIdentity.target(from: pkg.qualifier) else {
+                let recordedEnvironment = pkg.qualifier.map(shellCommentText)
+                    ?? "no recorded environment path"
+                return "# Manual review required: cannot safely target uv tool "
+                    + "\(shellCommentText(pkg.name)) from \(recordedEnvironment); "
+                    + "no uninstall command generated."
+            }
+            return "UV_TOOL_DIR=\(shellArgument(target.toolsRoot)) uv tool uninstall "
+                + shellArgument(target.environmentName)
         case .cargo:
             return "cargo uninstall \(name)"
         case .gem:
             let gem = ManagerBinaryResolver.gem(forQualifier: pkg.qualifier)
+            let versionTarget = "\(name) -v \(shellArgument(pkg.version))"
             if let installDir = gem.installDir {
-                return "\(shellArgument(gem.binary)) uninstall --install-dir \(shellArgument(installDir)) \(name)"
+                return "\(shellArgument(gem.binary)) uninstall \(versionTarget) --install-dir \(shellArgument(installDir))"
             }
-            return "\(shellArgument(gem.binary)) uninstall \(name)"
+            return "\(shellArgument(gem.binary)) uninstall \(versionTarget)"
         case .mas:
             // mas has no CLI uninstall; caller handles this case before reaching renderCommand
             return "\(pkg.name)  # remove manually from /Applications"
@@ -261,6 +297,7 @@ public struct ScriptGenerator: Sendable {
         case .pip:     return "# === pip ==="
         case .npm:     return "# === npm (global) ==="
         case .pipx:    return "# === pipx ==="
+        case .uv:      return "# === uv tools ==="
         case .cargo:   return "# === Cargo (Rust) ==="
         case .gem:     return "# === Ruby Gems ==="
         case .mas:     return "# === Mac App Store ==="
@@ -271,10 +308,11 @@ public struct ScriptGenerator: Sendable {
     /// the scanner recorded no installation, so the plain header is used.
     private func qualifiedSectionHeader(for manager: PackageManager, qualifier: String) -> String {
         guard !qualifier.isEmpty else { return sectionHeader(for: manager) }
+        let commentQualifier = shellCommentText(qualifier)
         switch manager {
-        case .pip: return "# === pip (interpreter: \(qualifier)) ==="
-        case .npm: return "# === npm (global: \(qualifier)) ==="
-        case .gem: return "# === Ruby Gems (\(qualifier)) ==="
+        case .pip: return "# === pip (interpreter: \(commentQualifier)) ==="
+        case .npm: return "# === npm (global: \(commentQualifier)) ==="
+        case .gem: return "# === Ruby Gems (\(commentQualifier)) ==="
         default:   return sectionHeader(for: manager)
         }
     }
@@ -286,53 +324,171 @@ public struct ScriptGenerator: Sendable {
         let cyclePackages: [Package]
     }
 
+    struct DependencyOrderingDiagnostics: Sendable, Equatable {
+        let enqueuedNodeCount: Int
+        let dequeuedNodeCount: Int
+        let queueComparisonCount: Int
+    }
+
+    private struct LexicographicMinHeap {
+        private(set) var comparisonCount = 0
+        private var elements: [String] = []
+
+        mutating func insert(_ element: String) {
+            elements.append(element)
+            var child = elements.count - 1
+
+            while child > 0 {
+                let parent = (child - 1) / 2
+                guard isOrdered(elements[child], before: elements[parent]) else { break }
+                elements.swapAt(child, parent)
+                child = parent
+            }
+        }
+
+        mutating func removeMinimum() -> String? {
+            guard !elements.isEmpty else { return nil }
+            guard elements.count > 1 else { return elements.removeLast() }
+
+            let minimum = elements[0]
+            elements[0] = elements.removeLast()
+            var parent = 0
+
+            while true {
+                let left = 2 * parent + 1
+                guard left < elements.count else { break }
+
+                let right = left + 1
+                var minimumChild = left
+                if right < elements.count,
+                   isOrdered(elements[right], before: elements[left]) {
+                    minimumChild = right
+                }
+
+                guard isOrdered(elements[minimumChild], before: elements[parent]) else { break }
+                elements.swapAt(parent, minimumChild)
+                parent = minimumChild
+            }
+
+            return minimum
+        }
+
+        private mutating func isOrdered(_ lhs: String, before rhs: String) -> Bool {
+            comparisonCount += 1
+            return lhs < rhs
+        }
+    }
+
+    private func pipxPackageOrder(_ lhs: Package, _ rhs: Package) -> Bool {
+        let lhsQualifier = lhs.qualifier ?? ""
+        let rhsQualifier = rhs.qualifier ?? ""
+        if lhsQualifier != rhsQualifier { return lhsQualifier < rhsQualifier }
+        return lhs.id < rhs.id
+    }
+
     /// Kahn's algorithm over the within-group dependency graph.
     ///
     /// Edge A → B means "A depends on B" so A is removed before B in the script.
     /// Nodes with in-degree 0 among the selected set have no selected dependents
     /// and are safe to remove first. Remaining nodes after the traversal form cycles.
     private func topologicalSort(_ packages: [Package]) -> SortResult {
+        Self.makeDependencyOrder(packages).result
+    }
+
+    /// Internal instrumentation for regression tests. Production and tests both use
+    /// `makeDependencyOrder`, so the reported operation shape covers the real path.
+    static func dependencyOrderingDiagnostics(
+        for packages: [Package]
+    ) -> DependencyOrderingDiagnostics {
+        makeDependencyOrder(packages).diagnostics
+    }
+
+    private static func makeDependencyOrder(
+        _ packages: [Package]
+    ) -> (result: SortResult, diagnostics: DependencyOrderingDiagnostics) {
         guard packages.count > 1 else {
-            return SortResult(sorted: packages, cyclePackages: [])
+            return (
+                SortResult(sorted: packages, cyclePackages: []),
+                DependencyOrderingDiagnostics(
+                    enqueuedNodeCount: packages.count,
+                    dequeuedNodeCount: packages.count,
+                    queueComparisonCount: 0
+                )
+            )
         }
 
-        let byName = Dictionary(packages.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
+        // Package names are not unique within a manager scope: RubyGems permits
+        // several installed versions at once. Graph nodes therefore use stable
+        // package IDs, while dependency names fan out to every selected package
+        // with that normalized name.
+        let byID = Dictionary(packages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var idsByName: [String: [String]] = [:]
+        for package in byID.values {
+            let name = PackageIdentity.normalizedName(package.name, manager: package.manager)
+            idsByName[name, default: []].append(package.id)
+        }
+        for key in idsByName.keys { idsByName[key]?.sort() }
 
-        // in-degree: how many selected packages depend on this one
-        var inDegree: [String: Int] = Dictionary(uniqueKeysWithValues: packages.map { ($0.name, 0) })
-        // adj[x] = dependency names of x that are also in the selected set
-        var adj: [String: [String]] = Dictionary(uniqueKeysWithValues: packages.map { ($0.name, []) })
+        // in-degree: how many selected packages depend on this node.
+        var inDegree: [String: Int] = Dictionary(uniqueKeysWithValues: byID.keys.map { ($0, 0) })
+        // adj[x] = dependency package IDs of x that are also selected.
+        var adjacencySets: [String: Set<String>] = Dictionary(
+            uniqueKeysWithValues: byID.keys.map { ($0, Set<String>()) }
+        )
 
-        for pkg in packages {
-            for dep in pkg.dependencies where byName[dep] != nil {
-                inDegree[dep, default: 0] += 1
-                adj[pkg.name, default: []].append(dep)
+        for package in byID.values {
+            for dependencyName in package.dependencies {
+                let normalized = PackageIdentity.normalizedName(
+                    dependencyName,
+                    manager: package.manager
+                )
+                for dependencyID in idsByName[normalized] ?? []
+                    where dependencyID != package.id {
+                    if adjacencySets[package.id, default: []].insert(dependencyID).inserted {
+                        inDegree[dependencyID, default: 0] += 1
+                    }
+                }
             }
         }
+        let adjacency = adjacencySets.mapValues { $0.sorted() }
 
-        for key in adj.keys { adj[key]?.sort() }  // deterministic traversal order
+        var queue = LexicographicMinHeap()
+        var enqueuedNodeCount = 0
+        for packageID in inDegree.lazy.filter({ $0.value == 0 }).map(\.key) {
+            queue.insert(packageID)
+            enqueuedNodeCount += 1
+        }
 
-        var queue: [String] = inDegree.filter { $0.value == 0 }.map { $0.key }.sorted()
         var result: [Package] = []
         var seen: Set<String> = []
+        var dequeuedNodeCount = 0
 
-        while !queue.isEmpty {
-            let name = queue.removeFirst()
-            guard !seen.contains(name), let pkg = byName[name] else { continue }
-            seen.insert(name)
-            result.append(pkg)
+        while let packageID = queue.removeMinimum() {
+            dequeuedNodeCount += 1
+            guard !seen.contains(packageID), let package = byID[packageID] else { continue }
+            seen.insert(packageID)
+            result.append(package)
 
-            for dep in adj[name, default: []] {
-                inDegree[dep, default: 0] -= 1
-                if inDegree[dep] == 0 {
-                    queue.append(dep)
-                    queue.sort()
+            for dependencyID in adjacency[packageID, default: []] {
+                inDegree[dependencyID, default: 0] -= 1
+                if inDegree[dependencyID] == 0 {
+                    queue.insert(dependencyID)
+                    enqueuedNodeCount += 1
                 }
             }
         }
 
-        let cyclePackages = packages.filter { !seen.contains($0.name) }
-        return SortResult(sorted: result, cyclePackages: cyclePackages)
+        let cyclePackages = byID.values
+            .filter { !seen.contains($0.id) }
+            .sorted { $0.id < $1.id }
+        return (
+            SortResult(sorted: result, cyclePackages: cyclePackages),
+            DependencyOrderingDiagnostics(
+                enqueuedNodeCount: enqueuedNodeCount,
+                dequeuedNodeCount: dequeuedNodeCount,
+                queueComparisonCount: queue.comparisonCount
+            )
+        )
     }
 
     // MARK: - Utilities
@@ -341,5 +497,49 @@ public struct ScriptGenerator: Sendable {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
         return f
+    }
+}
+
+enum PipxEnvironmentIdentity {
+    enum ReinstallTarget: Equatable {
+        case base
+        case suffixed(String)
+        case manualReview
+    }
+
+    static func environmentName(from qualifier: String?) -> String? {
+        guard let qualifier, qualifier.hasPrefix("/") else { return nil }
+        let rawComponents = qualifier.split(separator: "/", omittingEmptySubsequences: true)
+        guard !rawComponents.isEmpty,
+              !rawComponents.contains(where: { $0 == "." || $0 == ".." }) else {
+            return nil
+        }
+
+        let environmentName = URL(fileURLWithPath: qualifier)
+            .standardizedFileURL
+            .lastPathComponent
+        return environmentName.isEmpty ? nil : environmentName
+    }
+
+    static func reinstallTarget(
+        distributionName: String,
+        qualifier: String?
+    ) -> ReinstallTarget {
+        guard isSafeIdentityComponent(distributionName),
+              let environmentName = environmentName(from: qualifier),
+              isSafeIdentityComponent(environmentName) else {
+            return .manualReview
+        }
+        if environmentName == distributionName { return .base }
+        guard environmentName.hasPrefix(distributionName) else { return .manualReview }
+
+        let suffix = String(environmentName.dropFirst(distributionName.count))
+        return suffix.isEmpty ? .manualReview : .suffixed(suffix)
+    }
+
+    private static func isSafeIdentityComponent(_ value: String) -> Bool {
+        guard !value.isEmpty, !value.contains("/") else { return false }
+        let unsafeScalars = CharacterSet.controlCharacters.union(.newlines)
+        return value.unicodeScalars.allSatisfy { !unsafeScalars.contains($0) }
     }
 }

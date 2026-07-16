@@ -22,10 +22,13 @@ public struct DuplicateGroup: Sendable {
 /// This is informational only: same-manager installs in multiple environments
 /// are usually fine, but can cause confusion when different tools silently
 /// pick different installs.
-public struct MultiLocationGroup: Sendable {
+public struct MultiLocationGroup: Identifiable, Sendable {
     public let manager: PackageManager
     public let name: String
     public let packages: [Package]
+
+    /// Stable SwiftUI identity across managers that happen to contain the same name.
+    public var id: String { "\(manager.rawValue)::\(name.lowercased())" }
 
     public init(manager: PackageManager, name: String, packages: [Package]) {
         self.manager = manager
@@ -48,15 +51,17 @@ extension [Package] {
         }
 
         var groups: [DuplicateGroup] = []
-        for (_, pkgs) in byLowercasedName {
-            let distinctManagers = Set(pkgs.map { pkg -> PackageManager in
+        for normalizedName in byLowercasedName.keys.sorted() {
+            guard let unorderedPackages = byLowercasedName[normalizedName] else { continue }
+            let packages = unorderedPackages.sorted { $0.id < $1.id }
+            let distinctManagers = Set(packages.map { pkg -> PackageManager in
                 pkg.manager == .brewCask ? .brew : pkg.manager
             })
-            guard distinctManagers.count >= 2, let first = pkgs.first else { continue }
-            groups.append(DuplicateGroup(name: first.name, packages: pkgs))
+            guard distinctManagers.count >= 2, let first = packages.first else { continue }
+            groups.append(DuplicateGroup(name: first.name, packages: packages))
         }
 
-        return groups.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        return groups
     }
 
     /// Returns packages that are installed under two or more distinct, non-nil
@@ -88,15 +93,17 @@ extension [Package] {
         }
 
         var groups: [MultiLocationGroup] = []
-        for (_, entry) in byKey {
+        for key in byKey.keys.sorted() {
+            guard let entry = byKey[key] else { continue }
             // Emit a group only when ≥2 distinct non-nil qualifiers exist.
             let distinctQualifiers = Set(entry.packages.compactMap { $0.qualifier })
             guard distinctQualifiers.count >= 2 else { continue }
+            let packages = entry.packages.sorted { $0.id < $1.id }
             groups.append(
                 MultiLocationGroup(
                     manager: entry.manager,
-                    name: entry.name,
-                    packages: entry.packages
+                    name: packages.first?.name ?? entry.name,
+                    packages: packages
                 )
             )
         }
@@ -106,7 +113,10 @@ extension [Package] {
             if $0.manager.rawValue != $1.manager.rawValue {
                 return $0.manager.rawValue < $1.manager.rawValue
             }
-            return $0.name.lowercased() < $1.name.lowercased()
+            let lhsName = $0.name.lowercased()
+            let rhsName = $1.name.lowercased()
+            if lhsName != rhsName { return lhsName < rhsName }
+            return $0.id < $1.id
         }
     }
 }

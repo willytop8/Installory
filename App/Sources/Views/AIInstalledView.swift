@@ -1,45 +1,64 @@
 import InstalloryCore
 import SwiftUI
 
-/// Displays packages whose provenance was attributed to an AI assistant coding session.
-///
-/// Visibility is controlled by the sidebar (orchestrator wires the navigation link):
-/// the link is hidden when `provenanceCollection == false` or when `aiInstalledPackages`
-/// is empty. This view only renders when the user navigated to it, so it always has data.
+/// Displays packages with provenance linked to matching Claude Code sessions.
 struct AIInstalledView: View {
     @Environment(AppCoordinator.self) private var coordinator
 
+    private var analysisEmptyState: AnalysisEmptyState {
+        AnalysisEmptyState.resolve(
+            packageCount: coordinator.packages.count,
+            isScanning: coordinator.isScanning,
+            isDemoMode: coordinator.isDemoMode,
+            scanStatuses: coordinator.scanStatuses
+        )
+    }
+
     /// Packages whose provenance evidence carries a `ClaudeCodeContext`.
-    ///
-    /// Computed locally so the view works without requiring a separate computed
-    /// property on `AppCoordinator` (the orchestrator can add one for sidebar badge
-    /// count, but this view is self-contained).
+    /// Shared with the sidebar through the generation-keyed derived-state cache.
     private var aiInstalledPackages: [Package] {
-        coordinator.packages.filter {
-            wasInstalledByAIAssistant(coordinator.provenanceByPackageId[$0.id])
-        }
+        coordinator.aiInstalledPackages
     }
 
     var body: some View {
-        if aiInstalledPackages.isEmpty {
-            emptyState
-        } else {
-            packageList
+        @Bindable var coordinator = coordinator
+        let allPackages = aiInstalledPackages
+        let visiblePackages = allPackages.matching(query: coordinator.searchQuery)
+
+        Group {
+            if allPackages.isEmpty {
+                emptyState
+            } else if visiblePackages.isEmpty {
+                ContentUnavailableView.search(text: coordinator.searchQuery)
+            } else {
+                packageList(visiblePackages)
+            }
+        }
+        .searchable(
+            text: $coordinator.searchQuery,
+            placement: .toolbar,
+            prompt: "Search AI-attributed packages"
+        )
+        .onChange(of: coordinator.searchQuery) { _, query in
+            let visible = aiInstalledPackages.matching(query: query)
+            guard let selectedID = coordinator.selectedPackage?.id,
+                  !visible.contains(where: { $0.id == selectedID }) else {
+                return
+            }
+            coordinator.selectedPackage = nil
         }
     }
 
     // MARK: - Package list
 
-    private var packageList: some View {
+    private func packageList(_ packages: [Package]) -> some View {
         @Bindable var coordinator = coordinator
 
         return List(
             selection: Binding(
                 get: { coordinator.selectedPackage?.id },
                 set: { id in
-                    coordinator.selectedPackage = id.flatMap { target in
-                        coordinator.packages.first { $0.id == target }
-                    }
+                    coordinator.selectedPackage = id.flatMap(coordinator.package(id:))
                 }
             )
         ) {
@@ -49,7 +68,7 @@ struct AIInstalledView: View {
             .selectionDisabled()
 
             Section {
-                ForEach(aiInstalledPackages) { pkg in
+                ForEach(packages) { pkg in
                     AIInstalledPackageRow(
                         package: pkg,
                         context: coordinator.provenanceByPackageId[pkg.id]?.claudeCodeContext
@@ -70,9 +89,9 @@ struct AIInstalledView: View {
                 .foregroundStyle(.purple)
                 .font(.title3)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(aiInstalledPackages.count) package\(aiInstalledPackages.count == 1 ? "" : "s") installed during AI coding sessions")
+                Text("Evidence links \(aiInstalledPackages.count) package\(aiInstalledPackages.count == 1 ? "" : "s") to AI coding sessions")
                     .fontWeight(.semibold)
-                Text("Based on Claude Code session logs. Absence here doesn\u{2019}t mean a package wasn\u{2019}t AI-installed \u{2014} history may be incomplete.")
+                Text("Based on nearby package timestamps and matching Claude Code Bash events. This is a best-effort attribution, and history may be incomplete.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -83,15 +102,22 @@ struct AIInstalledView: View {
 
     // MARK: - Empty state
 
+    @ViewBuilder
     private var emptyState: some View {
-        ContentUnavailableView {
-            Label("No AI-Attributed Packages", systemImage: "sparkles")
-        } description: {
-            if !coordinator.provenanceCollection {
+        if analysisEmptyState == .noResults,
+           !(coordinator.isDemoMode || coordinator.provenanceCollection) {
+            ContentUnavailableView {
+                Label("Install Tracing Is Off", systemImage: "sparkles")
+            } description: {
                 Text("Turn on \u{201C}Trace how packages were installed\u{201D} in Settings \u{2192} Privacy to detect packages installed during AI coding sessions.")
-            } else {
-                Text("When Installory finds packages installed during Claude Code sessions, they\u{2019}ll appear here.")
             }
+        } else {
+            AnalysisEmptyStateView(
+                state: analysisEmptyState,
+                noResultsTitle: "No AI-Attributed Packages",
+                noResultsSystemImage: "sparkles",
+                noResultsDescription: "The completed scan found no package evidence linked to an AI coding session. Install history may still be incomplete."
+            )
         }
     }
 }
@@ -126,7 +152,7 @@ private struct AIInstalledPackageRow: View {
     @ViewBuilder
     private func attributionDetail(_ ctx: ProvenanceEvidence.ClaudeCodeContext) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Looks like this was installed during a Claude Code session")
+            Text("Evidence suggests this was installed during a Claude Code session")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .italic()
@@ -183,9 +209,9 @@ struct AIBadge: View {
             .background(Color.purple.opacity(0.15))
             .foregroundStyle(Color.purple)
             .clipShape(Capsule())
-            .accessibilityLabel("Installed by AI assistant")
+            .accessibilityLabel("Evidence of an AI-assisted install")
             .accessibilityAddTraits(.isStaticText)
-            .help("Installed during an AI coding session")
+            .help("Installory found matching local Claude Code evidence")
     }
 }
 

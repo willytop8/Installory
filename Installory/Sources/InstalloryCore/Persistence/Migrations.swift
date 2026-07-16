@@ -11,10 +11,19 @@ public enum Migrations {
     ///
     /// Safe to call multiple times — already-applied migrations are skipped.
     public static func run(_ writer: some DatabaseWriter) throws {
+        try makeMigrator().migrate(writer)
+    }
+
+    /// Builds the complete ordered migration chain.
+    ///
+    /// Kept internal so upgrade-path tests can migrate a database to an exact
+    /// previously shipped boundary before applying the remaining migrations.
+    /// Production callers should use ``run(_:)``.
+    static func makeMigrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1_initial", migrate: v1Initial)
         migrator.registerMigration("v2_package_artifact_paths", migrate: v2PackageArtifactPaths)
-        try migrator.migrate(writer)
+        return migrator
     }
 
     // MARK: - Migration bodies
@@ -42,7 +51,7 @@ public enum Migrations {
         try db.execute(sql: "CREATE INDEX idx_packages_name ON packages(name)")
 
         // provenance_evidence — structured signals, stored as JSON payload
-        // collected_at and overall_confidence are extracted as indexed columns
+        // collected_at and overall_confidence are extracted as columns
         // so queries can filter by confidence without deserializing the blob.
         try db.execute(sql: """
             CREATE TABLE provenance_evidence (

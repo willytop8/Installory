@@ -4,7 +4,7 @@ import Foundation
 /// interpreter's `site-packages` directories.
 ///
 /// No Python or `pip` invocation is made. All data comes from reading
-/// `METADATA`, `RECORD`, and `INSTALLER` files directly.
+/// `METADATA`, `RECORD`, `INSTALLER`, and `REQUESTED` files directly.
 ///
 /// Each interpreter's packages are tagged with the interpreter's executable
 /// path as `qualifier`, so `requests` installed under pyenv 3.11 and
@@ -29,34 +29,107 @@ public struct PipScanner: PackageScanner, Sendable {
     // MARK: - PackageScanner
 
     public func isAvailable() async -> Bool {
-        !discovery.discover().isEmpty
+        guard !Task.isCancelled else { return false }
+        let isAvailable = !discovery.discover().isEmpty
+        return !Task.isCancelled && isAvailable
     }
 
     public func scan() async throws -> [Package] {
+        try Task.checkCancellation()
         var seen: Set<String> = []
-        return discovery.discover()
-            .flatMap { packagesFor(interpreter: $0) }
-            .filter { seen.insert($0.id).inserted }
+        var packages: [Package] = []
+        var sizer = BoundedDirectorySizer(directoryAccess: directoryAccess)
+        let interpreters = discovery.discover()
+        try Task.checkCancellation()
+        for interpreter in interpreters {
+            try Task.checkCancellation()
+            let found = try await packagesFor(interpreter: interpreter, sizer: &sizer)
+            packages += found.filter { seen.insert($0.id).inserted }
+        }
+        try Task.checkCancellation()
+        return packages
     }
 
     // MARK: - Private
 
-    private func packagesFor(interpreter: PythonInterpreter) -> [Package] {
-        interpreter.sitePackages.flatMap { packagesIn(sitePackages: $0, interpreter: interpreter) }
+    private func packagesFor(
+        interpreter: PythonInterpreter,
+        sizer: inout BoundedDirectorySizer
+    ) async throws -> [Package] {
+        try Task.checkCancellation()
+        var packages: [Package] = []
+        for sitePackages in interpreter.sitePackages.sorted(by: { $0.path < $1.path }) {
+            try Task.checkCancellation()
+            packages += try await packagesIn(
+                sitePackages: sitePackages,
+                interpreter: interpreter,
+                sizer: &sizer
+            )
+        }
+        try Task.checkCancellation()
+        return packages
     }
 
-    private func packagesIn(sitePackages: URL, interpreter: PythonInterpreter) -> [Package] {
-        let entries = (try? directoryAccess.contentsOfDirectory(at: sitePackages)) ?? []
-        return entries
-            .filter { $0.lastPathComponent.hasSuffix(".dist-info") }
-            .compactMap { makePackage(distInfoDir: $0, interpreter: interpreter) }
+    private func packagesIn(
+        sitePackages: URL,
+        interpreter: PythonInterpreter,
+        sizer: inout BoundedDirectorySizer
+    ) async throws -> [Package] {
+        try Task.checkCancellation()
+        let entries = directoryAccess.directoryContentsOrEmpty(at: sitePackages)
+        try Task.checkCancellation()
+        var packages: [Package] = []
+        for entry in entries.sorted(by: { $0.path < $1.path })
+            where entry.lastPathComponent.hasSuffix(".dist-info") {
+            try Task.checkCancellation()
+            if let package = try await makePackage(
+                distInfoDir: entry,
+                sitePackages: sitePackages,
+                interpreter: interpreter,
+                sizer: &sizer
+            ) {
+                packages.append(package)
+            }
+        }
+        try Task.checkCancellation()
+        return packages
     }
 
-    private func makePackage(distInfoDir: URL, interpreter: PythonInterpreter) -> Package? {
-        guard let distInfo = try? parser.parse(directory: distInfoDir) else { return nil }
+    private func makePackage(
+        distInfoDir: URL,
+        sitePackages: URL,
+        interpreter: PythonInterpreter,
+        sizer: inout BoundedDirectorySizer
+    ) async throws -> Package? {
+        let distInfo: DistInfo
+        do {
+            distInfo = try parser.parse(directory: distInfoDir)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return nil
+        }
+        try Task.checkCancellation()
 
         let executablePath = interpreter.executable.path
-        let deps = distInfo.requiresDist.map(Self.barePackageName)
+        let deps = distInfo.requiresDist.map(PythonRequirement.distributionName)
+        let sizeRoots = try safeRecordRoots(
+            distInfo.recordPaths,
+            sitePackages: sitePackages,
+            interpreter: interpreter
+        )
+        let sizeBytes: Int64?
+        if let sizeRoots, !sizeRoots.isEmpty {
+            let installRoot = interpreter.executable
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+            sizeBytes = try await sizer.measure(
+                sizeRoots,
+                constrainedTo: installRoot
+            ).sizeBytes
+        } else {
+            sizeBytes = nil
+        }
 
         return Package(
             id: "pip:\(executablePath):\(distInfo.name)",
@@ -67,25 +140,77 @@ public struct PipScanner: PackageScanner, Sendable {
             installPath: distInfoDir,
             installedAt: directoryAccess.modificationDate(at: distInfoDir),
             installedAtConfidence: .medium,
-            sizeBytes: nil,
-            // pip has no installed_on_request equivalent; all packages are treated as explicit.
-            isExplicit: true,
+            sizeBytes: sizeBytes,
+            isExplicit: Self.isExplicit(distInfo),
             isReadOnly: interpreter.isSystem,
             dependencies: deps,
             lastSeen: Date()
         )
     }
 
-    /// Extracts the bare package name from a `Requires-Dist` value.
-    ///
-    /// Format: `<name> [(<version_spec>)] [; <env_marker>]`
-    /// Returns only `<name>`, stripping all constraints and markers.
-    private static func barePackageName(_ requiresDist: String) -> String {
-        let trimmed = requiresDist.trimmingCharacters(in: .whitespaces)
-        let stopChars = CharacterSet(charactersIn: "(;").union(.whitespaces)
-        guard let range = trimmed.rangeOfCharacter(from: stopChars) else {
-            return trimmed
+    /// Converts RECORD ownership entries into bounded file measurements. Relative
+    /// `..` components are allowed only while they remain inside this interpreter's
+    /// installation root (for example `../../../bin/tool`). Absolute paths and any
+    /// escaping entry invalidate the whole measurement before filesystem access.
+    private func safeRecordRoots(
+        _ recordPaths: [String],
+        sitePackages: URL,
+        interpreter: PythonInterpreter
+    ) throws -> [SizeRoot]? {
+        guard !recordPaths.isEmpty else { return nil }
+        let installRoot = interpreter.executable
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .standardizedFileURL
+        let resolvedInstallRoot = directoryAccess
+            .resolvingSymlinks(at: installRoot)
+            .standardizedFileURL
+        var seen: Set<String> = []
+        var roots: [SizeRoot] = []
+
+        for recordPath in recordPaths {
+            try Task.checkCancellation()
+            guard !(recordPath as NSString).isAbsolutePath,
+                  !recordPath.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+            else { return nil }
+
+            let candidate = sitePackages
+                .appendingPathComponent(recordPath, isDirectory: false)
+                .standardizedFileURL
+            guard Self.isContained(candidate, in: installRoot) else { return nil }
+            let resolvedCandidate = directoryAccess
+                .resolvingSymlinks(at: candidate)
+                .standardizedFileURL
+            guard Self.isContained(resolvedCandidate, in: resolvedInstallRoot) else {
+                return nil
+            }
+            if seen.insert(candidate.path).inserted {
+                roots.append(.file(candidate))
+            }
         }
-        return String(trimmed[..<range.lowerBound])
+        try Task.checkCancellation()
+        return roots
+    }
+
+    private static func isContained(_ candidate: URL, in root: URL) -> Bool {
+        let rootComponents = root.standardizedFileURL.pathComponents
+        let candidateComponents = candidate.standardizedFileURL.pathComponents
+        return candidateComponents.count >= rootComponents.count
+            && candidateComponents.prefix(rootComponents.count).elementsEqual(rootComponents)
+    }
+
+    /// Applies pip's `REQUESTED` marker contract without turning ambiguous
+    /// legacy metadata into false dependency claims.
+    ///
+    /// Current pip writes `REQUESTED` for user-supplied requirements and omits
+    /// it for dependencies, so absence is meaningful when `INSTALLER` says
+    /// `pip`. Other installers do not necessarily follow that convention, and
+    /// older metadata may omit `INSTALLER` entirely. Those unknown cases stay
+    /// explicit: a false positive here merely asks the user to review a package,
+    /// while a false dependency classification can hide it from cleanup review.
+    private static func isExplicit(_ distInfo: DistInfo) -> Bool {
+        if distInfo.requestedMarkerPresent { return true }
+        if distInfo.installer?.lowercased() == "pip" { return false }
+        return true
     }
 }

@@ -8,6 +8,7 @@ extension PackageManager {
         case .brewCask: "Homebrew Cask"
         case .pip: "pip"
         case .pipx: "pipx"
+        case .uv: "uv tools"
         case .npm: "npm"
         case .cargo: "Cargo"
         case .gem: "RubyGems"
@@ -21,6 +22,7 @@ extension PackageManager {
         case .brewCask: "cask"
         case .pip: "pip"
         case .pipx: "pipx"
+        case .uv: "uv"
         case .npm: "npm"
         case .cargo: "cargo"
         case .gem: "gem"
@@ -32,7 +34,7 @@ extension PackageManager {
     var badgeColor: Color {
         switch self {
         case .brew, .brewCask: Color(red: 0.85, green: 0.55, blue: 0.05)
-        case .pip, .pipx: Color(red: 0.20, green: 0.45, blue: 0.90)
+        case .pip, .pipx, .uv: Color(red: 0.20, green: 0.45, blue: 0.90)
         case .npm: Color(red: 0.85, green: 0.15, blue: 0.15)
         case .cargo: Color(red: 0.60, green: 0.30, blue: 0.10)
         case .gem: Color(red: 0.75, green: 0.10, blue: 0.50)
@@ -43,7 +45,7 @@ extension PackageManager {
     var sidebarSymbol: String {
         switch self {
         case .brew, .brewCask: "shippingbox"
-        case .pip, .pipx: "terminal"
+        case .pip, .pipx, .uv: "terminal"
         case .npm: "globe"
         case .cargo: "shippingbox.fill"
         case .gem: "sparkles"

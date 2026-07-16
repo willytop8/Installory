@@ -46,6 +46,29 @@ struct ProvenanceDAOTests {
         )
     }
 
+    private func makeUpdatedEvidence(
+        packageId: String = "brew::ffmpeg",
+        secret: String? = nil
+    ) -> ProvenanceEvidence {
+        ProvenanceEvidence(
+            packageId: packageId,
+            fsInstallTime: Date(timeIntervalSince1970: 1_723_000_000),
+            fsInstallTimeSource: "INSTALL_RECEIPT.json",
+            installCommand: ProvenanceEvidence.InstallCommandRecord(
+                timestamp: nil,
+                command: secret.map { "PASSWORD=\($0) brew install ffmpeg" }
+                    ?? "brew install ffmpeg",
+                shell: .zsh,
+                cwd: nil
+            ),
+            claudeCodeContext: nil,
+            nearbyProjects: [],
+            coInstalledWithin1h: ["brew::libpng"],
+            overallConfidence: .medium,
+            collectedAt: Date(timeIntervalSince1970: 1_723_200_000)
+        )
+    }
+
     // MARK: - Tests
 
     @Test("upsert then fetch returns the same evidence")
@@ -75,22 +98,7 @@ struct ProvenanceDAOTests {
         let dao = ProvenanceDAO(database: db)
         try await dao.upsert(makeEvidence())
 
-        let updated = ProvenanceEvidence(
-            packageId: "brew::ffmpeg",
-            fsInstallTime: Date(timeIntervalSince1970: 1_723_000_000),
-            fsInstallTimeSource: "INSTALL_RECEIPT.json",
-            installCommand: ProvenanceEvidence.InstallCommandRecord(
-                timestamp: nil,
-                command: "brew install ffmpeg",
-                shell: .zsh,
-                cwd: nil
-            ),
-            claudeCodeContext: nil,
-            nearbyProjects: [],
-            coInstalledWithin1h: ["brew::libpng"],
-            overallConfidence: .medium,
-            collectedAt: Date(timeIntervalSince1970: 1_723_200_000)
-        )
+        let updated = makeUpdatedEvidence()
         try await dao.upsert(updated)
 
         let fetched = try await dao.fetch(packageId: "brew::ffmpeg")
@@ -108,6 +116,94 @@ struct ProvenanceDAOTests {
             ) ?? 0
         }
         #expect(count == 1)
+    }
+
+    @Test("upsertAll inserts and updates a batch with the last duplicate winning")
+    func upsertAllInsertsAndUpdates() async throws {
+        let (db, dir) = try makeDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        for id in ["brew::ffmpeg", "brew::wget", "brew::jq"] {
+            try seedPackage(db: db, id: id)
+        }
+        let dao = ProvenanceDAO(database: db)
+        try await dao.upsert(makeEvidence(packageId: "brew::ffmpeg"))
+        try await dao.upsert(makeEvidence(packageId: "brew::jq"))
+
+        try await dao.upsertAll([
+            makeUpdatedEvidence(packageId: "brew::ffmpeg"),
+            makeEvidence(packageId: "brew::wget"),
+            makeUpdatedEvidence(packageId: "brew::wget"),
+        ])
+
+        let evidence = try await dao.fetchAll()
+        #expect(evidence.map(\.packageId) == ["brew::ffmpeg", "brew::jq", "brew::wget"])
+        #expect(evidence.first { $0.packageId == "brew::ffmpeg" }?.overallConfidence == .medium)
+        #expect(evidence.first { $0.packageId == "brew::jq" }?.overallConfidence == .low)
+        #expect(evidence.first { $0.packageId == "brew::wget" }?.overallConfidence == .medium)
+    }
+
+    @Test("upsertAll rolls back the entire batch on a foreign-key failure")
+    func upsertAllRollsBackAtomically() async throws {
+        let (db, dir) = try makeDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try seedPackage(db: db, id: "brew::ffmpeg")
+        let dao = ProvenanceDAO(database: db)
+        try await dao.upsert(makeEvidence())
+
+        await #expect(throws: (any Error).self) {
+            try await dao.upsertAll([
+                makeUpdatedEvidence(),
+                makeEvidence(packageId: "brew::missing-package"),
+            ])
+        }
+
+        let evidence = try await dao.fetchAll()
+        #expect(evidence.count == 1)
+        #expect(evidence.first?.packageId == "brew::ffmpeg")
+        #expect(evidence.first?.overallConfidence == .low)
+        #expect(evidence.first?.installCommand == nil)
+    }
+
+    @Test("fetchAll returns every row ordered by package ID")
+    func fetchAllReturnsDeterministicBulkRead() async throws {
+        let (db, dir) = try makeDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        for id in ["npm::typescript", "brew::ffmpeg", "cargo::ripgrep"] {
+            try seedPackage(db: db, id: id)
+        }
+        let dao = ProvenanceDAO(database: db)
+        try await dao.upsertAll([
+            makeEvidence(packageId: "npm::typescript"),
+            makeEvidence(packageId: "brew::ffmpeg"),
+            makeEvidence(packageId: "cargo::ripgrep"),
+        ])
+
+        let evidence = try await dao.fetchAll()
+        #expect(evidence.map(\.packageId) == [
+            "brew::ffmpeg",
+            "cargo::ripgrep",
+            "npm::typescript",
+        ])
+    }
+
+    @Test("upsertAll with empty input leaves existing evidence unchanged")
+    func upsertAllEmptyInputIsNoOp() async throws {
+        let (db, dir) = try makeDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try seedPackage(db: db, id: "brew::ffmpeg")
+        let dao = ProvenanceDAO(database: db)
+        try await dao.upsert(makeEvidence())
+
+        try await dao.upsertAll([])
+
+        let evidence = try await dao.fetchAll()
+        #expect(evidence.count == 1)
+        #expect(evidence.first?.packageId == "brew::ffmpeg")
+        #expect(evidence.first?.overallConfidence == .low)
     }
 
     @Test("delete removes the evidence for the given packageId")
@@ -150,5 +246,77 @@ struct ProvenanceDAOTests {
         let dao = ProvenanceDAO(database: db)
         let result = try await dao.fetch(packageId: "brew::does-not-exist")
         #expect(result == nil)
+    }
+
+    @Test("persistence boundary redacts secrets before writing payload")
+    func persistenceRedactsSecrets() async throws {
+        let (db, dir) = try makeDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try seedPackage(db: db, id: "brew::ffmpeg")
+        let raw = ProvenanceEvidence(
+            packageId: "brew::ffmpeg",
+            fsInstallTime: nil,
+            fsInstallTimeSource: nil,
+            installCommand: ProvenanceEvidence.InstallCommandRecord(
+                timestamp: nil,
+                command: "PASSWORD=database-secret brew install ffmpeg",
+                shell: .zsh,
+                cwd: nil
+            ),
+            claudeCodeContext: nil,
+            nearbyProjects: [],
+            coInstalledWithin1h: [],
+            overallConfidence: .medium,
+            collectedAt: .now
+        )
+
+        let dao = ProvenanceDAO(database: db)
+        try await dao.upsert(raw)
+
+        let payload = try await db.pool.read { conn in
+            try String.fetchOne(
+                conn,
+                sql: "SELECT payload FROM provenance_evidence WHERE package_id = ?",
+                arguments: ["brew::ffmpeg"]
+            )
+        }
+        let stored = try #require(payload)
+        #expect(!stored.contains("database-secret"))
+        #expect(stored.contains("[REDACTED]"))
+
+        let fetched = try #require(try await dao.fetch(packageId: "brew::ffmpeg"))
+        #expect(fetched.installCommand?.command == "PASSWORD=[REDACTED] brew install ffmpeg")
+    }
+
+    @Test("upsertAll applies the persistence redaction boundary to every row")
+    func upsertAllRedactsSecrets() async throws {
+        let (db, dir) = try makeDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try seedPackage(db: db, id: "brew::ffmpeg")
+        try seedPackage(db: db, id: "brew::wget")
+        let dao = ProvenanceDAO(database: db)
+
+        try await dao.upsertAll([
+            makeUpdatedEvidence(packageId: "brew::ffmpeg", secret: "first-secret"),
+            makeUpdatedEvidence(packageId: "brew::wget", secret: "second-secret"),
+        ])
+
+        let payloads = try await db.pool.read { conn in
+            try String.fetchAll(
+                conn,
+                sql: "SELECT payload FROM provenance_evidence ORDER BY package_id"
+            )
+        }
+        #expect(payloads.count == 2)
+        #expect(payloads.allSatisfy { $0.contains("[REDACTED]") })
+        #expect(payloads.allSatisfy { !$0.contains("first-secret") })
+        #expect(payloads.allSatisfy { !$0.contains("second-secret") })
+
+        let evidence = try await dao.fetchAll()
+        #expect(evidence.allSatisfy {
+            $0.installCommand?.command == "PASSWORD=[REDACTED] brew install ffmpeg"
+        })
     }
 }

@@ -6,6 +6,22 @@ import Foundation
 struct NarrativeRendererTests {
     private let renderer = NarrativeRenderer()
 
+    @Test("renderer redacts legacy unredacted evidence")
+    func rendererRedactsLegacyEvidence() {
+        let command = ProvenanceEvidence.InstallCommandRecord(
+            timestamp: nil,
+            command: "TOKEN=legacy-secret brew install ffmpeg",
+            shell: .zsh,
+            cwd: nil
+        )
+        let evidence = makeEvidence(command: command)
+
+        let output = renderer.render(evidence, package: makePackage())
+
+        #expect(!output.contains("legacy-secret"))
+        #expect(output.contains("TOKEN=[REDACTED] brew install ffmpeg"))
+    }
+
     // MARK: - Helpers
 
     /// A fixed "old" date well outside the 14-day relative window (~Aug 14, 2024).
@@ -48,7 +64,8 @@ struct NarrativeRendererTests {
         fsDate: Date? = nil,
         command: ProvenanceEvidence.InstallCommandRecord? = nil,
         context: ProvenanceEvidence.ClaudeCodeContext? = nil,
-        coInstalled: [String] = []
+        coInstalled: [String] = [],
+        coInstalledTotalCount: Int? = nil
     ) -> ProvenanceEvidence {
         ProvenanceEvidence(
             packageId: "brew::ffmpeg",
@@ -58,6 +75,7 @@ struct NarrativeRendererTests {
             claudeCodeContext: context,
             nearbyProjects: [],
             coInstalledWithin1h: coInstalled,
+            coInstalledWithin1hTotalCount: coInstalledTotalCount,
             overallConfidence: .low,
             collectedAt: Date(timeIntervalSince1970: 1_723_700_000)
         )
@@ -71,7 +89,7 @@ struct NarrativeRendererTests {
         let evidence = makeEvidence(context: context)
         let result = renderer.render(evidence, package: makePackage())
         #expect(result.hasPrefix("Installed "))
-        #expect(result.contains("working in /Users/will/projects/podcast-app"))
+        #expect(result.contains("working in ~/projects/podcast-app"))
         #expect(result.contains("That session was about: Building a podcast transcription script."))
         #expect(!result.contains("You'd asked:"))
     }
@@ -192,6 +210,21 @@ struct NarrativeRendererTests {
             ]
         )
         #expect(result.contains("You also installed ffplay, libpng, and pydub around the same time."))
+    }
+
+    @Test("bounded co-installed sample reports the omitted package count")
+    func coInstalledBoundedSample() {
+        let evidence = makeEvidence(
+            fsDate: oldDate,
+            coInstalled: ["brew::ffplay", "brew::libpng"],
+            coInstalledTotalCount: 12
+        )
+        let result = renderer.render(
+            evidence,
+            package: makePackage(),
+            nameByPackageId: ["brew::ffplay": "ffplay", "brew::libpng": "libpng"]
+        )
+        #expect(result.contains("You also installed ffplay and libpng and 10 more around the same time."))
     }
 
     // MARK: - Date formatting

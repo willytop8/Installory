@@ -182,7 +182,7 @@ struct SnapshotDiffTests {
         let ids = result.map(\.id)
         #expect(Set(ids).count == ids.count, "IDs must be unique")
         for mp in result {
-            let expected = "\(mp.manager.rawValue):\(mp.package.qualifier ?? ""):\(mp.package.name)"
+            let expected = "\(mp.manager.rawValue):\(mp.package.qualifier ?? ""):\(mp.package.name):\(mp.package.version)"
             #expect(mp.id == expected)
         }
     }

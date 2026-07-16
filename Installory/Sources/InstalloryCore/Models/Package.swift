@@ -1,22 +1,25 @@
 import Foundation
 import GRDB
 
-/// A single installed package identified by `(manager, qualifier, name)`.
+/// A single installed package, normally identified by `(manager, qualifier, name)`.
 ///
-/// Identity is the `id` string with format `"{manager}:{qualifier}:{name}"`.
+/// Most IDs use `"{manager}:{qualifier}:{name}"`; managers may append another
+/// stable component when their installation model requires it.
 /// The qualifier disambiguates package-manager scopes such as pip interpreters,
-/// npm global roots, or Ruby gem specification directories.
+/// npm global roots, or Ruby gem specification directories. RubyGems additionally
+/// includes version because several versions can coexist in one specification root.
 ///
 /// Examples:
 /// - `brew::ffmpeg`
 /// - `brewCask::visual-studio-code`
 /// - `pip:/Users/x/.pyenv/versions/3.11.7/bin/python:requests`
-/// - `pipx::black`
+/// - `pipx:/Users/x/.local/share/pipx/venvs/black:black`
+/// - `uv:/Users/x/.local/share/uv/tools/ruff:ruff`
 /// - `cargo::ripgrep`
-/// - `gem:/Users/x/.rbenv/versions/3.2.2/lib/ruby/gems/3.2.0/specifications:bundler`
+/// - `gem:/Users/x/.rbenv/versions/3.2.2/lib/ruby/gems/3.2.0/specifications:bundler:2.5.6`
 /// - `mas::com.apple.dt.Xcode`
 public struct Package: Identifiable, Codable, Equatable, Hashable, Sendable {
-    /// Stable row identity in the form `"{manager}:{qualifier}:{name}"`.
+    /// Stable row identity, with manager-specific disambiguation where required.
     public let id: String
     public let manager: PackageManager
     /// Manager-specific scope, such as a pip interpreter or Ruby specifications directory.
@@ -28,6 +31,7 @@ public struct Package: Identifiable, Codable, Equatable, Hashable, Sendable {
     /// Best-effort install timestamp. See `installedAtConfidence` for reliability.
     public let installedAt: Date?
     public let installedAtConfidence: Confidence
+    /// Best-effort logical installed payload size; nil when measurement is incomplete.
     public let sizeBytes: Int64?
     /// True when the package was installed explicitly by the user, not pulled in as a dependency.
     public let isExplicit: Bool
@@ -35,7 +39,7 @@ public struct Package: Identifiable, Codable, Equatable, Hashable, Sendable {
     public let isReadOnly: Bool
     /// Names of direct dependencies within the same manager.
     public let dependencies: [String]
-    /// Paths named by package-manager artifacts. Currently populated for Homebrew casks.
+    /// Paths named by package-manager artifacts, including Homebrew cask files and uv entrypoints.
     public let artifactPaths: [String]?
     /// Timestamp of the most recent scan that observed this package.
     public let lastSeen: Date

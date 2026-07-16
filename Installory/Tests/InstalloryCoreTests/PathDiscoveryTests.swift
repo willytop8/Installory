@@ -9,7 +9,7 @@ struct PathDiscoveryTests {
 
     /// Returns a `PathDiscovery` whose filesystem is exactly `existing`.
     private func discovery(existing: Set<String>) -> PathDiscovery {
-        PathDiscovery { existing.contains($0) }
+        PathDiscovery(environment: .empty) { existing.contains($0) }
     }
 
     /// Returns a `PathDiscovery` whose home is `fakeHome` and whose
@@ -18,14 +18,11 @@ struct PathDiscoveryTests {
     /// `ManagerDirectory.candidatePath(home:)` is tested through this helper;
     /// tests don't hard-code real user home paths.
     private func discovery(home: String, existing: Set<String>) -> PathDiscovery {
-        PathDiscovery { path in
-            // Redirect home-relative paths to fake home so tests are reproducible.
-            let adjusted = path.replacingOccurrences(
-                of: FileManager.default.homeDirectoryForCurrentUser.path,
-                with: home
-            )
-            return existing.contains(adjusted) || existing.contains(path)
-        }
+        PathDiscovery(
+            environment: .empty,
+            homeDirectory: URL(fileURLWithPath: home),
+            checkExists: existing.contains
+        )
     }
 
     // MARK: - Homebrew prefixes
@@ -142,6 +139,32 @@ struct PathDiscoveryTests {
         for kind in ManagerDirectory.allCases {
             #expect(d.locate(kind) == nil, "Expected nil for \(kind)")
         }
+    }
+
+    @Test("CORE-08: environment roots take precedence in shared path discovery")
+    func environmentRootsTakePrecedence() {
+        let environment = PackageManagerEnvironment(values: [
+            "CARGO_HOME": "/Volumes/Dev/cargo",
+            "PYENV_ROOT": "/Volumes/Dev/pyenv",
+            "NVM_DIR": "/Volumes/Dev/nvm",
+            "PIPX_HOME": "/Volumes/Dev/pipx",
+        ])
+        let paths: Set<String> = [
+            "/Volumes/Dev/cargo",
+            "/Volumes/Dev/pyenv/versions",
+            "/Volumes/Dev/nvm/versions/node",
+            "/Volumes/Dev/pipx/venvs",
+        ]
+        let discovery = PathDiscovery(
+            environment: environment,
+            homeDirectory: URL(fileURLWithPath: Self.fakeHome),
+            checkExists: paths.contains
+        )
+
+        #expect(discovery.locate(.cargoHome)?.path == "/Volumes/Dev/cargo")
+        #expect(discovery.locate(.pyenvVersions)?.path == "/Volumes/Dev/pyenv/versions")
+        #expect(discovery.locate(.nvmNode)?.path == "/Volumes/Dev/nvm/versions/node")
+        #expect(discovery.locate(.pipxVenvs)?.path == "/Volumes/Dev/pipx/venvs")
     }
 
     // MARK: - candidatePath

@@ -73,9 +73,9 @@ struct PackageDetailView: View {
                             .font(.system(.body, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
-                        let exists = FileManager.default.fileExists(atPath: installPath.path)
+                        let exists = coordinator.packageInstallPathExists(at: installPath)
                         Button("Reveal in Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([installPath])
+                            coordinator.revealPackageInstallPath(at: installPath)
                         }
                         .buttonStyle(.borderless)
                         .font(.callout)
@@ -114,16 +114,14 @@ struct PackageDetailView: View {
             Text("How it was installed")
                 .font(.headline)
 
-            if !coordinator.provenanceCollection {
+            if !(coordinator.isDemoMode || coordinator.provenanceCollection) {
                 // Provenance is off — show a subtle nudge rather than an empty section.
                 Text("Turn on provenance tracing in Settings \u{2192} Privacy to see how this was installed.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else if let evidence = coordinator.provenanceByPackageId[package.id] {
                 // Evidence found — render the narrative sentence.
-                let nameByPackageId = Dictionary(
-                    uniqueKeysWithValues: coordinator.packages.map { ($0.id, $0.name) }
-                )
+                let nameByPackageId = coordinator.inventoryIndex.packageNamesByID
                 Text(NarrativeRenderer().render(evidence, package: package, nameByPackageId: nameByPackageId))
                     .font(.callout)
                     .foregroundStyle(.secondary)

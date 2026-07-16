@@ -1,0 +1,1 @@
+# Anonymized installed-gem payload.

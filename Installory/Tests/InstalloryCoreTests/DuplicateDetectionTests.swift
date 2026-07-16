@@ -96,6 +96,23 @@ struct DuplicateDetectionTests {
         #expect(groups[0].name.lowercased() == "alpha")
         #expect(groups[1].name.lowercased() == "zebra")
     }
+
+    @Test("APP25-022: duplicate groups and members ignore input ordering")
+    func duplicateOrderingUsesStablePackageIdentity() {
+        let packages = [
+            pkg("Node", manager: .npm),
+            pkg("node", manager: .cargo),
+            pkg("Node", manager: .brew),
+        ]
+
+        let forward = packages.crossManagerDuplicates()
+        let reversed = Array(packages.reversed()).crossManagerDuplicates()
+
+        #expect(forward.map(\.name) == reversed.map(\.name))
+        #expect(forward.map { $0.packages.map(\.id) }
+            == reversed.map { $0.packages.map(\.id) })
+        #expect(forward.first?.packages.map(\.id) == forward.first?.packages.map(\.id).sorted())
+    }
 }
 
 // MARK: - Multi-location install detection (Spec 03)
@@ -239,6 +256,21 @@ struct MultiLocationInstallTests {
         #expect(r1 == r2)
     }
 
+    @Test("APP25-022: multi-location members ignore input ordering")
+    func multiLocationMembersUseStablePackageIdentity() {
+        let packages = [
+            pkg("Requests", manager: .pip, qualifier: "/python/3.12"),
+            pkg("requests", manager: .pip, qualifier: "/python/3.11"),
+        ]
+
+        let forward = packages.multiLocationInstalls()
+        let reversed = Array(packages.reversed()).multiLocationInstalls()
+
+        #expect(forward.map(\.id) == reversed.map(\.id))
+        #expect(forward.map { $0.packages.map(\.id) }
+            == reversed.map { $0.packages.map(\.id) })
+    }
+
     @Test("Multiple managers with multi-location installs sorted by manager then name")
     func sortedByManagerThenName() {
         let packages = [
@@ -254,6 +286,21 @@ struct MultiLocationInstallTests {
         // gem < pip alphabetically
         #expect(groups[0].manager == .gem)
         #expect(groups[1].manager == .pip)
+    }
+
+    @Test("APP25-018: same-name multi-location groups have manager-qualified identities")
+    func sameNameGroupsHaveDistinctManagerQualifiedIdentities() {
+        let packages = [
+            pkg("tool", manager: .pip, qualifier: "/python/3.11"),
+            pkg("tool", manager: .pip, qualifier: "/python/3.12"),
+            pkg("tool", manager: .gem, qualifier: "/ruby/3.2"),
+            pkg("tool", manager: .gem, qualifier: "/ruby/3.3"),
+        ]
+
+        let groups = packages.multiLocationInstalls()
+
+        #expect(groups.count == 2)
+        #expect(Set(groups.map(\.id)) == ["gem::tool", "pip::tool"])
     }
 
     @Test("Empty package list → empty multi-location result")

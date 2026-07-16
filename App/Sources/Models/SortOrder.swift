@@ -31,22 +31,256 @@ extension [Package] {
     func sorted(by order: PackageSortOrder) -> [Package] {
         switch order {
         case .recentlyInstalled:
-            sorted { ($0.installedAt ?? .distantPast) > ($1.installedAt ?? .distantPast) }
+            sorted {
+                let lhsDate = $0.installedAt ?? .distantPast
+                let rhsDate = $1.installedAt ?? .distantPast
+                return lhsDate != rhsDate ? lhsDate > rhsDate : $0.id < $1.id
+            }
         case .nameAscending:
-            sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            sorted {
+                let comparison = $0.name.localizedCaseInsensitiveCompare($1.name)
+                return comparison == .orderedSame
+                    ? $0.id < $1.id
+                    : comparison == .orderedAscending
+            }
         case .managerThenName:
             sorted {
                 if $0.manager.rawValue != $1.manager.rawValue {
                     return $0.manager.rawValue < $1.manager.rawValue
                 }
-                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                let comparison = $0.name.localizedCaseInsensitiveCompare($1.name)
+                return comparison == .orderedSame
+                    ? $0.id < $1.id
+                    : comparison == .orderedAscending
             }
         case .largestFirst:
-            sorted { ($0.sizeBytes ?? -1) > ($1.sizeBytes ?? -1) }
+            sorted {
+                let lhsSize = $0.sizeBytes ?? -1
+                let rhsSize = $1.sizeBytes ?? -1
+                return lhsSize != rhsSize ? lhsSize > rhsSize : $0.id < $1.id
+            }
         case .oldestFirst:
-            sorted { ($0.installedAt ?? .distantFuture) < ($1.installedAt ?? .distantFuture) }
+            sorted {
+                let lhsDate = $0.installedAt ?? .distantFuture
+                let rhsDate = $1.installedAt ?? .distantFuture
+                return lhsDate != rhsDate ? lhsDate < rhsDate : $0.id < $1.id
+            }
         case .cleanupCandidates:
-            cleanupScores(for: self, now: Date()).map(\.package)
+            cleanupScores(for: self, now: Date())
+                .sorted { lhs, rhs in
+                    let lhsUnknown = lhs.bucket == .unknown
+                    let rhsUnknown = rhs.bucket == .unknown
+                    if lhsUnknown != rhsUnknown {
+                        return !lhsUnknown
+                    }
+                    if lhs.score != rhs.score {
+                        return lhs.score > rhs.score
+                    }
+                    return lhs.package.id < rhs.package.id
+                }
+                .map(\.package)
         }
+    }
+}
+
+// MARK: - Generation-keyed inventory derivation
+
+/// One-pass primitives reused by sidebar counts and identity lookups.
+struct InventoryIndex {
+    let packagesByID: [String: Package]
+    let packageNamesByID: [String: String]
+    let managerCounts: [PackageManager: Int]
+    let packageManagers: Set<PackageManager>
+    let readOnlyCount: Int
+}
+
+/// The duplicate view's inventory- and PATH-derived presentation groups.
+struct DuplicateAnalysisState {
+    let active: [(group: DuplicateGroup, standings: [String: PathStanding])]
+    let potential: [(group: DuplicateGroup, standings: [String: PathStanding])]
+    let benign: [(group: DuplicateGroup, standings: [String: PathStanding])]
+    let multiLocation: [MultiLocationGroup]
+}
+
+/// Deterministic instrumentation for regressions around cache reuse/invalidation.
+struct InventoryDerivedComputationCounts: Equatable {
+    fileprivate(set) var inventoryIndex = 0
+    fileprivate(set) var duplicateGroups = 0
+    fileprivate(set) var multiLocationGroups = 0
+    fileprivate(set) var orphanedPackages = 0
+    fileprivate(set) var diskUsageSummary = 0
+    fileprivate(set) var aiInstalledPackages = 0
+    fileprivate(set) var duplicatePathAnalysis = 0
+}
+
+/// A single generation seam for whole-inventory derived state.
+///
+/// `AppCoordinator` owns one instance and invalidates it from `packages` and
+/// provenance property observers. Individual results remain lazy so opening a
+/// simple package list does not eagerly compute every analysis.
+@MainActor
+final class InventoryDerivedCache {
+    private var inventoryGeneration = 0
+    private var provenanceGeneration = 0
+
+    private var cachedIndex: (generation: Int, value: InventoryIndex)?
+    private var cachedDuplicateGroups: (generation: Int, value: [DuplicateGroup])?
+    private var cachedMultiLocationGroups: (generation: Int, value: [MultiLocationGroup])?
+    private var cachedOrphans: (generation: Int, value: [Package])?
+    private var cachedDiskUsageSummary: (generation: Int, value: DiskUsageSummary)?
+    private var cachedAI: (
+        inventoryGeneration: Int,
+        provenanceGeneration: Int,
+        value: [Package]
+    )?
+    private var cachedDuplicateAnalysis: (
+        generation: Int,
+        pathComponents: [String],
+        value: DuplicateAnalysisState
+    )?
+
+    private(set) var computationCounts = InventoryDerivedComputationCounts()
+
+    func invalidateInventory() {
+        inventoryGeneration &+= 1
+        cachedIndex = nil
+        cachedDuplicateGroups = nil
+        cachedMultiLocationGroups = nil
+        cachedOrphans = nil
+        cachedDiskUsageSummary = nil
+        cachedAI = nil
+        cachedDuplicateAnalysis = nil
+    }
+
+    func invalidateProvenance() {
+        provenanceGeneration &+= 1
+        cachedAI = nil
+    }
+
+    func index(for packages: [Package]) -> InventoryIndex {
+        if let cachedIndex, cachedIndex.generation == inventoryGeneration {
+            return cachedIndex.value
+        }
+
+        computationCounts.inventoryIndex += 1
+        var packagesByID: [String: Package] = [:]
+        var packageNamesByID: [String: String] = [:]
+        var managerCounts: [PackageManager: Int] = [:]
+        var packageManagers: Set<PackageManager> = []
+        var readOnlyCount = 0
+        packagesByID.reserveCapacity(packages.count)
+        packageNamesByID.reserveCapacity(packages.count)
+        for package in packages {
+            packagesByID[package.id] = package
+            packageNamesByID[package.id] = package.name
+            managerCounts[package.manager, default: 0] += 1
+            packageManagers.insert(package.manager)
+            if package.isReadOnly {
+                readOnlyCount += 1
+            }
+        }
+
+        let value = InventoryIndex(
+            packagesByID: packagesByID,
+            packageNamesByID: packageNamesByID,
+            managerCounts: managerCounts,
+            packageManagers: packageManagers,
+            readOnlyCount: readOnlyCount
+        )
+        cachedIndex = (inventoryGeneration, value)
+        return value
+    }
+
+    func duplicateGroups(for packages: [Package]) -> [DuplicateGroup] {
+        if let cachedDuplicateGroups,
+           cachedDuplicateGroups.generation == inventoryGeneration {
+            return cachedDuplicateGroups.value
+        }
+        computationCounts.duplicateGroups += 1
+        let value = packages.crossManagerDuplicates()
+        cachedDuplicateGroups = (inventoryGeneration, value)
+        return value
+    }
+
+    func multiLocationGroups(for packages: [Package]) -> [MultiLocationGroup] {
+        if let cachedMultiLocationGroups,
+           cachedMultiLocationGroups.generation == inventoryGeneration {
+            return cachedMultiLocationGroups.value
+        }
+        computationCounts.multiLocationGroups += 1
+        let value = packages.multiLocationInstalls()
+        cachedMultiLocationGroups = (inventoryGeneration, value)
+        return value
+    }
+
+    func orphanedPackages(for packages: [Package]) -> [Package] {
+        if let cachedOrphans, cachedOrphans.generation == inventoryGeneration {
+            return cachedOrphans.value
+        }
+        computationCounts.orphanedPackages += 1
+        let value = packages.orphanedPackages()
+        cachedOrphans = (inventoryGeneration, value)
+        return value
+    }
+
+    func diskUsageSummary(for packages: [Package]) -> DiskUsageSummary {
+        if let cachedDiskUsageSummary,
+           cachedDiskUsageSummary.generation == inventoryGeneration {
+            return cachedDiskUsageSummary.value
+        }
+        computationCounts.diskUsageSummary += 1
+        let value = InstalloryCore.diskUsageSummary(for: packages)
+        cachedDiskUsageSummary = (inventoryGeneration, value)
+        return value
+    }
+
+    func aiInstalledPackages(
+        for packages: [Package],
+        provenance: [String: ProvenanceEvidence]
+    ) -> [Package] {
+        if let cachedAI,
+           cachedAI.inventoryGeneration == inventoryGeneration,
+           cachedAI.provenanceGeneration == provenanceGeneration {
+            return cachedAI.value
+        }
+        computationCounts.aiInstalledPackages += 1
+        let value = packages.filter {
+            wasInstalledByAIAssistant(provenance[$0.id])
+        }
+        cachedAI = (inventoryGeneration, provenanceGeneration, value)
+        return value
+    }
+
+    func duplicateAnalysis(
+        for packages: [Package],
+        pathComponents: [String]
+    ) -> DuplicateAnalysisState {
+        if let cachedDuplicateAnalysis,
+           cachedDuplicateAnalysis.generation == inventoryGeneration,
+           cachedDuplicateAnalysis.pathComponents == pathComponents {
+            return cachedDuplicateAnalysis.value
+        }
+
+        computationCounts.duplicatePathAnalysis += 1
+        var active: [(DuplicateGroup, [String: PathStanding])] = []
+        var potential: [(DuplicateGroup, [String: PathStanding])] = []
+        var benign: [(DuplicateGroup, [String: PathStanding])] = []
+        for group in duplicateGroups(for: packages) {
+            let standings = resolvePathStandings(for: group, path: pathComponents)
+            switch severity(for: group, standings: standings) {
+            case .active: active.append((group, standings))
+            case .potential: potential.append((group, standings))
+            case .benign: benign.append((group, standings))
+            }
+        }
+
+        let value = DuplicateAnalysisState(
+            active: active,
+            potential: potential,
+            benign: benign,
+            multiLocation: multiLocationGroups(for: packages)
+        )
+        cachedDuplicateAnalysis = (inventoryGeneration, pathComponents, value)
+        return value
     }
 }

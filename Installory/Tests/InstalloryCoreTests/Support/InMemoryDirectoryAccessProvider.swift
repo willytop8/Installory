@@ -10,21 +10,30 @@ struct InMemoryDirectoryAccessProvider: DirectoryAccessProvider, Sendable {
     private let fileData: [String: Data]
     private let modificationDates: [String: Date]
     private let symlinks: [String: String]
+    private let logicalSizes: [String: Int64]
+    private let unreadablePaths: Set<String>
 
     private init(
         contents: [String: [URL]],
         fileData: [String: Data],
         modificationDates: [String: Date],
-        symlinks: [String: String]
+        symlinks: [String: String],
+        logicalSizes: [String: Int64],
+        unreadablePaths: Set<String>
     ) {
         self.contents = contents
         self.fileData = fileData
         self.modificationDates = modificationDates
         self.symlinks = symlinks
+        self.logicalSizes = logicalSizes
+        self.unreadablePaths = unreadablePaths
     }
 
     func contentsOfDirectory(at url: URL) throws -> [URL] {
         let resolved = resolvingSymlinks(at: url)
+        guard !unreadablePaths.contains(resolved.path) else {
+            throw CocoaError(.fileReadNoPermission)
+        }
         guard let kids = contents[resolved.path] else {
             throw CocoaError(.fileNoSuchFile)
         }
@@ -33,6 +42,9 @@ struct InMemoryDirectoryAccessProvider: DirectoryAccessProvider, Sendable {
 
     func data(contentsOf url: URL) throws -> Data {
         let resolved = resolvingSymlinks(at: url)
+        guard !unreadablePaths.contains(resolved.path) else {
+            throw CocoaError(.fileReadNoPermission)
+        }
         guard let bytes = fileData[resolved.path] else {
             throw CocoaError(.fileNoSuchFile)
         }
@@ -47,6 +59,24 @@ struct InMemoryDirectoryAccessProvider: DirectoryAccessProvider, Sendable {
     func modificationDate(at url: URL) -> Date? {
         let resolved = resolvingSymlinks(at: url)
         return modificationDates[resolved.path]
+    }
+
+    func metadata(at url: URL) throws -> FileSystemItemMetadata {
+        let parent = resolvingSymlinks(at: url.deletingLastPathComponent())
+        let finalURL = parent.appendingPathComponent(url.lastPathComponent)
+        guard !unreadablePaths.contains(finalURL.path) else {
+            throw CocoaError(.fileReadNoPermission)
+        }
+        if symlinks[finalURL.path] != nil {
+            return FileSystemItemMetadata(kind: .symbolicLink)
+        }
+        if let size = logicalSizes[finalURL.path] {
+            return FileSystemItemMetadata(kind: .regularFile, logicalSizeBytes: size)
+        }
+        if contents[finalURL.path] != nil {
+            return FileSystemItemMetadata(kind: .directory)
+        }
+        throw CocoaError(.fileNoSuchFile)
     }
 
     /// Resolves symlinks component-by-component, matching real `FileManager` behaviour.
@@ -89,31 +119,61 @@ extension InMemoryDirectoryAccessProvider {
         private var fileData: [String: Data] = [:]
         private var modificationDates: [String: Date] = [:]
         private var symlinks: [String: String] = [:]
+        private var logicalSizes: [String: Int64] = [:]
+        private var unreadablePaths: Set<String> = []
 
-        mutating func addFile(at url: URL, data: Data, modificationDate: Date? = nil) {
+        mutating func addFile(
+            at url: URL,
+            data: Data,
+            modificationDate: Date? = nil,
+            logicalSizeBytes: Int64? = nil
+        ) {
             fileData[url.path] = data
+            logicalSizes[url.path] = logicalSizeBytes ?? Int64(data.count)
             if let date = modificationDate { modificationDates[url.path] = date }
-            addToContents(child: url, parent: url.deletingLastPathComponent())
+            addToContents(child: url)
         }
 
         /// Registers a symlink so that `resolvingSymlinks(at:)` and `fileExists(at:)` follow it.
         mutating func addSymlink(at url: URL, target: URL) {
             symlinks[url.path] = target.path
-            addToContents(child: url, parent: url.deletingLastPathComponent())
+            addToContents(child: url)
         }
 
-        private mutating func addToContents(child: URL, parent: URL) {
-            let parentPath = parent.path
-            if contents[parentPath] == nil {
-                contents[parentPath] = []
+        mutating func addDirectory(at url: URL) {
+            if contents[url.path] == nil {
+                contents[url.path] = []
             }
-            if !contents[parentPath]!.contains(child) {
-                contents[parentPath]!.append(child)
+            addToContents(child: url)
+        }
+
+        mutating func makeUnreadable(at url: URL) {
+            unreadablePaths.insert(url.path)
+        }
+
+        private mutating func addToContents(child: URL) {
+            var currentChild = URL(fileURLWithPath: child.standardizedFileURL.path)
+            guard var parentPath = Self.parentPath(of: currentChild.path) else { return }
+
+            while true {
+                var children = contents[parentPath, default: []]
+                if !children.contains(where: { $0.path == currentChild.path }) {
+                    children.append(currentChild)
+                    contents[parentPath] = children
+                }
+
+                guard parentPath != "/" else { return }
+                currentChild = URL(fileURLWithPath: parentPath, isDirectory: true)
+                guard let nextParent = Self.parentPath(of: parentPath) else { return }
+                parentPath = nextParent
             }
-            let grandparent = parent.deletingLastPathComponent()
-            if grandparent.path != parent.path {
-                addToContents(child: parent, parent: grandparent)
-            }
+        }
+
+        private static func parentPath(of path: String) -> String? {
+            let components = path.split(separator: "/", omittingEmptySubsequences: true)
+            guard !components.isEmpty else { return nil }
+            guard components.count > 1 else { return "/" }
+            return "/" + components.dropLast().joined(separator: "/")
         }
 
         func build() -> InMemoryDirectoryAccessProvider {
@@ -121,8 +181,11 @@ extension InMemoryDirectoryAccessProvider {
                 contents: contents,
                 fileData: fileData,
                 modificationDates: modificationDates,
-                symlinks: symlinks
+                symlinks: symlinks,
+                logicalSizes: logicalSizes,
+                unreadablePaths: unreadablePaths
             )
         }
+
     }
 }

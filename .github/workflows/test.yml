@@ -13,11 +13,14 @@ jobs:
   test:
     name: InstalloryCore
     # Package.swift declares swift-tools-version 6.1, which needs Xcode 16.3+.
-    # The macos-14 image ships an older toolchain and cannot resolve the manifest.
+    # The macOS 15 image supplies a compatible Xcode toolchain.
     runs-on: macos-15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      - name: Check product invariants
+        run: ./scripts/check-invariants.sh
 
       - name: Show toolchain
         run: swift --version
@@ -26,6 +29,63 @@ jobs:
         working-directory: Installory
         run: swift build
 
-      - name: Test
+      - name: Test XCTest
         working-directory: Installory
-        run: swift test
+        run: swift test --no-parallel --disable-swift-testing
+
+      - name: Test Swift Testing
+        working-directory: Installory
+        run: swift test --no-parallel --disable-xctest
+
+  app:
+    name: InstalloryApp
+    runs-on: macos-15
+    env:
+      XCODEGEN_VERSION: "2.45.4"
+      XCODEGEN_SHA256: "090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show Xcode toolchain
+        run: xcodebuild -version
+
+      - name: Install pinned XcodeGen
+        run: |
+          archive="$RUNNER_TEMP/xcodegen.zip"
+          curl --fail --location --silent --show-error \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" \
+            --output "$archive"
+          echo "${XCODEGEN_SHA256}  ${archive}" | shasum -a 256 --check
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/xcodegen/bin/xcodegen" --version
+
+      - name: Regenerate Xcode project
+        run: ./scripts/regenerate-xcode.sh
+
+      - name: Verify generated product invariants
+        run: ./scripts/check-invariants.sh
+
+      - name: Test app (Debug)
+        run: >-
+          xcodebuild
+          -project Installory.xcodeproj
+          -scheme Installory
+          -configuration Debug
+          -destination 'platform=macOS'
+          -parallel-testing-enabled NO
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          test
+
+      - name: Build app (Release)
+        run: >-
+          xcodebuild
+          -project Installory.xcodeproj
+          -scheme Installory
+          -configuration Release
+          -destination 'platform=macOS'
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          build

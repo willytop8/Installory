@@ -11,6 +11,26 @@ struct InstalloryApp: App {
                 .environment(coordinator)
         }
         .commands {
+            CommandGroup(after: .sidebar) {
+                Button("Show as List") {
+                    coordinator.showInventory(as: .list)
+                }
+                .keyboardShortcut("1", modifiers: .command)
+                .disabled(
+                    !coordinator.supportsInventoryViewMode
+                        || coordinator.inventoryViewMode == .list
+                )
+
+                Button("Show as Table") {
+                    coordinator.showInventory(as: .table)
+                }
+                .keyboardShortcut("2", modifiers: .command)
+                .disabled(
+                    !coordinator.supportsInventoryViewMode
+                        || coordinator.inventoryViewMode == .table
+                )
+            }
+
             CommandMenu("Inventory") {
                 Button("Refresh") {
                     Task { await coordinator.refresh() }
@@ -38,7 +58,7 @@ struct InstalloryApp: App {
                     }
                 }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
-                .disabled(coordinator.packages.isEmpty)
+                .disabled(!coordinator.canEnterCleanupMode)
 
                 Divider()
 
@@ -54,16 +74,22 @@ struct InstalloryApp: App {
                 Divider()
 
                 Button("Export Inventory as CSV\u{2026}") {
-                    coordinator.exportInventory(format: .csv)
+                    Task { await coordinator.exportInventory(format: .csv) }
                 }
                 .disabled(coordinator.packages.isEmpty)
                 .keyboardShortcut("e", modifiers: .command)
 
                 Button("Export Inventory as Markdown\u{2026}") {
-                    coordinator.exportInventory(format: .markdown)
+                    Task { await coordinator.exportInventory(format: .markdown) }
                 }
                 .disabled(coordinator.packages.isEmpty)
                 .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                Button("Export Inventory as JSON\u{2026}") {
+                    Task { await coordinator.exportInventory(format: .json) }
+                }
+                .disabled(coordinator.packages.isEmpty)
+                .keyboardShortcut("e", modifiers: [.command, .option])
 
                 Button("Show Data Folder in Finder") {
                     coordinator.revealDataFolder()

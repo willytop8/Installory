@@ -9,6 +9,13 @@ public protocol PackageScanner: Sendable {
     /// The package manager this scanner handles.
     var manager: PackageManager { get }
 
+    /// Every inventory partition replaced by a successful scan.
+    ///
+    /// Most scanners manage one package manager. A scanner that emits multiple
+    /// manager kinds, such as Homebrew formulae and casks, must list all of them
+    /// so partial and failed scans can reconcile cached inventory safely.
+    var managedPackageManagers: Set<PackageManager> { get }
+
     /// Returns `true` if the manager appears to be installed on this Mac.
     ///
     /// Cheap: checks for the binary or known directories; does not enumerate
@@ -26,6 +33,8 @@ public protocol PackageScanner: Sendable {
 }
 
 public extension PackageScanner {
+    var managedPackageManagers: Set<PackageManager> { [manager] }
+
     var unavailableReason: String {
         "Not installed or not accessible"
     }

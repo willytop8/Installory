@@ -1,21 +1,24 @@
 import Foundation
 
-/// Renders a package inventory as a CSV or Markdown report.
+/// Renders a package inventory as CSV, Markdown, or JSON.
 ///
 /// Pure formatter — no filesystem access. The caller persists the returned
 /// string. CSV is RFC 4180 quoting: fields containing comma, quote, or newline
-/// are wrapped in double quotes with internal `"` doubled. Markdown uses GitHub
-/// pipe tables; pipes and backticks in cells are escaped so the table stays
-/// well-formed.
+/// are wrapped in double quotes with internal `"` doubled. Cells beginning with
+/// a spreadsheet formula prefix are neutralized with a leading apostrophe.
+/// Markdown uses GitHub pipe tables; pipes and backticks in cells are escaped so
+/// the table stays well-formed.
 public struct InventoryExporter: Sendable {
     public enum Format: String, Sendable, CaseIterable {
         case csv
         case markdown
+        case json
 
         public var fileExtension: String {
             switch self {
             case .csv:      "csv"
             case .markdown: "md"
+            case .json:     "json"
             }
         }
     }
@@ -26,7 +29,29 @@ public struct InventoryExporter: Sendable {
         switch format {
         case .csv:      renderCSV(packages)
         case .markdown: renderMarkdown(packages)
+        case .json:     renderJSON(packages)
         }
+    }
+
+    // MARK: - JSON
+
+    private func renderJSON(_ packages: [Package]) -> String {
+        guard !packages.isEmpty else { return "[]\n" }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .secondsSince1970
+
+        // Package IDs are the inventory's stable primary keys. Sorting here
+        // keeps exports reproducible even when scanner completion order differs.
+        let orderedPackages = packages.sorted { $0.id < $1.id }
+        guard let data = try? encoder.encode(orderedPackages) else {
+            // Package's shipped Codable shape contains only Foundation JSON
+            // primitives. Keep the existing non-throwing exporter contract if
+            // that model changes incompatibly in the future.
+            return "[]\n"
+        }
+        return String(decoding: data, as: UTF8.self) + "\n"
     }
 
     // MARK: - CSV
@@ -47,14 +72,29 @@ public struct InventoryExporter: Sendable {
                 pkg.isReadOnly ? "true" : "false",
                 pkg.dependencies.joined(separator: ";"),
             ]
-            .map(csvQuote)
+            .map(csvCell)
             .joined(separator: ",")
         }
         return ([header] + rows).joined(separator: "\n") + "\n"
     }
 
+    private func csvCell(_ field: String) -> String {
+        let safeField: String
+        let firstSignificant = field.first { !$0.isWhitespace }
+        if let first = field.first, first == "\t" || first == "\r" || first == "\n" {
+            safeField = "'\(field)"
+        } else if let firstSignificant, "=+-@".contains(firstSignificant) {
+            safeField = "'\(field)"
+        } else {
+            safeField = field
+        }
+
+        return csvQuote(safeField)
+    }
+
     private func csvQuote(_ field: String) -> String {
-        if field.contains(",") || field.contains("\"") || field.contains("\n") {
+        if field.contains(",") || field.contains("\"")
+            || field.contains("\n") || field.contains("\r") {
             let escaped = field.replacingOccurrences(of: "\"", with: "\"\"")
             return "\"\(escaped)\""
         }

@@ -147,6 +147,75 @@ struct PathResolutionTests {
         #expect(standings[npmNode.id] == standing(.unknown))
     }
 
+    @Test("CORE25-010: scoped Homebrew npm package resolves the prefix bin directory")
+    func scopedHomebrewNpmResolvesPrefixBin() {
+        let npmPackage = pkg(
+            "@scope/tool",
+            manager: .npm,
+            installPath: "/opt/homebrew/lib/node_modules/@scope/tool"
+        )
+        let cargoPackage = pkg(
+            "@scope/tool",
+            manager: .cargo,
+            installPath: "/Users/x/.cargo/bin/tool"
+        )
+        let group = DuplicateGroup(name: "@scope/tool", packages: [npmPackage, cargoPackage])
+
+        let standings = resolvePathStandings(
+            for: group,
+            path: ["/opt/homebrew/bin", "/Users/x/.cargo/bin"]
+        )
+
+        #expect(standings[npmPackage.id] == standing(.wins))
+        #expect(standings[cargoPackage.id] == standing(.shadowed(byPackageId: npmPackage.id)))
+    }
+
+    @Test("CORE25-010: scoped nvm npm package resolves the Node prefix bin directory")
+    func scopedNvmNpmResolvesPrefixBin() {
+        let npmPackage = pkg(
+            "@scope/tool",
+            manager: .npm,
+            installPath: "/Users/x/.nvm/versions/node/v20.11.0/lib/node_modules/@scope/tool"
+        )
+        let cargoPackage = pkg(
+            "@scope/tool",
+            manager: .cargo,
+            installPath: "/Users/x/.cargo/bin/tool"
+        )
+        let group = DuplicateGroup(name: "@scope/tool", packages: [npmPackage, cargoPackage])
+
+        let standings = resolvePathStandings(
+            for: group,
+            path: ["/Users/x/.nvm/versions/node/v20.11.0/bin", "/Users/x/.cargo/bin"]
+        )
+
+        #expect(standings[npmPackage.id] == standing(.wins))
+        #expect(standings[cargoPackage.id] == standing(.shadowed(byPackageId: npmPackage.id)))
+    }
+
+    @Test("CORE25-010: unscoped nvm npm package still resolves the Node prefix bin directory")
+    func unscopedNvmNpmStillResolvesPrefixBin() {
+        let npmPackage = pkg(
+            "tool",
+            manager: .npm,
+            installPath: "/Users/x/.nvm/versions/node/v20.11.0/lib/node_modules/tool"
+        )
+        let cargoPackage = pkg(
+            "tool",
+            manager: .cargo,
+            installPath: "/Users/x/.cargo/bin/tool"
+        )
+        let group = DuplicateGroup(name: "tool", packages: [npmPackage, cargoPackage])
+
+        let standings = resolvePathStandings(
+            for: group,
+            path: ["/Users/x/.nvm/versions/node/v20.11.0/bin", "/Users/x/.cargo/bin"]
+        )
+
+        #expect(standings[npmPackage.id] == standing(.wins))
+        #expect(standings[cargoPackage.id] == standing(.shadowed(byPackageId: npmPackage.id)))
+    }
+
     @Test("pip and mas packages (no executable dir) → always unknown")
     func pipAndMasAlwaysUnknown() {
         let group = DuplicateGroup(name: "requests", packages: [pipRequests, masXcode])

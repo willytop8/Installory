@@ -6,6 +6,17 @@ import Testing
 struct GemScannerTests {
     private let home = URL(fileURLWithPath: "/Users/tester")
 
+    private func scanner(
+        provider: InMemoryDirectoryAccessProvider,
+        environment: PackageManagerEnvironment = .empty
+    ) -> GemScanner {
+        GemScanner(
+            directoryAccess: provider,
+            homeDirectory: home,
+            environment: environment
+        )
+    }
+
     @Test("reads Ruby gemspec filenames and dependencies")
     func readsGemspecs() async throws {
         let specs = home.appendingPathComponent(".rbenv/versions/3.2.2/lib/ruby/gems/3.2.0/specifications")
@@ -26,11 +37,11 @@ struct GemScannerTests {
             builder.addFile(at: gemDir.appendingPathComponent("README.md"), data: Data())
         }
 
-        let packages = try await GemScanner(directoryAccess: provider, homeDirectory: home).scan()
+        let packages = try await scanner(provider: provider).scan()
 
         #expect(packages.count == 1)
         let gem = try #require(packages.first)
-        #expect(gem.id == "gem:\(specs.path):rubocop-ast")
+        #expect(gem.id == "gem:\(specs.path):rubocop-ast:1.31.1")
         #expect(gem.manager == .gem)
         #expect(gem.qualifier == specs.path)
         #expect(gem.name == "rubocop-ast")
@@ -42,6 +53,48 @@ struct GemScannerTests {
         #expect(gem.isReadOnly == false)
     }
 
+    @Test("CORE-04/CORE25-006/TEST25-009: generated platform gem fixture is parsed")
+    func generatedRubyGemsPercentQDependenciesAreParsed() async throws {
+        let gemRoot = home.appendingPathComponent(".gem/ruby/3.3.0")
+        let provider = try FixtureResource.provider(
+            directory: "gem/generated-platform",
+            mappedTo: gemRoot
+        )
+
+        let gem = try #require(try await scanner(provider: provider).scan().first)
+
+        #expect(gem.name == "fixture-native")
+        #expect(gem.version == "1.15.4")
+        #expect(gem.installPath?.lastPathComponent == "fixture-native-1.15.4-arm64-darwin")
+        #expect(gem.dependencies == ["fixture-parser", "fixture-runtime"])
+    }
+
+    @Test("CORE25-007: multiple installed versions keep deterministic, version-bearing identities")
+    func multipleGemVersionsRemainDistinct() async throws {
+        let specs = home.appendingPathComponent(".gem/ruby/3.3.0/specifications")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: specs.appendingPathComponent("rake-13.1.0.gemspec"),
+                data: Data("Gem::Specification.new\n".utf8)
+            )
+            builder.addFile(
+                at: specs.appendingPathComponent("rake-13.2.1.gemspec"),
+                data: Data("Gem::Specification.new\n".utf8)
+            )
+        }
+        let gemScanner = scanner(provider: provider)
+
+        let firstScan = try await gemScanner.scan()
+        let secondScan = try await gemScanner.scan()
+
+        #expect(firstScan.map(\.version) == ["13.1.0", "13.2.1"])
+        #expect(firstScan.map(\.id) == [
+            "gem:\(specs.path):rake:13.1.0",
+            "gem:\(specs.path):rake:13.2.1",
+        ])
+        #expect(secondScan.map(\.id) == firstScan.map(\.id))
+    }
+
     @Test("system Ruby gems are read-only")
     func systemRubyGemsAreReadOnly() async throws {
         let specs = URL(fileURLWithPath: "/Library/Ruby/Gems/2.6.0/specifications")
@@ -50,7 +103,7 @@ struct GemScannerTests {
             builder.addFile(at: gemspec, data: Data("Gem::Specification.new\n".utf8))
         }
 
-        let packages = try await GemScanner(directoryAccess: provider, homeDirectory: home).scan()
+        let packages = try await scanner(provider: provider).scan()
 
         let json = try #require(packages.first)
         #expect(json.name == "json")
@@ -61,7 +114,7 @@ struct GemScannerTests {
     @Test("availability follows readable specification directories")
     func availabilityFollowsSpecificationDirectories() async throws {
         let missing = InMemoryDirectoryAccessProvider.make { _ in }
-        #expect(await GemScanner(directoryAccess: missing, homeDirectory: home).isAvailable() == false)
+        #expect(await scanner(provider: missing).isAvailable() == false)
 
         let present = InMemoryDirectoryAccessProvider.make { builder in
             builder.addFile(
@@ -69,7 +122,108 @@ struct GemScannerTests {
                 data: Data()
             )
         }
-        #expect(await GemScanner(directoryAccess: present, homeDirectory: home).isAvailable() == true)
+        #expect(await scanner(provider: present).isAvailable() == true)
+    }
+
+    @Test("CORE-08: GEM_HOME overrides the default user gem root")
+    func gemHomeOverridesDefaultUserRoot() async throws {
+        let customGemHome = URL(fileURLWithPath: "/Volumes/Dev/gems/3.3.0")
+        let customSpec = customGemHome.appendingPathComponent("specifications/custom-2.0.0.gemspec")
+        let defaultSpec = home.appendingPathComponent(
+            ".gem/ruby/3.3.0/specifications/fallback-1.0.0.gemspec"
+        )
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: customSpec, data: Data("Gem::Specification.new\n".utf8))
+            builder.addFile(at: defaultSpec, data: Data("Gem::Specification.new\n".utf8))
+        }
+
+        let packages = try await scanner(
+            provider: provider,
+            environment: PackageManagerEnvironment(values: ["GEM_HOME": customGemHome.path])
+        ).scan()
+
+        #expect(packages.map(\.name) == ["custom"])
+        #expect(packages.first?.qualifier == customGemHome.appendingPathComponent("specifications").path)
+    }
+
+    @Test("CORE-08: GEM_HOME overlapping a standard root is deduplicated")
+    func gemHomeOverlappingStandardRootIsDeduplicated() async throws {
+        let gemHome = URL(fileURLWithPath: "/opt/homebrew/lib/ruby/gems/3.3.0")
+        let gemspec = gemHome.appendingPathComponent("specifications/rake-13.2.1.gemspec")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: gemspec, data: Data("Gem::Specification.new\n".utf8))
+        }
+
+        let packages = try await scanner(
+            provider: provider,
+            environment: PackageManagerEnvironment(values: ["GEM_HOME": gemHome.path])
+        ).scan()
+
+        #expect(packages.count == 1)
+        #expect(packages.first?.name == "rake")
+    }
+
+    @Test("CORE-05: Gem sizes the exact unpacked gem tree")
+    func gemSizesUnpackedTree() async throws {
+        let specs = home.appendingPathComponent(".gem/ruby/3.3.0/specifications")
+        let gemspec = specs.appendingPathComponent("rake-13.2.1.gemspec")
+        let gemDir = specs.deletingLastPathComponent().appendingPathComponent("gems/rake-13.2.1")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: gemspec, data: Data("Gem::Specification.new\n".utf8))
+            builder.addFile(
+                at: gemDir.appendingPathComponent("lib/rake.rb"),
+                data: Data(),
+                logicalSizeBytes: 73
+            )
+            builder.addFile(
+                at: gemDir.appendingPathComponent("README.md"),
+                data: Data(),
+                logicalSizeBytes: 29
+            )
+        }
+
+        let gem = try #require(try await scanner(provider: provider).scan().first)
+
+        #expect(gem.installPath == gemDir)
+        #expect(gem.sizeBytes == 102)
+    }
+
+    @Test("CORE-05: a missing unpacked gem directory keeps size unknown")
+    func missingUnpackedGemDirectoryKeepsSizeUnknown() async throws {
+        let specs = home.appendingPathComponent(".gem/ruby/3.3.0/specifications")
+        let gemspec = specs.appendingPathComponent("rake-13.2.1.gemspec")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: gemspec,
+                data: Data("Gem::Specification.new\n".utf8),
+                logicalSizeBytes: 4_096
+            )
+        }
+
+        let gem = try #require(try await scanner(provider: provider).scan().first)
+
+        #expect(gem.installPath == gemspec)
+        #expect(gem.sizeBytes == nil)
+    }
+
+    @Test("CORE-05: Gem scanning propagates task cancellation")
+    func gemScanningPropagatesCancellation() async {
+        let specs = home.appendingPathComponent(".gem/ruby/3.3.0/specifications")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: specs.appendingPathComponent("rake-13.2.1.gemspec"),
+                data: Data("Gem::Specification.new\n".utf8)
+            )
+        }
+        let scanner = scanner(provider: provider)
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await scanner.scan()
+        }
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
     }
 
     // MARK: - CORE-04: platform gems
@@ -94,7 +248,7 @@ struct GemScannerTests {
                 )
             }
         }
-        let packages = try await GemScanner(directoryAccess: provider, homeDirectory: home).scan()
+        let packages = try await scanner(provider: provider).scan()
         return try #require(packages.first)
     }
 
@@ -166,6 +320,8 @@ struct GemScannerTests {
     @Test("CORE-04: a platform gem yields a runnable reinstall command")
     func platformGemProducesRunnableReinstallCommand() async throws {
         let gem = try await scanSingleGem(gemspecFilename: "nokogiri-1.15.4-arm64-darwin.gemspec")
+        let removalCommand = ScriptGenerator(denylist: Denylist(entries: []))
+            .removalCommand(for: gem)
         let missing = MissingPackage(
             manager: .gem,
             package: SnapshotPackage(
@@ -174,8 +330,9 @@ struct GemScannerTests {
         )
         let script = ReinstallScriptGenerator().generate(missing: [missing]).scriptText
 
+        #expect(removalCommand
+            == "/Users/tester/.rbenv/versions/3.2.2/bin/gem uninstall nokogiri -v 1.15.4")
         #expect(script.contains("gem install nokogiri -v 1.15.4"))
         #expect(!script.contains("1.15.4-arm64-darwin"))
     }
 }
-

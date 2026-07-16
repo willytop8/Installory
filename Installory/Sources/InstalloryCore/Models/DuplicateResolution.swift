@@ -74,11 +74,25 @@ func executableDirectory(for package: Package) -> String? {
         return root.appendingPathComponent("bin").path
 
     case .npm:
-        // Expected layout: {npm-prefix}/lib/node_modules/{package-name}
-        // Binary symlinks:  {npm-prefix}/bin/
-        // Navigate: package-name → node_modules → lib → npm-prefix → bin
-        let root = url
-            .deletingLastPathComponent() // node_modules dir
+        // Expected layouts:
+        //   {npm-prefix}/lib/node_modules/{package-name}
+        //   {npm-prefix}/lib/node_modules/{scope}/{package-name}
+        // Binary symlinks: {npm-prefix}/bin/
+        // A scoped package has one extra path component, so first identify the
+        // node_modules directory rather than navigating a fixed number of levels.
+        let packageParent = url.deletingLastPathComponent()
+        let possibleScopedRoot = packageParent.deletingLastPathComponent()
+        let nodeModulesDirectory: URL
+        if packageParent.lastPathComponent == "node_modules" {
+            nodeModulesDirectory = packageParent
+        } else if possibleScopedRoot.lastPathComponent == "node_modules" {
+            nodeModulesDirectory = possibleScopedRoot
+        } else {
+            // Preserve the existing best-effort derivation for an unexpected
+            // layout: treat the immediate parent as node_modules.
+            nodeModulesDirectory = packageParent
+        }
+        let root = nodeModulesDirectory
             .deletingLastPathComponent() // lib dir
             .deletingLastPathComponent() // npm-prefix
         return root.appendingPathComponent("bin").path
@@ -100,6 +114,26 @@ func executableDirectory(for package: Package) -> String? {
             .deletingLastPathComponent() // pipx dir
             .deletingLastPathComponent() // local-dir (e.g. ~/.local)
         return localDir.appendingPathComponent("bin").path
+
+    case .uv:
+        guard let artifacts = package.artifactPaths, !artifacts.isEmpty else { return nil }
+        let unsafeScalars = CharacterSet.controlCharacters.union(.newlines)
+        let parents = artifacts.compactMap { path -> String? in
+            guard path.hasPrefix("/"),
+                  !path.unicodeScalars.contains(where: unsafeScalars.contains) else {
+                return nil
+            }
+            return URL(fileURLWithPath: path)
+                .standardizedFileURL
+                .deletingLastPathComponent()
+                .path
+        }
+        guard parents.count == artifacts.count,
+              let first = parents.first,
+              parents.allSatisfy({ $0 == first }) else {
+            return nil
+        }
+        return first
 
     case .gem:
         // Expected layout:
@@ -231,7 +265,7 @@ func looksLikeCommandLineTool(_ package: Package) -> Bool {
 
     // Manager-level fallback (conservative: treat unknown as CLI-capable).
     switch package.manager {
-    case .brew, .cargo, .npm, .pipx, .gem:
+    case .brew, .cargo, .npm, .pipx, .uv, .gem:
         return true
     case .pip:
         return false  // primarily libraries

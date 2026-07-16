@@ -4,14 +4,10 @@ import Foundation
 
 @Suite("ShellHistoryCollector")
 struct ShellHistoryCollectorTests {
-    private static let fixtureDir = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/shell-history")
-
     private let home = URL(fileURLWithPath: "/fake-home")
 
     private func fixtureData(_ name: String) throws -> Data {
-        try Data(contentsOf: Self.fixtureDir.appendingPathComponent(name))
+        try FixtureResource.data("shell-history/\(name)")
     }
 
     /// Builds a provider with any combination of the three fixture history files.
@@ -22,15 +18,19 @@ struct ShellHistoryCollectorTests {
             .appendingPathComponent("fish")
             .appendingPathComponent("fish_history")
 
-        return try InMemoryDirectoryAccessProvider.make { builder in
-            if zsh {
-                builder.addFile(at: home.appendingPathComponent(".zsh_history"), data: try fixtureData("zsh_history"))
+        let zshData = zsh ? try fixtureData("zsh_history") : nil
+        let bashData = bash ? try fixtureData("bash_history") : nil
+        let fishData = fish ? try fixtureData("fish_history") : nil
+
+        return InMemoryDirectoryAccessProvider.make { builder in
+            if let zshData {
+                builder.addFile(at: home.appendingPathComponent(".zsh_history"), data: zshData)
             }
-            if bash {
-                builder.addFile(at: home.appendingPathComponent(".bash_history"), data: try fixtureData("bash_history"))
+            if let bashData {
+                builder.addFile(at: home.appendingPathComponent(".bash_history"), data: bashData)
             }
-            if fish {
-                builder.addFile(at: fishURL, data: try fixtureData("fish_history"))
+            if let fishData {
+                builder.addFile(at: fishURL, data: fishData)
             }
         }
     }
@@ -190,6 +190,68 @@ struct ShellHistoryCollectorTests {
             )
         }
         #expect(ShellHistoryCollector(directoryAccess: provider, homeDirectory: home).collect().isEmpty)
+    }
+
+    @Test("CORE25-013: invalid UTF-8 discards only its shell-history line")
+    func invalidUTF8DiscardsOnlyCorruptLine() {
+        var history = Data("brew install wget\n".utf8)
+        history.append(contentsOf: [0xFF, 0x0A])
+        history.append(Data("npm install --global prettier\n".utf8))
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: home.appendingPathComponent(".zsh_history"),
+                data: history
+            )
+        }
+
+        let records = ShellHistoryCollector(
+            directoryAccess: provider,
+            homeDirectory: home
+        ).collect()
+
+        #expect(records.map(\.command) == [
+            "brew install wget", "npm install --global prettier",
+        ])
+    }
+
+    @Test("PERF25-005: oversized history is rejected before loading its bytes")
+    func oversizedHistoryIsNotLoaded() {
+        let historyURL = home.appendingPathComponent(".zsh_history")
+        let base = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(
+                at: historyURL,
+                data: Data("brew install wget\n".utf8),
+                logicalSizeBytes: 100 * 1_024 * 1_024
+            )
+        }
+        let trace = DirectoryAccessTrace()
+        let provider = TracingDirectoryAccessProvider(base: base, trace: trace)
+
+        let records = ShellHistoryCollector(
+            directoryAccess: provider,
+            homeDirectory: home
+        ).collect()
+
+        #expect(records.isEmpty)
+        #expect(trace.entries.contains { $0.operation == .metadata && $0.url == historyURL })
+        #expect(!trace.entries.contains { $0.operation == .data && $0.url == historyURL })
+    }
+
+    @Test("PERF25-005: cancellation stops provenance before filesystem reads")
+    func cancellationStopsCollection() async throws {
+        let provider = try makeProvider()
+        let collector = ShellHistoryCollector(
+            directoryAccess: provider,
+            homeDirectory: home
+        )
+        let task = Task.detached {
+            do { try await Task.sleep(for: .milliseconds(50)) } catch {}
+            return collector.collect()
+        }
+
+        task.cancel()
+
+        #expect(await task.value.isEmpty)
     }
 }
 

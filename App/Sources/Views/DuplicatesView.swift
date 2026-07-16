@@ -20,35 +20,16 @@ struct DuplicatesView: View {
 
     // MARK: Grouped data
 
-    private struct GroupedContent {
-        let active: [(group: DuplicateGroup, standings: [String: PathStanding])]
-        let potential: [(group: DuplicateGroup, standings: [String: PathStanding])]
-        let benign: [(group: DuplicateGroup, standings: [String: PathStanding])]
-        let multiLocation: [MultiLocationGroup]
+    private var grouped: DuplicateAnalysisState {
+        coordinator.duplicateAnalysis(pathComponents: pathComponents)
     }
 
-    private var grouped: GroupedContent {
-        let path = pathComponents
-        var active: [(DuplicateGroup, [String: PathStanding])] = []
-        var potential: [(DuplicateGroup, [String: PathStanding])] = []
-        var benign: [(DuplicateGroup, [String: PathStanding])] = []
-
-        // crossManagerDuplicates() returns groups sorted by name; severity
-        // tiers are built with stable name-order preserved within each tier.
-        for group in coordinator.duplicateGroups {
-            let standings = resolvePathStandings(for: group, path: path)
-            switch severity(for: group, standings: standings) {
-            case .active:    active.append((group, standings))
-            case .potential: potential.append((group, standings))
-            case .benign:    benign.append((group, standings))
-            }
-        }
-
-        return GroupedContent(
-            active: active,
-            potential: potential,
-            benign: benign,
-            multiLocation: coordinator.packages.multiLocationInstalls()
+    private var analysisEmptyState: AnalysisEmptyState {
+        AnalysisEmptyState.resolve(
+            packageCount: coordinator.packages.count,
+            isScanning: coordinator.isScanning,
+            isDemoMode: coordinator.isDemoMode,
+            scanStatuses: coordinator.scanStatuses
         )
     }
 
@@ -56,27 +37,32 @@ struct DuplicatesView: View {
 
     var body: some View {
         @Bindable var coordinator = coordinator
-        let data = grouped
-        let hasCrossManager = !coordinator.duplicateGroups.isEmpty
+        let allData = grouped
+        let data = allData.matching(query: coordinator.searchQuery)
+        let hasCrossManager = !data.active.isEmpty
+            || !data.potential.isEmpty
+            || !data.benign.isEmpty
         let hasMultiLocation = !data.multiLocation.isEmpty
 
-        if !hasCrossManager && !hasMultiLocation {
-            ContentUnavailableView {
-                Label("No Duplicates", systemImage: "checkmark.circle")
-            } description: {
-                Text("No tools are installed by more than one package manager.")
-            }
-        } else {
-            List(
+        Group {
+            if allData.isEmpty {
+                AnalysisEmptyStateView(
+                    state: analysisEmptyState,
+                    noResultsTitle: "No Duplicates",
+                    noResultsSystemImage: "checkmark.circle",
+                    noResultsDescription: "No scanned tools are installed by more than one package manager or in multiple managed locations."
+                )
+            } else if !hasCrossManager && !hasMultiLocation {
+                ContentUnavailableView.search(text: coordinator.searchQuery)
+            } else {
+                List(
                 selection: Binding(
                     get: { coordinator.selectedPackage?.id },
                     set: { id in
-                        coordinator.selectedPackage = id.flatMap { target in
-                            coordinator.packages.first { $0.id == target }
-                        }
+                        coordinator.selectedPackage = id.flatMap(coordinator.package(id:))
                     }
                 )
-            ) {
+                ) {
                 // ── Intro text ───────────────────────────────────────────
                 if hasCrossManager {
                     Section {
@@ -175,7 +161,7 @@ struct DuplicatesView: View {
                         .padding(.vertical, 2)
                         .selectionDisabled()
 
-                        ForEach(data.multiLocation, id: \.name) { mlGroup in
+                        ForEach(data.multiLocation) { mlGroup in
                             Section(mlGroup.name) {
                                 ForEach(mlGroup.packages) { pkg in
                                     MultiLocationInstallRow(package: pkg)
@@ -189,10 +175,72 @@ struct DuplicatesView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                }
+                .listStyle(.inset)
+                .navigationTitle("Duplicates")
             }
-            .listStyle(.inset)
-            .navigationTitle("Duplicates")
         }
+        .searchable(
+            text: $coordinator.searchQuery,
+            placement: .toolbar,
+            prompt: "Search duplicates"
+        )
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            CleanupSelectionFooter()
+        }
+        .onChange(of: coordinator.searchQuery) { _, query in
+            let visibleIDs = grouped.matching(query: query).packageIDs
+            guard let selectedID = coordinator.selectedPackage?.id,
+                  !visibleIDs.contains(selectedID) else {
+                return
+            }
+            coordinator.selectedPackage = nil
+        }
+    }
+}
+
+private extension DuplicateAnalysisState {
+    var isEmpty: Bool {
+        active.isEmpty && potential.isEmpty && benign.isEmpty && multiLocation.isEmpty
+    }
+
+    var packageIDs: Set<String> {
+        var ids: Set<String> = []
+        for entry in active {
+            ids.formUnion(entry.group.packages.map(\.id))
+        }
+        for entry in potential {
+            ids.formUnion(entry.group.packages.map(\.id))
+        }
+        for entry in benign {
+            ids.formUnion(entry.group.packages.map(\.id))
+        }
+        for group in multiLocation {
+            ids.formUnion(group.packages.map(\.id))
+        }
+        return ids
+    }
+
+    /// A matching member keeps its whole group visible so search never removes
+    /// the companion install needed to understand the duplicate relationship.
+    func matching(query: String) -> DuplicateAnalysisState {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return self }
+
+        return DuplicateAnalysisState(
+            active: active.filter { entry in
+                entry.group.packages.contains { $0.matchesSearchQuery(query) }
+            },
+            potential: potential.filter { entry in
+                entry.group.packages.contains { $0.matchesSearchQuery(query) }
+            },
+            benign: benign.filter { entry in
+                entry.group.packages.contains { $0.matchesSearchQuery(query) }
+            },
+            multiLocation: multiLocation.filter { group in
+                group.packages.contains { $0.matchesSearchQuery(query) }
+            }
+        )
     }
 }
 
@@ -204,6 +252,7 @@ private struct DuplicateInstallRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            CleanupSelectionToggle(package: package)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     ManagerBadge(manager: package.manager)
@@ -240,6 +289,7 @@ private struct MultiLocationInstallRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            CleanupSelectionToggle(package: package)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     ManagerBadge(manager: package.manager)

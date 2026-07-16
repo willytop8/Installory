@@ -59,22 +59,27 @@ struct SnapshotManagerTests {
         let (db, dir) = try makeDatabase()
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        let manager = SnapshotManager(database: db)
+        let firstManager = SnapshotManager(
+            database: db,
+            now: { Date(timeIntervalSince1970: 100) }
+        )
+        let secondManager = SnapshotManager(
+            database: db,
+            now: { Date(timeIntervalSince1970: 200) }
+        )
 
-        let first = try await manager.capture(
+        let first = try await firstManager.capture(
             packages: [makePackage("git")],
             reason: .manual,
             note: "first"
         )
-        // Small sleep to guarantee distinct createdAt timestamps.
-        try await Task.sleep(nanoseconds: 10_000_000)
-        let second = try await manager.capture(
+        let second = try await secondManager.capture(
             packages: [makePackage("wget")],
             reason: .manual,
             note: "second"
         )
 
-        let list = try await manager.list()
+        let list = try await secondManager.list()
 
         #expect(list.count == 2)
         #expect(list[0].id == second.id)
@@ -105,6 +110,49 @@ struct SnapshotManagerTests {
         #expect(s.note == nil)
         #expect(s.payload.managers[.brew]?.count == 2)
         #expect(s.payload.managers[.pip]?.count == 1)
+    }
+
+    @Test("PERF25-008: listing skips large payloads and targeted loading decodes only one row")
+    func listUsesMetadataAndTargetedLoadDoesNotDecodeOtherPayloads() async throws {
+        let (db, dir) = try makeDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let manager = SnapshotManager(database: db)
+        let packageCount = 5_000
+        let largeSnapshot = try await manager.capture(
+            packages: (0..<packageCount).map { makePackage("package-\($0)") },
+            reason: .manual,
+            note: "large valid payload"
+        )
+
+        // This row is deliberately large and impossible to decode as a
+        // SnapshotPayload. A metadata list must still succeed, and loading the
+        // valid row must not scan/decode this unrelated payload first.
+        let poisonedID = UUID()
+        let malformedLargePayload = "{\"brew\":[" + String(repeating: "x", count: 1_000_000)
+        try await db.pool.write { conn in
+            try conn.execute(
+                sql: """
+                    INSERT INTO snapshots (id, created_at, reason, note, payload)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                arguments: [
+                    poisonedID.uuidString,
+                    largeSnapshot.createdAt.addingTimeInterval(1).timeIntervalSince1970,
+                    SnapshotReason.preCleanup.rawValue,
+                    "malformed large payload",
+                    malformedLargePayload,
+                ]
+            )
+        }
+
+        let summaries = try await manager.list()
+        #expect(summaries.map(\.id) == [poisonedID, largeSnapshot.id])
+        #expect(summaries[0].note == "malformed large payload")
+        #expect(summaries[1].note == "large valid payload")
+
+        let loaded = try #require(try await manager.snapshot(id: largeSnapshot.id))
+        #expect(loaded.payload.managers[.brew]?.count == packageCount)
     }
 
     @Test("delete removes snapshot from list")
@@ -150,18 +198,19 @@ struct SnapshotManagerTests {
             note: nil
         )
 
-        let row = try db.pool.read { conn in
-            try Row.fetchOne(
+        let persistedValues = try await db.pool.read { conn -> (id: String, reason: String)? in
+            guard let row = try Row.fetchOne(
                 conn,
                 sql: "SELECT * FROM snapshots WHERE id = ?",
                 arguments: [snapshot.id.uuidString]
-            )
+            ) else {
+                return nil
+            }
+            return (row["id"], row["reason"])
         }
 
-        let r = try #require(row)
-        let idInRow: String = r["id"]
-        let reasonInRow: String = r["reason"]
-        #expect(idInRow == snapshot.id.uuidString)
-        #expect(reasonInRow == "manual")
+        let values = try #require(persistedValues)
+        #expect(values.id == snapshot.id.uuidString)
+        #expect(values.reason == "manual")
     }
 }

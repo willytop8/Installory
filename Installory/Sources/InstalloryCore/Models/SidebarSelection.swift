@@ -6,6 +6,7 @@ public enum SidebarSelection: Hashable, Sendable {
     case readOnly
     case duplicates
     case orphans
+    case diskUsage
     case aiInstalled
     case snapshot(UUID)
 }
@@ -18,6 +19,7 @@ extension SidebarSelection {
         case .readOnly: "readOnly"
         case .duplicates: "duplicates"
         case .orphans: "orphans"
+        case .diskUsage: "diskUsage"
         case .aiInstalled: "aiInstalled"
         case .snapshot: ""  // snapshot selections are never persisted
         }
@@ -29,6 +31,7 @@ extension SidebarSelection {
         case "readOnly": self = .readOnly
         case "duplicates": self = .duplicates
         case "orphans": self = .orphans
+        case "diskUsage": self = .diskUsage
         case "aiInstalled": self = .aiInstalled
         default:
             guard userDefaultsKey.hasPrefix("manager.") else { return nil }
@@ -40,6 +43,14 @@ extension SidebarSelection {
 }
 
 extension [Package] {
+    /// Returns packages whose name, manager scope, or install path matches the
+    /// query, preserving input order. Whitespace-only queries are inactive.
+    public func matching(query: String) -> [Package] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return self }
+        return filter { $0.matchesSearchQuery(query) }
+    }
+
     /// Returns packages matching `selection` and `query`, preserving order.
     /// The sort step is the caller's responsibility.
     public func filtered(by selection: SidebarSelection?, query: String) -> [Package] {
@@ -57,6 +68,9 @@ extension [Package] {
         case .orphans:
             // OrphansView reads coordinator.orphanedPackages directly; filteredPackages is not consulted.
             return []
+        case .diskUsage:
+            // DiskUsageView reads a generation-keyed aggregate instead of package rows.
+            return []
         case .aiInstalled:
             // AIInstalledView reads coordinator.aiInstalledPackages directly; filteredPackages is not consulted.
             return []
@@ -64,9 +78,15 @@ extension [Package] {
             // Snapshot content is rendered by SnapshotContentView, not this filter.
             return []
         }
-        if !query.isEmpty {
-            result = result.filter { $0.name.localizedCaseInsensitiveContains(query) }
-        }
-        return result
+        return result.matching(query: query)
+    }
+}
+
+extension Package {
+    /// Shared in-memory search predicate for every live-inventory view.
+    public func matchesSearchQuery(_ query: String) -> Bool {
+        name.localizedCaseInsensitiveContains(query)
+            || qualifier?.localizedCaseInsensitiveContains(query) == true
+            || installPath?.path.localizedCaseInsensitiveContains(query) == true
     }
 }

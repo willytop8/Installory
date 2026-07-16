@@ -4,6 +4,7 @@ public enum PackageManager: String, Codable, CaseIterable, Sendable {
     case brewCask
     case pip
     case pipx
+    case uv
     case npm
     case cargo
     case gem

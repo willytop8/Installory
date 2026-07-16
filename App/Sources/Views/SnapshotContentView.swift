@@ -16,25 +16,59 @@ struct SnapshotContentView: View {
     @Environment(AppCoordinator.self) private var coordinator
     @State private var searchQuery = ""
     @State private var activeTab: SnapshotViewTab = .contents
+    @State private var isLoadingSnapshot = true
+    @State private var snapshotLoadFailed = false
 
     // Restore flow state — all local; nothing in coordinator changes.
     @State private var missingPackages: [MissingPackage] = []
     @State private var showRestoreChecklist = false
     @State private var showNothingMissingAlert = false
 
-    private var snapshot: Snapshot? {
+    private var snapshotSummary: SnapshotSummary? {
         coordinator.snapshots.first { $0.id == snapshotID }
     }
 
+    private var snapshot: Snapshot? {
+        guard coordinator.loadedSnapshot?.id == snapshotID else { return nil }
+        return coordinator.loadedSnapshot
+    }
+
     var body: some View {
-        if let snapshot {
-            snapshotBody(snapshot)
-        } else {
-            ContentUnavailableView {
-                Label("Snapshot Not Found", systemImage: "camera.viewfinder")
-            } description: {
-                Text("This snapshot may have been deleted.")
+        Group {
+            if snapshotSummary == nil {
+                ContentUnavailableView {
+                    Label("Snapshot Not Found", systemImage: "camera.viewfinder")
+                } description: {
+                    Text("This snapshot may have been deleted.")
+                }
+            } else if let snapshot {
+                snapshotBody(snapshot)
+            } else if isLoadingSnapshot {
+                ProgressView("Loading Snapshot…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if snapshotLoadFailed {
+                ContentUnavailableView {
+                    Label("Snapshot Couldn't Be Loaded", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text("The saved snapshot payload could not be read.")
+                }
             }
+        }
+        // Key the task to metadata availability as well as selection. A sidebar
+        // selection restored before launch hydration must retry once its summary
+        // arrives instead of remaining in a false load-failure state.
+        .task(id: snapshotSummary?.id) {
+            guard snapshotSummary != nil else {
+                isLoadingSnapshot = false
+                snapshotLoadFailed = false
+                return
+            }
+            isLoadingSnapshot = true
+            snapshotLoadFailed = false
+            let loaded = await coordinator.loadSnapshot(id: snapshotID)
+            guard !Task.isCancelled else { return }
+            isLoadingSnapshot = false
+            snapshotLoadFailed = loaded == nil
         }
     }
 
@@ -182,7 +216,7 @@ struct SnapshotContentView: View {
                     Label("Restore Missing Packages\u{2026}", systemImage: "arrow.down.circle")
                 }
                 .buttonStyle(.borderless)
-                .disabled(coordinator.packages.isEmpty)
+                .disabled(coordinator.isScanning)
                 .help("Diff this snapshot against the current inventory and generate a reinstall script")
                 Button {
                     coordinator.sidebarSelection = .all
@@ -423,6 +457,11 @@ private struct RestoreChecklistSheet: View {
                         .foregroundStyle(selectedIDs.contains(mp.id) ? Color.accentColor : Color.secondary)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("\(mp.package.name), \(mp.manager.displayName)")
+                .accessibilityValue(
+                    selectedIDs.contains(mp.id) ? "Selected for reinstall" : "Not selected for reinstall"
+                )
+                .accessibilityHint("Toggle whether this package is included in the reinstall script")
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {

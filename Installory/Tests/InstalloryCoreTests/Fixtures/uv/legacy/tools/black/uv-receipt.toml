@@ -1,0 +1,6 @@
+[tool]
+requirements = ["black==24.2.0"]
+entrypoints = [
+  { name = "black", install-path = "/Users/tester/.local/bin/black" },
+  { name = "blackd", install-path = "/Users/tester/.local/bin/blackd", from = "black" },
+]

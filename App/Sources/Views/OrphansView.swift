@@ -11,25 +11,56 @@ import SwiftUI
 struct OrphansView: View {
     @Environment(AppCoordinator.self) private var coordinator
 
+    private var analysisEmptyState: AnalysisEmptyState {
+        AnalysisEmptyState.resolve(
+            packageCount: coordinator.packages.count,
+            isScanning: coordinator.isScanning,
+            isDemoMode: coordinator.isDemoMode,
+            scanStatuses: coordinator.scanStatuses
+        )
+    }
+
     var body: some View {
         @Bindable var coordinator = coordinator
-        let orphans = coordinator.orphanedPackages
+        let allOrphans = coordinator.orphanedPackages
+        let orphans = allOrphans.matching(query: coordinator.searchQuery)
 
-        if orphans.isEmpty {
-            emptyState
-        } else {
-            listView(orphans: orphans)
+        Group {
+            if allOrphans.isEmpty {
+                emptyState
+            } else if orphans.isEmpty {
+                ContentUnavailableView.search(text: coordinator.searchQuery)
+            } else {
+                listView(orphans: orphans)
+            }
+        }
+        .searchable(
+            text: $coordinator.searchQuery,
+            placement: .toolbar,
+            prompt: "Search review candidates"
+        )
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            CleanupSelectionFooter()
+        }
+        .onChange(of: coordinator.searchQuery) { _, query in
+            let visible = coordinator.orphanedPackages.matching(query: query)
+            guard let selectedID = coordinator.selectedPackage?.id,
+                  !visible.contains(where: { $0.id == selectedID }) else {
+                return
+            }
+            coordinator.selectedPackage = nil
         }
     }
 
     // MARK: - Empty state
 
     private var emptyState: some View {
-        ContentUnavailableView {
-            Label("No Review Candidates", systemImage: "checkmark.seal")
-        } description: {
-            Text("Every explicitly installed package has at least one other package in your inventory that depends on it.")
-        }
+        AnalysisEmptyStateView(
+            state: analysisEmptyState,
+            noResultsTitle: "No Review Candidates",
+            noResultsSystemImage: "checkmark.seal",
+            noResultsDescription: "Every explicitly installed package in the completed scan has at least one same-manager package that depends on it."
+        )
     }
 
     // MARK: - List
@@ -44,9 +75,7 @@ struct OrphansView: View {
             selection: Binding(
                 get: { coordinator.selectedPackage?.id },
                 set: { id in
-                    coordinator.selectedPackage = id.flatMap { target in
-                        coordinator.packages.first { $0.id == target }
-                    }
+                    coordinator.selectedPackage = id.flatMap(coordinator.package(id:))
                 }
             )
         ) {
@@ -108,6 +137,7 @@ private struct OrphanRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            CleanupSelectionToggle(package: package)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(package.name)

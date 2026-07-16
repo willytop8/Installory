@@ -7,10 +7,9 @@ import GRDB
 /// Consumers interact with the database through `pool` directly using
 /// GRDB's read/write APIs.
 ///
-/// **Phase 0 limitation:** The caller supplies a `directory` URL directly.
-/// In the shipping app this URL will arrive from `FolderAccessManager` as
-/// a security-scoped bookmark resolved to the app's Application Support
-/// container. See HANDOFF.md for the full handoff note.
+/// The caller supplies an existing directory. The app uses its sandboxed
+/// Application Support directory; external scan grants are unrelated to the
+/// writable local cache.
 public final class Database: Sendable {
 
     /// The underlying connection pool. Use for all reads and writes.

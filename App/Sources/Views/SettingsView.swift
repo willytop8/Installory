@@ -93,17 +93,22 @@ private struct ScanningTab: View {
 
             Section {
                 Button("Export Inventory as CSV\u{2026}") {
-                    coordinator.exportInventory(format: .csv)
+                    Task { await coordinator.exportInventory(format: .csv) }
                 }
                 .disabled(coordinator.packages.isEmpty)
 
                 Button("Export Inventory as Markdown\u{2026}") {
-                    coordinator.exportInventory(format: .markdown)
+                    Task { await coordinator.exportInventory(format: .markdown) }
+                }
+                .disabled(coordinator.packages.isEmpty)
+
+                Button("Export Inventory as JSON\u{2026}") {
+                    Task { await coordinator.exportInventory(format: .json) }
                 }
                 .disabled(coordinator.packages.isEmpty)
 
                 Button("Export Environment Report\u{2026}") {
-                    coordinator.exportEnvironmentReport()
+                    Task { await coordinator.exportEnvironmentReport() }
                 }
                 .disabled(coordinator.packages.isEmpty)
 

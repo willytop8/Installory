@@ -11,19 +11,24 @@ public struct PipxScanner: PackageScanner, Sendable {
     private let directoryAccess: any DirectoryAccessProvider
     private let parser: DistInfoParser
     private let homeDirectory: URL
+    private let environment: PackageManagerEnvironment
 
     public init(
         directoryAccess: any DirectoryAccessProvider = SystemDirectoryAccessProvider(),
         parser: DistInfoParser? = nil,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: PackageManagerEnvironment = .current
     ) {
         self.directoryAccess = directoryAccess
         self.parser = parser ?? DistInfoParser(directoryAccess: directoryAccess)
         self.homeDirectory = homeDirectory
+        self.environment = environment
     }
 
     public func isAvailable() async -> Bool {
-        directoryAccess.fileExists(at: venvsRoot)
+        guard !Task.isCancelled else { return false }
+        let isAvailable = directoryAccess.fileExists(at: venvsRoot)
+        return !Task.isCancelled && isAvailable
     }
 
     public var unavailableReason: String {
@@ -31,28 +36,46 @@ public struct PipxScanner: PackageScanner, Sendable {
     }
 
     public func scan() async throws -> [Package] {
-        childDirectories(of: venvsRoot)
-            .sorted { $0.path < $1.path }
-            .compactMap(packageForToolVenv)
+        try Task.checkCancellation()
+        var sizer = BoundedDirectorySizer(directoryAccess: directoryAccess)
+        var packages: [Package] = []
+        for venv in directoryAccess.directoryContentsOrEmpty(at: venvsRoot)
+            .sorted(by: { $0.path < $1.path }) {
+            try Task.checkCancellation()
+            if let package = try await packageForToolVenv(venv, sizer: &sizer) {
+                packages.append(package)
+            }
+        }
+        try Task.checkCancellation()
+        return packages
     }
 
     private var venvsRoot: URL {
-        homeDirectory
-            .appendingPathComponent(".local")
-            .appendingPathComponent("share")
-            .appendingPathComponent("pipx")
+        environment.pipxHome(
+            fallback: homeDirectory
+                .appendingPathComponent(".local")
+                .appendingPathComponent("share")
+                .appendingPathComponent("pipx")
+        )
             .appendingPathComponent("venvs")
     }
 
-    private func packageForToolVenv(_ venvDir: URL) -> Package? {
+    private func packageForToolVenv(
+        _ venvDir: URL,
+        sizer: inout BoundedDirectorySizer
+    ) async throws -> Package? {
+        try Task.checkCancellation()
         let toolName = venvDir.lastPathComponent
         guard !toolName.hasPrefix(".") else { return nil }
 
-        let distInfos = sitePackagesDirs(in: venvDir)
-            .flatMap(parsedDistInfos(in:))
-        guard !distInfos.isEmpty else { return nil }
+        var distInfos: [(directory: URL, info: DistInfo)] = []
+        for sitePackages in try sitePackagesDirs(in: venvDir) {
+            try Task.checkCancellation()
+            distInfos.append(contentsOf: try parsedDistInfos(in: sitePackages))
+        }
 
         let metadata = pipxMetadata(in: venvDir)
+        try Task.checkCancellation()
         let selected = selectMainPackage(
             from: distInfos,
             toolName: toolName,
@@ -60,12 +83,13 @@ public struct PipxScanner: PackageScanner, Sendable {
         )
 
         if let selected {
-            return makePackage(
+            return try await makePackage(
                 name: selected.info.name,
                 version: selected.info.version,
-                dependencies: selected.info.requiresDist.map(Self.barePackageName),
+                dependencies: selected.info.requiresDist.map(PythonRequirement.distributionName),
                 distInfoDir: selected.directory,
-                venvDir: venvDir
+                venvDir: venvDir,
+                sizer: &sizer
             )
         }
 
@@ -73,30 +97,57 @@ public struct PipxScanner: PackageScanner, Sendable {
             return nil
         }
 
-        return makePackage(
+        return try await makePackage(
             name: packageName,
             version: version,
             dependencies: [],
             distInfoDir: nil,
-            venvDir: venvDir
+            venvDir: venvDir,
+            sizer: &sizer
         )
     }
 
-    private func sitePackagesDirs(in venvDir: URL) -> [URL] {
+    private func sitePackagesDirs(in venvDir: URL) throws -> [URL] {
+        try Task.checkCancellation()
         let lib = venvDir.appendingPathComponent("lib")
-        return childDirectories(of: lib)
-            .filter { $0.lastPathComponent.hasPrefix("python") }
-            .map { $0.appendingPathComponent("site-packages") }
-            .filter { directoryAccess.fileExists(at: $0) }
+        var result: [URL] = []
+        let children = directoryAccess.directoryContentsOrEmpty(at: lib)
+            .sorted(by: { $0.path < $1.path })
+        try Task.checkCancellation()
+        for child in children {
+            try Task.checkCancellation()
+            guard child.lastPathComponent.hasPrefix("python") else { continue }
+            let sitePackages = child.appendingPathComponent("site-packages")
+            if directoryAccess.fileExists(at: sitePackages) {
+                result.append(sitePackages)
+            }
+        }
+        try Task.checkCancellation()
+        return result
     }
 
-    private func parsedDistInfos(in sitePackages: URL) -> [(directory: URL, info: DistInfo)] {
-        childDirectories(of: sitePackages)
-            .filter { $0.lastPathComponent.hasSuffix(".dist-info") }
-            .compactMap { directory in
-                guard let info = try? parser.parse(directory: directory) else { return nil }
-                return (directory, info)
+    private func parsedDistInfos(
+        in sitePackages: URL
+    ) throws -> [(directory: URL, info: DistInfo)] {
+        try Task.checkCancellation()
+        var result: [(directory: URL, info: DistInfo)] = []
+        let directories = directoryAccess.directoryContentsOrEmpty(at: sitePackages)
+            .sorted(by: { $0.path < $1.path })
+        try Task.checkCancellation()
+        for directory in directories {
+            try Task.checkCancellation()
+            guard directory.lastPathComponent.hasSuffix(".dist-info") else { continue }
+            do {
+                let info = try parser.parseMetadataOnly(directory: directory)
+                result.append((directory, info))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                continue
             }
+        }
+        try Task.checkCancellation()
+        return result
     }
 
     private func selectMainPackage(
@@ -124,18 +175,29 @@ public struct PipxScanner: PackageScanner, Sendable {
         version: String,
         dependencies: [String],
         distInfoDir: URL?,
-        venvDir: URL
-    ) -> Package {
-        Package(
-            id: "pipx::\(name)",
+        venvDir: URL,
+        sizer: inout BoundedDirectorySizer
+    ) async throws -> Package {
+        // `pipx --suffix` creates multiple environment directories whose main
+        // distribution metadata can have the same name and version. Preserve
+        // the full discovered environment path as the qualifier so identity is
+        // unique across both suffixes and pipx homes, while `name` remains the
+        // human-facing distribution name.
+        let qualifier = venvDir.path
+        let sizeBytes = try await sizer.measure(
+            [.tree(venvDir)],
+            constrainedTo: venvsRoot
+        ).sizeBytes
+        return Package(
+            id: "pipx:\(qualifier):\(name)",
             manager: .pipx,
-            qualifier: nil,
+            qualifier: qualifier,
             name: name,
             version: version,
             installPath: venvDir,
             installedAt: directoryAccess.modificationDate(at: distInfoDir ?? venvDir),
             installedAtConfidence: .medium,
-            sizeBytes: nil,
+            sizeBytes: sizeBytes,
             isExplicit: true,
             isReadOnly: false,
             dependencies: dependencies,
@@ -147,10 +209,6 @@ public struct PipxScanner: PackageScanner, Sendable {
         let url = venvDir.appendingPathComponent("pipx_metadata.json")
         guard let data = try? directoryAccess.data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(PipxMetadata.self, from: data)
-    }
-
-    private func childDirectories(of url: URL) -> [URL] {
-        (try? directoryAccess.contentsOfDirectory(at: url)) ?? []
     }
 
     private static func normalizePackageName(_ name: String) -> String {
@@ -166,15 +224,6 @@ public struct PipxScanner: PackageScanner, Sendable {
             }
         }
         return out.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-    }
-
-    private static func barePackageName(_ requiresDist: String) -> String {
-        let trimmed = requiresDist.trimmingCharacters(in: .whitespaces)
-        let stopChars = CharacterSet(charactersIn: "(;").union(.whitespaces)
-        guard let range = trimmed.rangeOfCharacter(from: stopChars) else {
-            return trimmed
-        }
-        return String(trimmed[..<range.lowerBound])
     }
 }
 
