@@ -65,6 +65,13 @@ struct SidebarView: View {
                 }
             }
 
+            let skillCount = coordinator.agentSkillPackages.count
+            if skillCount > 0 {
+                NavigationLink(value: SidebarSelection.skills) {
+                    Label("Skills (\(skillCount))", systemImage: "wand.and.stars")
+                }
+            }
+
             if !coordinator.packages.isEmpty {
                 NavigationLink(value: SidebarSelection.diskUsage) {
                     Label("Disk Usage", systemImage: "chart.bar.xaxis")

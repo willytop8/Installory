@@ -36,6 +36,7 @@ __pycache__/
 
 # Personal/project-tool artifacts
 .claude/settings.local.json
+.opencode/
 
 # AI-agent orchestration scaffolding (implementation specs, audits, handoff notes).
 # Working material, not user-facing documentation — this repo stays public-facing.

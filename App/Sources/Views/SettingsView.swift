@@ -149,7 +149,7 @@ private struct PrivacyTab: View {
                 Toggle("Trace how packages were installed", isOn: $coordinator.provenanceCollection)
                     .disabled(coordinator.isScanning)
 
-                Text("When enabled, Installory reads your shell history and Claude Code session logs to identify which packages were installed when, and by what. Everything stays on your Mac \u{2014} nothing is sent anywhere.")
+                Text("When enabled, Installory reads your shell history and agent session logs (Claude Code, Codex, opencode) to identify which packages were installed when, and by what. Everything stays on your Mac \u{2014} nothing is sent anywhere.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -162,6 +162,8 @@ private struct PrivacyTab: View {
                         Text("\u{2022} ~/.bash_history")
                         Text("\u{2022} ~/.local/share/fish/fish_history")
                         Text("\u{2022} ~/.claude/projects/")
+                        Text("\u{2022} ~/.codex/sessions/")
+                        Text("\u{2022} ~/.local/share/opencode/opencode.db")
                     }
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -183,7 +185,7 @@ private struct PrivacyTab: View {
                             Task { await coordinator.requestProvenanceAccess() }
                         }
                         .disabled(coordinator.isScanning)
-                        Text("Installory will ask you to select your home folder so it can read shell history and Claude Code logs. You can revoke access at any time.")
+                        Text("Installory will ask you to select your home folder so it can read shell history and agent session logs. You can revoke access at any time.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

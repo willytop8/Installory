@@ -22,6 +22,8 @@ public struct ProvenanceRedactor: Sendable {
             },
             installCommand: evidence.installCommand.map(redact),
             claudeCodeContext: evidence.claudeCodeContext.map(redact),
+            codexContext: evidence.codexContext.map(redact),
+            opencodeContext: evidence.opencodeContext.map(redact),
             nearbyProjects: evidence.nearbyProjects.map {
                 ProvenanceEvidence.NearbyProject(
                     path: redactPath($0.path),
@@ -51,6 +53,40 @@ public struct ProvenanceRedactor: Sendable {
         _ context: ProvenanceEvidence.ClaudeCodeContext
     ) -> ProvenanceEvidence.ClaudeCodeContext {
         ProvenanceEvidence.ClaudeCodeContext(
+            sessionId: bounded(context.sessionId, maximumLength: 128),
+            projectPath: redactPath(context.projectPath),
+            sessionSummary: context.sessionSummary.map {
+                redactText($0, maximumLength: 512)
+            },
+            firstUserMessage: context.firstUserMessage.map {
+                redactText($0, maximumLength: 512)
+            },
+            bashInvocation: redactText(context.bashInvocation, maximumLength: 2_048),
+            timestamp: context.timestamp
+        )
+    }
+
+    public func redact(
+        _ context: ProvenanceEvidence.CodexContext
+    ) -> ProvenanceEvidence.CodexContext {
+        ProvenanceEvidence.CodexContext(
+            sessionId: bounded(context.sessionId, maximumLength: 128),
+            projectPath: redactPath(context.projectPath),
+            sessionSummary: context.sessionSummary.map {
+                redactText($0, maximumLength: 512)
+            },
+            firstUserMessage: context.firstUserMessage.map {
+                redactText($0, maximumLength: 512)
+            },
+            bashInvocation: redactText(context.bashInvocation, maximumLength: 2_048),
+            timestamp: context.timestamp
+        )
+    }
+
+    public func redact(
+        _ context: ProvenanceEvidence.OpenCodeContext
+    ) -> ProvenanceEvidence.OpenCodeContext {
+        ProvenanceEvidence.OpenCodeContext(
             sessionId: bounded(context.sessionId, maximumLength: 128),
             projectPath: redactPath(context.projectPath),
             sessionSummary: context.sessionSummary.map {

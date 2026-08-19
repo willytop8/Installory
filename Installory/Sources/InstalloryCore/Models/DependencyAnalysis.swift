@@ -51,6 +51,7 @@ extension [Package] {
 
         return self
             .filter { pkg in
+                guard pkg.manager.participatesInDependencyAnalysis else { return false }
                 guard pkg.isExplicit else { return false }
                 guard !pkg.isReadOnly else { return false }
                 guard !denylist.isDenylisted(pkg) else { return false }

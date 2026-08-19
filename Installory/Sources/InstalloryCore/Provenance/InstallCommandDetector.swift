@@ -242,6 +242,8 @@ public struct InstallCommandDetector: Sendable {
             ].contains(option)
         case .mas:
             return false
+        case .agentSkill, .agentCli, .editorExtension:
+            return false
         }
     }
 

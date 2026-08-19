@@ -222,7 +222,12 @@ struct PackageListView: View {
     private func packageContent(_ visiblePackages: [Package]) -> some View {
         switch coordinator.inventoryViewMode {
         case .list:
-            packageList(visiblePackages.sorted(by: coordinator.sortOrder))
+            packageList(
+                visiblePackages.sorted(
+                    by: coordinator.sortOrder,
+                    pinnedFirst: coordinator.pinnedIDs
+                )
+            )
         case .table:
             @Bindable var coordinator = coordinator
             PackageTableView(
@@ -256,6 +261,7 @@ struct PackageListView: View {
 // MARK: - Row
 
 private struct PackageRowView: View {
+    @Environment(AppCoordinator.self) private var coordinator
     let package: Package
     var onRemove: (() -> Void)? = nil
 
@@ -268,6 +274,12 @@ private struct PackageRowView: View {
                         .fontWeight(.semibold)
                         .lineLimit(1)
                     ManagerBadge(manager: package.manager)
+                    if coordinator.isPinned(package.id) {
+                        Image(systemName: "pin.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .help("Pinned — floats to the top of the list")
+                    }
                 }
                 Text(package.version)
                     .font(.system(.caption, design: .monospaced))
@@ -305,6 +317,25 @@ struct PackageContextMenu: View {
                 coordinator.revealPackageInstallPath(at: installPath)
             }
             .disabled(!exists)
+        }
+        Divider()
+        if coordinator.isPinned(package.id) {
+            Button("Unpin", systemImage: "pin.slash") {
+                coordinator.togglePinned(package.id)
+            }
+        } else {
+            Button("Pin", systemImage: "pin") {
+                coordinator.togglePinned(package.id)
+            }
+        }
+        if coordinator.isHidden(package.id) {
+            Button("Unhide", systemImage: "eye") {
+                coordinator.toggleHidden(package.id)
+            }
+        } else {
+            Button("Hide from Inventory", systemImage: "eye.slash") {
+                coordinator.toggleHidden(package.id)
+            }
         }
         if let onRemove {
             Divider()

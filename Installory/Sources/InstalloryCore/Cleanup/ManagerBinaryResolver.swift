@@ -6,7 +6,7 @@ extension PackageManager {
     /// qualifier and target each installation explicitly — see ``ManagerBinaryResolver``.
     var groupsByQualifier: Bool {
         switch self {
-        case .pip, .npm, .gem: return true
+        case .pip, .npm, .gem, .agentSkill, .agentCli, .editorExtension: return true
         case .brew, .brewCask, .pipx, .uv, .cargo, .mas: return false
         }
     }

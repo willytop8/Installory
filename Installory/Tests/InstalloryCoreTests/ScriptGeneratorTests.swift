@@ -623,6 +623,10 @@ struct ScriptGeneratorQualifierTests {
             .filter { $0.contains(needle) && !$0.hasPrefix("#") && !$0.hasPrefix("echo") }
     }
 
+    private func lines(of script: String) -> [String] {
+        script.components(separatedBy: "\n")
+    }
+
     private let node18 = "/Users/w/.nvm/versions/node/v18.19.1/lib/node_modules"
     private let node20 = "/Users/w/.nvm/versions/node/v20.11.0/lib/node_modules"
     private let ruby31 = "/Users/w/.rbenv/versions/3.1.4/lib/ruby/gems/3.1.0/specifications"
@@ -705,5 +709,161 @@ struct ScriptGeneratorQualifierTests {
         #expect(script.contains("gem uninstall bundler -v 1.0.0"))
         #expect(script.contains("# === npm (global) ==="))
         #expect(script.contains("# === Ruby Gems ==="))
+    }
+
+    // MARK: - Agent skills
+
+    private func makeSkillPackage(
+        name: String,
+        root: String,
+        installPath: String?,
+        artifactPaths: [String]? = nil
+    ) -> Package {
+        Package(
+            id: "agentSkill:\(root):\(name)",
+            manager: .agentSkill,
+            qualifier: root,
+            name: name,
+            version: installPath == nil ? "" : "1.0.0",
+            installPath: installPath.map(URL.init(fileURLWithPath:)),
+            installedAt: nil,
+            installedAtConfidence: .low,
+            sizeBytes: nil,
+            isExplicit: true,
+            isReadOnly: false,
+            dependencies: [],
+            artifactPaths: artifactPaths,
+            lastSeen: Date()
+        )
+    }
+
+    @Test("agent skill real directory produces a destructive-removal comment and warning")
+    func agentSkillDirectoryIsCommented() {
+        let root = "/Users/x/.claude/skills"
+        let pkg = makeSkillPackage(
+            name: "app-design",
+            root: root,
+            installPath: "\(root)/app-design"
+        )
+        let result = generator.generate(packages: [pkg])
+        let script = result.scriptText
+
+        #expect(script.contains("# === Agent Skills (\(root)) ==="))
+        #expect(script.contains("WARNING: agent skills have no package-manager backup"))
+        #expect(script.contains("# rm -rf \(root)/app-design"))
+        // Must never emit an active rm -rf for a real directory.
+        let scriptLines = lines(of: script)
+        #expect(!scriptLines.contains("rm -rf \(root)/app-design"))
+    }
+
+    @Test("agent skill broken symlink produces an active rm of just the link")
+    func agentSkillBrokenSymlinkRemovesLinkOnly() {
+        let root = "/Users/x/.config/opencode/skills"
+        let target = "/Users/x/skills-src/deprecated"
+        let pkg = makeSkillPackage(
+            name: "deprecated-skill",
+            root: root,
+            installPath: nil,
+            artifactPaths: [target]
+        )
+        let result = generator.generate(packages: [pkg])
+        let script = result.scriptText
+
+        let cmd = "rm \(root)/deprecated-skill"
+        let scriptLines = lines(of: script)
+        #expect(scriptLines.contains(cmd))
+        #expect(!script.contains("rm -rf"))
+        #expect(!script.contains("WARNING"))
+    }
+
+    @Test("removalCommand returns the active link removal for a broken skill symlink")
+    func removalCommandForBrokenSkillSymlink() {
+        let root = "/Users/x/.agents/skills"
+        let pkg = makeSkillPackage(
+            name: "stale",
+            root: root,
+            installPath: nil,
+            artifactPaths: ["/Users/x/old-target"]
+        )
+        #expect(generator.removalCommand(for: pkg) == "rm \(root)/stale")
+    }
+
+    @Test("removalCommand returns the commented destructive line for a real skill directory")
+    func removalCommandForRealSkillDirectory() {
+        let root = "/Users/x/.claude/skills"
+        let pkg = makeSkillPackage(name: "app-design", root: root, installPath: "\(root)/app-design")
+        #expect(generator.removalCommand(for: pkg)
+            == "# rm -rf \(root)/app-design  # no package-manager backup")
+    }
+
+    @Test("agent skill sections are grouped per tool root")
+    func agentSkillSectionsGroupedByRoot() {
+        let script = generator.generate(packages: [
+            makeSkillPackage(name: "a-skill", root: "/Users/x/.claude/skills", installPath: "/Users/x/.claude/skills/a-skill"),
+            makeSkillPackage(name: "b-skill", root: "/Users/x/.config/opencode/skills", installPath: "/Users/x/.config/opencode/skills/b-skill"),
+        ]).scriptText
+
+        #expect(script.contains("# === Agent Skills (/Users/x/.claude/skills) ==="))
+        #expect(script.contains("# === Agent Skills (/Users/x/.config/opencode/skills) ==="))
+    }
+
+    // MARK: - Phase B: agent CLIs and editor extensions
+
+    @Test("agent CLI removal is emitted as a review comment, never a command")
+    func agentCliRemovalIsAComment() {
+        let pkg = makePackage(manager: .agentCli, name: "claude", qualifier: "/Users/x/.claude")
+        let command = generator.removalCommand(for: pkg)
+        #expect(command?.hasPrefix("#") == true)
+        #expect(command?.contains("claude") == true)
+        #expect(command?.contains("no generated uninstall command") == true)
+
+        let script = generator.generate(packages: [pkg]).scriptText
+        let scriptLines = lines(of: script)
+        #expect(!scriptLines.contains(where: { $0.hasPrefix("claude ") && !$0.hasPrefix("#") }))
+    }
+
+    @Test("editor extension under VS Code emits a code uninstall command")
+    func editorExtensionVSCodeUsesCodeCLI() {
+        let pkg = makePackage(
+            manager: .editorExtension,
+            name: "prettier-vscode",
+            qualifier: "/Users/x/.vscode/extensions"
+        )
+        #expect(generator.removalCommand(for: pkg) == "code --uninstall-extension prettier-vscode")
+    }
+
+    @Test("editor extension under Cursor emits a cursor uninstall command")
+    func editorExtensionCursorUsesCursorCLI() {
+        let pkg = makePackage(
+            manager: .editorExtension,
+            name: "python",
+            qualifier: "/Users/x/.cursor/extensions"
+        )
+        #expect(generator.removalCommand(for: pkg) == "cursor --uninstall-extension python")
+    }
+
+    @Test("editor extension with an unknown root is a manual-review comment")
+    func editorExtensionUnknownRootIsManualReview() {
+        let pkg = makePackage(
+            manager: .editorExtension,
+            name: "some-ext",
+            qualifier: "/Users/x/custom/place"
+        )
+        let command = generator.removalCommand(for: pkg)
+        #expect(command?.hasPrefix("#") == true)
+        #expect(command?.contains("Manual review required") == true)
+    }
+
+    @Test("editor extension sections are grouped per editor root")
+    func editorExtensionSectionsGroupedByRoot() {
+        let script = generator.generate(packages: [
+            makePackage(manager: .editorExtension, name: "prettier-vscode", qualifier: "/Users/x/.vscode/extensions"),
+            makePackage(manager: .editorExtension, name: "python", qualifier: "/Users/x/.cursor/extensions"),
+        ]).scriptText
+
+        #expect(script.contains("# === Editor Extensions (/Users/x/.vscode/extensions) ==="))
+        #expect(script.contains("# === Editor Extensions (/Users/x/.cursor/extensions) ==="))
+        #expect(script.contains("code --uninstall-extension prettier-vscode"))
+        #expect(script.contains("cursor --uninstall-extension python"))
     }
 }

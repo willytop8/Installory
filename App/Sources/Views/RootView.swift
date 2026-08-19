@@ -45,7 +45,7 @@ enum AnalysisEmptyState: Equatable {
 extension SidebarSelection {
     var supportsCleanupControls: Bool {
         switch self {
-        case .all, .manager, .duplicates, .orphans:
+        case .all, .manager, .duplicates, .orphans, .skills:
             return true
         case .readOnly, .diskUsage, .aiInstalled, .snapshot:
             return false
@@ -101,6 +101,7 @@ struct AnalysisEmptyStateView: View {
 
 struct RootView: View {
     @Environment(AppCoordinator.self) private var coordinator
+    @State private var showingBaselineCompare = false
 
     var body: some View {
         @Bindable var coordinator = coordinator
@@ -118,6 +119,8 @@ struct RootView: View {
                 DiskUsageView()
             } else if case .aiInstalled = coordinator.sidebarSelection {
                 AIInstalledView()
+            } else if case .skills = coordinator.sidebarSelection {
+                SkillsView()
             } else {
                 PackageListView()
             }
@@ -187,6 +190,25 @@ struct RootView: View {
                     .help("Capture a manual snapshot of the current inventory")
                     .disabled(coordinator.packages.isEmpty || coordinator.isScanning)
 
+                    Menu {
+                        Button("Import Baseline\u{2026}", systemImage: "arrow.down.doc") {
+                            Task { await coordinator.pickBaselineFile() }
+                        }
+                        .disabled(coordinator.packages.isEmpty)
+                        if coordinator.baselinePayload != nil {
+                            Button("Compare with Baseline\u{2026}", systemImage: "arrow.triangle.2.circlepath") {
+                                showingBaselineCompare = true
+                            }
+                            Divider()
+                            Button("Clear Baseline", systemImage: "trash", role: .destructive) {
+                                coordinator.clearBaseline()
+                            }
+                        }
+                    } label: {
+                        Label("Baseline", systemImage: coordinator.baselinePayload != nil ? "checklist" : "doc.badge.arrow.up")
+                    }
+                    .help("Compare the inventory against a snapshot captured on another Mac")
+
                     Button {
                         Task { await coordinator.refresh() }
                     } label: {
@@ -238,6 +260,10 @@ struct RootView: View {
             set: { _ in }
         )) {
             OnboardingView()
+                .environment(coordinator)
+        }
+        .sheet(isPresented: $showingBaselineCompare) {
+            BaselineCompareView()
                 .environment(coordinator)
         }
         .actionErrorAlert(coordinator: coordinator)

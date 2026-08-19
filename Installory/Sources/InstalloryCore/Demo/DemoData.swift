@@ -217,6 +217,69 @@ public enum DemoData {
             installedDaysAgo: nil, confidence: .unknown,
             size: nil, explicit: true)
 
+        // MARK: Demo: spec 06 — agent skills
+
+        let claudeSkills = "/Users/demo/.claude/skills"
+        let agentsSkills = "/Users/demo/.agents/skills"
+        let opencodeSkills = "/Users/demo/.config/opencode/skills"
+
+        // Healthy skill with a versioned SKILL.md manifest.
+        pkg(.agentSkill, "app-design", version: "2.1.0", qualifier: claudeSkills,
+            path: "\(claudeSkills)/app-design",
+            installedDaysAgo: 30, size: 120_000)
+        // Healthy skill whose SKILL.md has no version field → version "".
+        pkg(.agentSkill, "git-workflow", version: "", qualifier: agentsSkills,
+            path: "\(agentsSkills)/git-workflow",
+            installedDaysAgo: 60, size: 80_000)
+
+        // Cross-tool duplicate: same skill name installed in two roots.
+        pkg(.agentSkill, "frontend-polish", version: "1.0.0", qualifier: claudeSkills,
+            path: "\(claudeSkills)/frontend-polish",
+            installedDaysAgo: 20, size: 200_000)
+        pkg(.agentSkill, "frontend-polish", version: "1.0.0", qualifier: opencodeSkills,
+            path: "\(opencodeSkills)/frontend-polish",
+            installedDaysAgo: 20, size: 200_000)
+
+        // Broken symlink: installPath nil + artifactPaths = [target string].
+        pkg(.agentSkill, "deprecated-skill", version: "", qualifier: claudeSkills,
+            installedDaysAgo: 90, confidence: .medium,
+            size: nil, artifacts: ["/Users/demo/skills-src/deprecated-skill"])
+
+        // Missing SKILL.md: installPath nil + artifactPaths nil.
+        pkg(.agentSkill, "half-baked-skill", version: "", qualifier: agentsSkills,
+            installedDaysAgo: 45, confidence: .medium,
+            size: nil)
+
+        // MARK: Demo: spec 07 — agent CLIs and editor extensions
+
+        // One row per discovered agent CLI config root.
+        pkg(.agentCli, "claude", version: "", qualifier: "/Users/demo/.claude",
+            path: "/Users/demo/.claude",
+            installedDaysAgo: 120, size: 4_000_000)
+        pkg(.agentCli, "codex", version: "0.42.0", qualifier: "/Users/demo/.codex",
+            path: "/Users/demo/.codex",
+            installedDaysAgo: 90, size: 1_500_000)
+        pkg(.agentCli, "opencode", version: "", qualifier: "/Users/demo/.config/opencode",
+            path: "/Users/demo/.config/opencode",
+            installedDaysAgo: 60, size: 800_000)
+        pkg(.agentCli, "cursor", version: "", qualifier: "/Users/demo/.cursor",
+            path: "/Users/demo/.cursor",
+            installedDaysAgo: 40, size: 2_000_000)
+
+        // Editor extensions, grouped by their extensions root qualifier.
+        pkg(.editorExtension, "esbenp.prettier-vscode", version: "10.1.0",
+            qualifier: "/Users/demo/.vscode/extensions",
+            path: "/Users/demo/.vscode/extensions/esbenp.prettier-vscode-10.1.0",
+            installedDaysAgo: 70, size: 15_000_000)
+        pkg(.editorExtension, "ms-python.python", version: "2024.4.1",
+            qualifier: "/Users/demo/.vscode/extensions",
+            path: "/Users/demo/.vscode/extensions/ms-python.python-2024.4.1",
+            installedDaysAgo: 55, size: 60_000_000)
+        pkg(.editorExtension, "cursor.python", version: "1.0.3",
+            qualifier: "/Users/demo/.cursor/extensions",
+            path: "/Users/demo/.cursor/extensions/cursor.python-1.0.3",
+            installedDaysAgo: 35, size: 12_000_000)
+
         return result
     }
 
@@ -258,8 +321,10 @@ public enum DemoData {
 
     /// Sample provenance evidence for demo mode.
     ///
-    /// Two packages are covered:
-    /// - `brew::ffmpeg`: attributed to a Claude Code session (provides ClaudeCodeContext for spec 09).
+    /// Four packages are covered:
+    /// - `brew::ffmpeg`: attributed to a Claude Code session (ClaudeCodeContext).
+    /// - `brew::wget`: attributed to a Codex session (CodexContext).
+    /// - `brew::ripgrep`: attributed to an opencode session (OpenCodeContext).
     /// - `pip:<brewPython>:requests`: attributed to a shell history command only.
     ///
     /// Keyed by the same package IDs produced by `packages()` so `PackageDetailView` can
@@ -272,8 +337,10 @@ public enum DemoData {
 
         let ffmpegId   = id(.brew, nil, "ffmpeg")
         let aomId      = id(.brew, nil, "aom")
+        let wgetId     = id(.brew, nil, "wget")
         let requestsId = id(.pip, brewPython, "requests")
         let numpyId    = id(.pip, brewPython, "numpy")
+        let ripgrepId  = id(.brew, nil, "ripgrep")
 
         // ffmpeg — installed by Claude Code (primary demo for spec 09 AI-session tagging).
         let ffmpegEvidence = ProvenanceEvidence(
@@ -313,8 +380,53 @@ public enum DemoData {
             collectedAt: now
         )
 
+        // wget — installed by Codex (multi-agent demo: spec 11 generalized AI attribution).
+        let wgetEvidence = ProvenanceEvidence(
+            packageId: wgetId,
+            fsInstallTime: daysAgo(14),
+            fsInstallTimeSource: "INSTALL_RECEIPT.json",
+            installCommand: nil,
+            claudeCodeContext: nil,
+            codexContext: ProvenanceEvidence.CodexContext(
+                sessionId: "demo-codex-session-xyz",
+                projectPath: "/Users/demo/Projects/website-tools",
+                sessionSummary: nil,
+                firstUserMessage: nil,
+                bashInvocation: "brew install wget",
+                timestamp: daysAgo(14)
+            ),
+            nearbyProjects: [],
+            coInstalledWithin1h: [],
+            overallConfidence: .high,
+            collectedAt: now
+        )
+
+        // ripgrep — installed by opencode (multi-agent demo: spec 11 generalized AI attribution).
+        let ripgrepEvidence = ProvenanceEvidence(
+            packageId: ripgrepId,
+            fsInstallTime: daysAgo(9),
+            fsInstallTimeSource: "INSTALL_RECEIPT.json",
+            installCommand: nil,
+            claudeCodeContext: nil,
+            codexContext: nil,
+            opencodeContext: ProvenanceEvidence.OpenCodeContext(
+                sessionId: "demo-opencode-session-456",
+                projectPath: "/Users/demo/Projects/cli-tool",
+                sessionSummary: "Add ripgrep for fast search",
+                firstUserMessage: nil,
+                bashInvocation: "brew install ripgrep",
+                timestamp: daysAgo(9)
+            ),
+            nearbyProjects: [],
+            coInstalledWithin1h: [],
+            overallConfidence: .high,
+            collectedAt: now
+        )
+
         return [
             ffmpegId:   ffmpegEvidence,
+            wgetId:     wgetEvidence,
+            ripgrepId:  ripgrepEvidence,
             requestsId: requestsEvidence,
         ]
     }

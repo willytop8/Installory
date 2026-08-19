@@ -7,11 +7,14 @@ import Foundation
 /// off, or the package may predate collection. Only call this with evidence that was
 /// actively collected; a `nil` argument simply means "unknown."
 ///
-/// Claude Code is the only tracked source today. The predicate is named for the concept
-/// ("AI assistant") rather than the specific tool so that future sources (e.g., Cursor,
-/// Copilot agents) can map in without a user-visible rename.
+/// Claude Code, Codex, and opencode are the tracked sources today. The predicate
+/// is named for the concept ("AI assistant") rather than any specific tool so
+/// that future sources (e.g., Cursor, Copilot agents) can map in without a
+/// user-visible rename.
 ///
 /// Pure: no I/O, no side effects, deterministic.
 public func wasInstalledByAIAssistant(_ evidence: ProvenanceEvidence?) -> Bool {
     evidence?.claudeCodeContext != nil
+        || evidence?.codexContext != nil
+        || evidence?.opencodeContext != nil
 }

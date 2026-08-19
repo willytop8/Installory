@@ -58,7 +58,8 @@ public struct ReinstallScriptGenerator: Sendable {
     // MARK: - Manager sections
 
     private static let managerOrder: [PackageManager] = [
-        .brew, .brewCask, .pip, .npm, .pipx, .uv, .cargo, .gem, .mas,
+        .brew, .brewCask, .pip, .npm, .pipx, .uv, .cargo, .gem, .mas, .agentSkill,
+        .agentCli, .editorExtension,
     ]
 
     private func appendManagerSections(missing: [MissingPackage], to out: inout [String]) {
@@ -105,6 +106,9 @@ public struct ReinstallScriptGenerator: Sendable {
         case .pip: return "# === pip (interpreter: \(commentQualifier)) ==="
         case .npm: return "# === npm (global: \(commentQualifier)) ==="
         case .gem: return "# === Ruby Gems (\(commentQualifier)) ==="
+        case .agentSkill: return "# === Agent Skills (\(commentQualifier)) ==="
+        case .agentCli: return "# === Agent CLIs (\(commentQualifier)) ==="
+        case .editorExtension: return "# === Editor Extensions (\(commentQualifier)) ==="
         default:   return sectionHeader(for: manager)
         }
     }
@@ -203,6 +207,43 @@ public struct ReinstallScriptGenerator: Sendable {
             }
             out.append(shellEchoLine(for: cmd))
             out.append(cmd)
+
+        case .agentSkill:
+            // Skills have no generic install path — they are copied from a source
+            // repository or shared dotfiles. Snapshot metadata carries no source, so
+            // the user must restore the skill manually.
+            let recordedRoot = mp.package.qualifier
+                .map(shellCommentText) ?? "no recorded skills root"
+            out.append(
+                "# Manual review required: agent skill \(shellCommentText(mp.package.name)) "
+                    + "was recorded at \(recordedRoot), but snapshots do not retain its source; "
+                    + "reinstall by copying the skill directory back from your dotfiles or repo."
+            )
+
+        case .agentCli:
+            // Agent CLIs are installed by external installers the snapshot does not
+            // track (brew, npm, pkg, the agent's own installer). Restore via the
+            // documented installation path for the specific tool.
+            let recordedRoot = mp.package.qualifier
+                .map(shellCommentText) ?? "no recorded config root"
+            out.append(
+                "# Manual review required: agent CLI \(shellCommentText(mp.package.name)) "
+                    + "was recorded at \(recordedRoot), but its installer is not in the snapshot; "
+                    + "reinstall using the tool's documented install command."
+            )
+
+        case .editorExtension:
+            // Extensions are restored by publisher/name through the editor CLI.
+            let recordedRoot = mp.package.qualifier ?? ""
+            let editor: String
+            if recordedRoot.contains("/.cursor/") {
+                editor = "cursor"
+            } else {
+                editor = "code"
+            }
+            let cmd = "\(editor) --install-extension \(shellArgument(mp.package.name))"
+            out.append(shellEchoLine(for: cmd))
+            out.append(cmd)
         }
     }
 
@@ -217,6 +258,9 @@ public struct ReinstallScriptGenerator: Sendable {
         case .cargo:    return "# === Cargo (Rust) ==="
         case .gem:      return "# === Ruby Gems ==="
         case .mas:      return "# === Mac App Store ==="
+        case .agentSkill: return "# === Agent Skills ==="
+        case .agentCli: return "# === Agent CLIs ==="
+        case .editorExtension: return "# === Editor Extensions ==="
         }
     }
 

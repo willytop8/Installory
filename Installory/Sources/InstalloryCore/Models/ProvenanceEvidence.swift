@@ -4,10 +4,10 @@ import GRDB
 /// Structured evidence for when and why a package was installed.
 ///
 /// Gathered by `ProvenanceCollector` from up to three signals: filesystem
-/// timestamps, shell history, and Claude Code session logs. Stored as a
-/// JSON blob in the `provenance_evidence.payload` column, with
-/// `collected_at` and `overall_confidence` also extracted as top-level
-/// columns so callers can query them without decoding the payload.
+/// timestamps, shell history, and agent session logs (Claude Code, Codex,
+/// opencode). Stored as a JSON blob in the `provenance_evidence.payload`
+/// column, with `collected_at` and `overall_confidence` also extracted as
+/// top-level columns so callers can query them without decoding the payload.
 public struct ProvenanceEvidence: Codable, Sendable {
     public let packageId: String
 
@@ -22,9 +22,14 @@ public struct ProvenanceEvidence: Codable, Sendable {
 
     public let installCommand: InstallCommandRecord?
 
-    // MARK: Claude Code signal
+    // MARK: Agent-session signals
 
+    /// Context from a Claude Code session that triggered the install.
     public let claudeCodeContext: ClaudeCodeContext?
+    /// Context from a Codex session that triggered the install.
+    public let codexContext: CodexContext?
+    /// Context from an opencode session that triggered the install.
+    public let opencodeContext: OpenCodeContext?
 
     // MARK: Derived
 
@@ -48,6 +53,8 @@ public struct ProvenanceEvidence: Codable, Sendable {
         fsInstallTimeSource: String?,
         installCommand: InstallCommandRecord?,
         claudeCodeContext: ClaudeCodeContext?,
+        codexContext: CodexContext? = nil,
+        opencodeContext: OpenCodeContext? = nil,
         nearbyProjects: [NearbyProject],
         coInstalledWithin1h: [String],
         coInstalledWithin1hTotalCount: Int? = nil,
@@ -59,6 +66,8 @@ public struct ProvenanceEvidence: Codable, Sendable {
         self.fsInstallTimeSource = fsInstallTimeSource
         self.installCommand = installCommand
         self.claudeCodeContext = claudeCodeContext
+        self.codexContext = codexContext
+        self.opencodeContext = opencodeContext
         self.nearbyProjects = nearbyProjects
         self.coInstalledWithin1h = coInstalledWithin1h
         self.coInstalledWithin1hTotalCount = coInstalledWithin1hTotalCount
@@ -113,6 +122,68 @@ extension ProvenanceEvidence {
         public let bashInvocation: String
         /// When the Bash invocation ran. `nil` when the JSONL timestamp field is
         /// absent or malformed — emitting nil is preferred over the epoch fallback.
+        public let timestamp: Date?
+
+        public init(
+            sessionId: String,
+            projectPath: String,
+            sessionSummary: String?,
+            firstUserMessage: String?,
+            bashInvocation: String,
+            timestamp: Date?
+        ) {
+            self.sessionId = sessionId
+            self.projectPath = projectPath
+            self.sessionSummary = sessionSummary
+            self.firstUserMessage = firstUserMessage
+            self.bashInvocation = bashInvocation
+            self.timestamp = timestamp
+        }
+    }
+
+    /// Context extracted from a Codex session log (`~/.codex/sessions/**/rollout-*.jsonl`)
+    /// that triggered the install.
+    ///
+    /// Codex sessions do not carry a per-project summary index or a recoverable
+    /// first user message, so those fields remain nil for Codex records.
+    public struct CodexContext: Codable, Sendable, Equatable {
+        public let sessionId: String
+        public let projectPath: String
+        public let sessionSummary: String?
+        public let firstUserMessage: String?
+        /// The exact `exec_command` invocation that installed the package.
+        public let bashInvocation: String
+        public let timestamp: Date?
+
+        public init(
+            sessionId: String,
+            projectPath: String,
+            sessionSummary: String?,
+            firstUserMessage: String?,
+            bashInvocation: String,
+            timestamp: Date?
+        ) {
+            self.sessionId = sessionId
+            self.projectPath = projectPath
+            self.sessionSummary = sessionSummary
+            self.firstUserMessage = firstUserMessage
+            self.bashInvocation = bashInvocation
+            self.timestamp = timestamp
+        }
+    }
+
+    /// Context extracted from an opencode session (read from the local
+    /// `opencode.db` SQLite database) that triggered the install.
+    ///
+    /// The session title is used as the summary; opencode does not expose a
+    /// recoverable first user message for every session.
+    public struct OpenCodeContext: Codable, Sendable, Equatable {
+        public let sessionId: String
+        public let projectPath: String
+        public let sessionSummary: String?
+        public let firstUserMessage: String?
+        /// The exact `bash` tool input that installed the package.
+        public let bashInvocation: String
         public let timestamp: Date?
 
         public init(

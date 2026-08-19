@@ -131,7 +131,8 @@ public struct ScriptGenerator: Sendable {
 
     // Canonical output order. Managers not in this list are appended alphabetically.
     private static let managerOrder: [PackageManager] = [
-        .brew, .brewCask, .pip, .npm, .pipx, .uv, .cargo, .gem, .mas,
+        .brew, .brewCask, .pip, .npm, .pipx, .uv, .cargo, .gem, .mas, .agentSkill,
+        .agentCli, .editorExtension,
     ]
 
     private func appendManagerSections(packages: [Package], to out: inout [String]) {
@@ -204,6 +205,27 @@ public struct ScriptGenerator: Sendable {
             return
         }
 
+        if pkg.manager == .agentSkill {
+            // Skills have no package-manager backup. A broken symlink can be removed
+            // safely (it is just a dangling link); a real skill directory or a
+            // resolvable symlink is destructive to delete, so it stays commented.
+            if pkg.isBrokenAgentSkillLink {
+                let linkPath = agentSkillLinkPath(for: pkg)
+                let cmd = "rm \(shellArgument(linkPath))"
+                out.append(shellEchoLine(for: cmd))
+                out.append(cmd)
+                return
+            }
+            let bar = "# " + String(repeating: "=", count: 40)
+            out.append(bar)
+            out.append("# WARNING: agent skills have no package-manager backup. Removing")
+            out.append("# this skill deletes its files permanently.")
+            out.append(bar)
+            let target = pkg.installPath?.path ?? pkg.artifactPaths?.first ?? pkg.name
+            out.append("# rm -rf \(shellCommentText(target))")
+            return
+        }
+
         let cmd = renderCommand(for: pkg)
         if cmd.hasPrefix("#") {
             out.append(cmd)
@@ -219,6 +241,18 @@ public struct ScriptGenerator: Sendable {
                 out.append("#   \(shellCommentText(path))")
             }
         }
+    }
+
+    /// Reconstructs the on-disk location of an agent skill row from its qualifier
+    /// (owning skills root) and name. Broken-symlink rows store no `installPath`
+    /// (the link does not resolve), but the link itself always sits directly under
+    /// the owning root, so `qualifier/name` is the exact path to remove.
+    private func agentSkillLinkPath(for pkg: Package) -> String {
+        guard let root = pkg.qualifier, !root.isEmpty else { return pkg.name }
+        return URL(fileURLWithPath: root)
+            .appendingPathComponent(pkg.name)
+            .standardizedFileURL
+            .path
     }
 
     private func appendDenylistSection(packages: [Package], to out: inout [String]) {
@@ -287,7 +321,40 @@ public struct ScriptGenerator: Sendable {
         case .mas:
             // mas has no CLI uninstall; caller handles this case before reaching renderCommand
             return "\(pkg.name)  # remove manually from /Applications"
+        case .agentSkill:
+            // Broken symlink: remove only the dangling link itself.
+            if pkg.isBrokenAgentSkillLink {
+                return "rm \(shellArgument(agentSkillLinkPath(for: pkg)))"
+            }
+            // Real directory or resolvable symlink: destructive, no package-manager
+            // backup. Emitted as a comment so it never runs without explicit review.
+            let target = pkg.installPath?.path ?? pkg.artifactPaths?.first ?? pkg.name
+            return "# rm -rf \(shellCommentText(target))  # no package-manager backup"
+        case .agentCli:
+            // Agent CLIs are typically installed by an external installer (brew, npm,
+            // pkg) that this row does not track. Emit a review comment, never a command.
+            let configRoot = pkg.qualifier.map(shellCommentText) ?? "unknown config root"
+            return "# \(shellCommentText(pkg.name)): remove with the installer that placed it "
+                + "(config at \(configRoot)); no generated uninstall command"
+        case .editorExtension:
+            // `code`/`cursor` — uninstall through the editor's own CLI, which is the
+            // only safe path (it also removes the extension from enabled state).
+            guard let editor = Self.editorCommand(for: pkg.qualifier) else {
+                let recordedRoot = pkg.qualifier.map(shellCommentText) ?? "no recorded editor root"
+                return "# Manual review required: no editor CLI known for \(recordedRoot); "
+                    + "uninstall \(shellCommentText(pkg.name)) from the editor UI"
+            }
+            return "\(editor) --uninstall-extension \(name)"
         }
+    }
+
+    /// Maps an editor-extension qualifier (an editor extensions root path) to the
+    /// editor CLI binary that manages it. Returns nil when no editor is recognized.
+    private static func editorCommand(for qualifier: String?) -> String? {
+        let path = qualifier ?? ""
+        if path.contains("/.cursor/") { return "cursor" }
+        if path.contains("/.vscode/") { return "code" }
+        return nil
     }
 
     private func sectionHeader(for manager: PackageManager) -> String {
@@ -301,6 +368,9 @@ public struct ScriptGenerator: Sendable {
         case .cargo:   return "# === Cargo (Rust) ==="
         case .gem:     return "# === Ruby Gems ==="
         case .mas:     return "# === Mac App Store ==="
+        case .agentSkill: return "# === Agent Skills ==="
+        case .agentCli: return "# === Agent CLIs ==="
+        case .editorExtension: return "# === Editor Extensions ==="
         }
     }
 
@@ -313,6 +383,9 @@ public struct ScriptGenerator: Sendable {
         case .pip: return "# === pip (interpreter: \(commentQualifier)) ==="
         case .npm: return "# === npm (global: \(commentQualifier)) ==="
         case .gem: return "# === Ruby Gems (\(commentQualifier)) ==="
+        case .agentSkill: return "# === Agent Skills (\(commentQualifier)) ==="
+        case .agentCli: return "# === Agent CLIs (\(commentQualifier)) ==="
+        case .editorExtension: return "# === Editor Extensions (\(commentQualifier)) ==="
         default:   return sectionHeader(for: manager)
         }
     }

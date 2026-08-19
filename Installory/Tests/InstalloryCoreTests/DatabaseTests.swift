@@ -41,6 +41,7 @@ struct DatabaseTests {
         #expect(tables.contains("provenance_evidence"))
         #expect(tables.contains("snapshots"))
         #expect(tables.contains("scan_runs"))
+        #expect(tables.contains("package_user_state"))
     }
 
     @Test("packages table has required columns")
@@ -195,6 +196,97 @@ struct DatabaseTests {
             let foreignKeyViolations = try Row.fetchAll(db, sql: "PRAGMA foreign_key_check")
             #expect(foreignKeyViolations.isEmpty)
         }
+    }
+
+    @Test("A shipped v2 database upgrades to v3 with the package_user_state table")
+    func v2DatabaseUpgradesToV3WithoutLosingRows() throws {
+        let (pool, dir) = try makeTempPool()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let migrator = Migrations.makeMigrator()
+        try migrator.migrate(pool, upTo: "v2_package_artifact_paths")
+
+        try pool.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO packages (
+                        id, manager, qualifier, name, version, install_path,
+                        installed_at, installed_at_confidence, size_bytes,
+                        is_explicit, is_read_only, dependencies, last_seen,
+                        artifact_paths
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                arguments: [
+                    "brew::git", "brew", nil, "git", "2.44.0",
+                    "/opt/homebrew/Cellar/git/2.44.0", 1_700_000_000,
+                    "high", 50_000_000, 1, 0, "[\"gettext\"]", 1_710_000_000,
+                    nil,
+                ]
+            )
+        }
+
+        try Migrations.run(pool)
+
+        try pool.read { db in
+            // The v2 rows survive.
+            let package = try Row.fetchOne(db, sql: "SELECT * FROM packages WHERE id = ?", arguments: ["brew::git"])
+            #expect(package != nil)
+            #expect((package?["name"] as String?) == "git")
+
+            // The new table exists with the expected columns.
+            let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(package_user_state)")
+            let names = Set(columns.map { row -> String in row["name"] })
+            #expect(names == ["package_id", "is_hidden", "is_pinned", "note", "updated_at"])
+        }
+
+        // User state rows written after the upgrade persist and round-trip.
+        try pool.write { db in
+            try PackageUserState(
+                packageId: "brew::git",
+                isHidden: true,
+                isPinned: true,
+                note: "pinned for migration check",
+                updatedAt: Date(timeIntervalSince1970: 1_710_000_400)
+            ).save(db)
+        }
+        let fetched = try pool.read { db in
+            try PackageUserState.fetchOne(db, key: "brew::git")
+        }
+        #expect(fetched?.isHidden == true)
+        #expect(fetched?.isPinned == true)
+        #expect(fetched?.note == "pinned for migration check")
+    }
+
+    @Test("package_user_state has no foreign key so state survives package deletion")
+    func packageUserStateIsIndependentOfPackageRows() throws {
+        let (pool, dir) = try makeTempPool()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try Migrations.run(pool)
+        try pool.write { db in
+            try PackageUserState(
+                packageId: "ghost::gone",
+                isHidden: true,
+                updatedAt: Date(timeIntervalSince1970: 1_710_000_400)
+            ).save(db)
+        }
+
+        let foreignKeys = try pool.read { db in
+            try String.fetchAll(
+                db,
+                sql: "SELECT sql FROM sqlite_master WHERE name = 'package_user_state'"
+            )
+        }
+        #expect(foreignKeys.joined().contains("FOREIGN KEY") == false)
+
+        // Deletion of the package (which never existed) must not be blocked.
+        try pool.write { db in
+            try db.execute(sql: "DELETE FROM package_user_state WHERE package_id = ?", arguments: ["ghost::gone"])
+        }
+        let count = try pool.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM package_user_state")
+        }
+        #expect(count == 0)
     }
 
     @Test("Fresh and v1-upgraded databases have equivalent application schemas")

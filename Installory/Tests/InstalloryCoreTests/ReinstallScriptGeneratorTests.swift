@@ -494,4 +494,33 @@ struct ReinstallScriptGeneratorQualifierTests {
         #expect(script.contains("npm install -g typescript@5.4.5"))
         #expect(script.contains("gem install bundler -v 2.5.7"))
     }
+
+    @Test("B-02: editor extension under VS Code reinstalls via the code CLI")
+    func editorExtensionVSCodeReinstallsViaCodeCLI() {
+        let script = generator.generate(missing: [
+            makeMissing(manager: .editorExtension, name: "prettier-vscode", qualifier: "/Users/x/.vscode/extensions"),
+        ]).scriptText
+
+        #expect(script.contains("code --install-extension prettier-vscode"))
+    }
+
+    @Test("B-02: editor extension under Cursor reinstalls via the cursor CLI")
+    func editorExtensionCursorReinstallsViaCursorCLI() {
+        let script = generator.generate(missing: [
+            makeMissing(manager: .editorExtension, name: "python", qualifier: "/Users/x/.cursor/extensions"),
+        ]).scriptText
+
+        #expect(script.contains("cursor --install-extension python"))
+    }
+
+    @Test("B-02: agent CLI reinstall is a manual-review comment, never a command")
+    func agentCliReinstallRequiresManualReview() {
+        let script = generator.generate(missing: [
+            makeMissing(manager: .agentCli, name: "claude", qualifier: "/Users/x/.claude"),
+        ]).scriptText
+
+        #expect(script.contains("Manual review required: agent CLI claude"))
+        let scriptLines = script.components(separatedBy: "\n")
+        #expect(!scriptLines.contains(where: { $0.hasPrefix("claude ") && !$0.hasPrefix("#") }))
+    }
 }

@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import GRDB
 @testable import InstalloryCore
 
 @Suite("ProvenanceCollector")
@@ -119,6 +120,19 @@ struct ProvenanceCollectorTests {
         )
     }
 
+    private func emptyCodex() -> CodexLogCollector {
+        CodexLogCollector(
+            directoryAccess: InMemoryDirectoryAccessProvider.make { _ in },
+            homeDirectory: home
+        )
+    }
+
+    private func emptyOpenCode() -> OpenCodeLogCollector {
+        OpenCodeLogCollector(
+            databasePath: home.appendingPathComponent("opencode.db")
+        )
+    }
+
     @Test("PERF25-005: a cancelled aggregate collection publishes no partial evidence")
     func cancelledCollectionReturnsNoEvidence() async {
         let packages = (0..<5_000).map { index in
@@ -126,7 +140,9 @@ struct ProvenanceCollectorTests {
         }
         let collector = ProvenanceCollector(
             shellCollector: emptyShell(),
-            claudeCodeCollector: emptyClaude()
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         )
         let task = Task.detached {
             do { try await Task.sleep(for: .milliseconds(50)) } catch {}
@@ -145,7 +161,9 @@ struct ProvenanceCollectorTests {
         let pkg = makePackage("ffmpeg", installedAt: t0)
         let results = ProvenanceCollector(
             shellCollector: emptyShell(),
-            claudeCodeCollector: claudeCollector(command: "brew install ffmpeg", offset: 600)
+            claudeCodeCollector: claudeCollector(command: "brew install ffmpeg", offset: 600),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: [pkg])
         #expect(results[0].claudeCodeContext != nil)
         #expect(results[0].overallConfidence == .high)
@@ -156,7 +174,9 @@ struct ProvenanceCollectorTests {
         let pkg = makePackage("ffmpeg", installedAt: t0)
         let results = ProvenanceCollector(
             shellCollector: shellCollector(commands: [("brew install ffmpeg", 200)]),
-            claudeCodeCollector: emptyClaude()
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: [pkg])
         #expect(results[0].installCommand != nil)
         #expect(results[0].overallConfidence == .high)
@@ -167,7 +187,9 @@ struct ProvenanceCollectorTests {
         let pkg = makePackage("ffmpeg", installedAt: t0)
         let results = ProvenanceCollector(
             shellCollector: shellCollector(commands: [("brew install ffmpeg", 400)]),
-            claudeCodeCollector: emptyClaude()
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: [pkg])
         #expect(results[0].installCommand != nil)
         #expect(results[0].overallConfidence == .medium)
@@ -178,7 +200,9 @@ struct ProvenanceCollectorTests {
         let pkg = makePackage("ffmpeg", installedAt: t0)
         let results = ProvenanceCollector(
             shellCollector: emptyShell(),
-            claudeCodeCollector: emptyClaude()
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: [pkg])
         #expect(results[0].installCommand == nil)
         #expect(results[0].claudeCodeContext == nil)
@@ -191,7 +215,9 @@ struct ProvenanceCollectorTests {
         // Both signals present for the name — should still be .unknown without fsInstallTime.
         let results = ProvenanceCollector(
             shellCollector: shellCollector(commands: [("brew install ffmpeg", 0)]),
-            claudeCodeCollector: claudeCollector(command: "brew install ffmpeg", offset: 0)
+            claudeCodeCollector: claudeCollector(command: "brew install ffmpeg", offset: 0),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: [pkg])
         #expect(results[0].overallConfidence == .unknown)
     }
@@ -205,7 +231,9 @@ struct ProvenanceCollectorTests {
         let openssl = makePackage("openssl", installedAt: t0.addingTimeInterval(7200))  // outside window
         let results = ProvenanceCollector(
             shellCollector: emptyShell(),
-            claudeCodeCollector: emptyClaude()
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: [ffmpeg, libpng, openssl])
 
         let ffmpegEvidence = results.first { $0.packageId == "brew::ffmpeg" }!
@@ -222,7 +250,9 @@ struct ProvenanceCollectorTests {
         }
         let results = ProvenanceCollector(
             shellCollector: emptyShell(),
-            claudeCodeCollector: emptyClaude()
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: packages)
 
         #expect(results.count == packages.count)
@@ -238,7 +268,9 @@ struct ProvenanceCollectorTests {
         let pipPkg = makePackage("git-something", manager: .pip, installedAt: t0)
         let results = ProvenanceCollector(
             shellCollector: shellCollector(commands: [("brew install git", 100)]),
-            claudeCodeCollector: emptyClaude()
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: [pipPkg])
         #expect(results[0].installCommand == nil)
     }
@@ -256,7 +288,9 @@ struct ProvenanceCollectorTests {
             shellCollector: shellCollector(commands: [
                 ("/opt/homebrew/bin/python3.11 -m pip install httpx", 60),
             ]),
-            claudeCodeCollector: emptyClaude()
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: packages)
 
         let byPackage = Dictionary(uniqueKeysWithValues: results.map { ($0.packageId, $0) })
@@ -278,7 +312,9 @@ struct ProvenanceCollectorTests {
             claudeCodeCollector: claudeCollector(
                 command: "python3.11 -m pip install rich",
                 offset: 60
-            )
+            ),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: packages)
 
         let byPackage = Dictionary(uniqueKeysWithValues: results.map { ($0.packageId, $0) })
@@ -300,7 +336,9 @@ struct ProvenanceCollectorTests {
                 ("/opt/homebrew/bin/python3.11 -m pip install my_package", 180),
                 ("pip install my.package", 30),
             ]),
-            claudeCodeCollector: emptyClaude()
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: packages)
 
         let byPackage = Dictionary(uniqueKeysWithValues: results.map { ($0.packageId, $0) })
@@ -329,7 +367,9 @@ struct ProvenanceCollectorTests {
                 ("/opt/homebrew/bin/python3.11 -m pip install httpx", 7_200),
                 ("pip install httpx", 30),
             ]),
-            claudeCodeCollector: emptyClaude()
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: [package])
 
         #expect(results[0].installCommand?.command == "pip install httpx")
@@ -342,7 +382,9 @@ struct ProvenanceCollectorTests {
         let pkg = makePackage("ffmpeg", installedAt: t0)
         let results = ProvenanceCollector(
             shellCollector: shellCollectorNoTimestamp(command: "brew install ffmpeg"),
-            claudeCodeCollector: claudeCollectorNoTimestamp(command: "brew install ffmpeg")
+            claudeCodeCollector: claudeCollectorNoTimestamp(command: "brew install ffmpeg"),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: [pkg])
         #expect(results[0].installCommand == nil)
         #expect(results[0].claudeCodeContext == nil)
@@ -360,10 +402,102 @@ struct ProvenanceCollectorTests {
         let pkg = makePackage("ffmpeg", installedAt: t0)
         let results = ProvenanceCollector(
             shellCollector: shellCollector(commands: [("brew install ffmpeg", 200)]),
-            claudeCodeCollector: claudeCollector(command: "brew install ffmpeg", offset: 2000)
+            claudeCodeCollector: claudeCollector(command: "brew install ffmpeg", offset: 2000),
+            codexCollector: emptyCodex(),
+            opencodeCollector: emptyOpenCode()
         ).collect(packages: [pkg])
         #expect(results[0].installCommand != nil)
         #expect(results[0].claudeCodeContext != nil)
         #expect(results[0].overallConfidence == .high)
+    }
+
+    // MARK: - Codex + opencode context
+
+    /// Builds a CodexLogCollector with a single exec_command line at t0 + `offset`
+    /// seconds, inside a fixed date-based session directory.
+    private func codexCollector(command: String, offset: TimeInterval) -> CodexLogCollector {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let tsStr = f.string(from: Date(timeIntervalSince1970: t0.timeIntervalSince1970 + offset))
+        let jsonl = """
+            {"timestamp":"\(tsStr)","type":"session_meta","payload":{"id":"s1","cwd":"/tmp/project"}}
+            {"timestamp":"\(tsStr)","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"\(command)\\"}"}}
+            """
+        let sessionFile = home
+            .appendingPathComponent(".codex/sessions/2026/03/01/rollout-test.jsonl")
+        let provider = InMemoryDirectoryAccessProvider.make { builder in
+            builder.addFile(at: sessionFile, data: Data(jsonl.utf8))
+        }
+        return CodexLogCollector(directoryAccess: provider, homeDirectory: home)
+    }
+
+    /// Builds an OpenCodeLogCollector backed by a temp on-disk SQLite db with one
+    /// bash tool part at t0 + `offset` seconds.
+    private func opencodeCollector(command: String, offset: TimeInterval) throws -> OpenCodeLogCollector {
+        let dbURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opencode-\(UUID().uuidString)/opencode.db")
+        try FileManager.default.createDirectory(
+            at: dbURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let queue = try DatabaseQueue(path: dbURL.path)
+        try queue.write { db in
+            try db.execute(sql: "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL, title TEXT NOT NULL)")
+            try db.execute(sql: "CREATE TABLE part (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)")
+            let ms = Int64((t0.timeIntervalSince1970 + offset) * 1_000)
+            try db.execute(sql: "INSERT INTO session (id, directory, title) VALUES ('s1', '/tmp/project', 'Demo session')")
+            try db.execute(sql: "INSERT INTO part (id, session_id, time_created, time_updated, data) VALUES ('p1', 's1', ?, ?, ?)", arguments: [ms, ms, #"{"type":"tool","tool":"bash","state":{"input":{"command":"\#(command)"}}}"#])
+        }
+        return OpenCodeLogCollector(databasePath: dbURL)
+    }
+
+    @Test("Phase D: codex exec_command within ±1h sets .high confidence and populates codexContext")
+    func codexContextPopulatesEvidence() {
+        let pkg = makePackage("ffmpeg", installedAt: t0)
+        let results = ProvenanceCollector(
+            shellCollector: emptyShell(),
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: codexCollector(command: "brew install ffmpeg", offset: 600),
+            opencodeCollector: emptyOpenCode()
+        ).collect(packages: [pkg])
+        #expect(results[0].codexContext != nil)
+        #expect(results[0].overallConfidence == .high)
+        #expect(wasInstalledByAIAssistant(results[0]))
+    }
+
+    @Test("Phase D: opencode bash part within ±1h sets .high confidence and populates opencodeContext")
+    func opencodeContextPopulatesEvidence() throws {
+        let pkg = makePackage("ffmpeg", installedAt: t0)
+        let collector = try opencodeCollector(command: "brew install ffmpeg", offset: 600)
+        let results = ProvenanceCollector(
+            shellCollector: emptyShell(),
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: emptyCodex(),
+            opencodeCollector: collector
+        ).collect(packages: [pkg])
+        #expect(results[0].opencodeContext != nil)
+        #expect(results[0].overallConfidence == .high)
+        #expect(wasInstalledByAIAssistant(results[0]))
+    }
+
+    @Test("Phase D: qualified codex Python commands disambiguate pip provenance by interpreter")
+    func codexQualifiedScopeDisambiguatesPipScopes() {
+        let python311 = "/opt/homebrew/bin/python3.11"
+        let python312 = "/opt/homebrew/bin/python3.12"
+        let packages = [
+            makePackage("rich", manager: .pip, qualifier: python311, installedAt: t0),
+            makePackage("rich", manager: .pip, qualifier: python312, installedAt: t0),
+        ]
+
+        let results = ProvenanceCollector(
+            shellCollector: emptyShell(),
+            claudeCodeCollector: emptyClaude(),
+            codexCollector: codexCollector(command: "python3.11 -m pip install rich", offset: 60),
+            opencodeCollector: emptyOpenCode()
+        ).collect(packages: packages)
+
+        let byPackage = Dictionary(uniqueKeysWithValues: results.map { ($0.packageId, $0) })
+        #expect(byPackage["pip:\(python311):rich"]?.codexContext != nil)
+        #expect(byPackage["pip:\(python312):rich"]?.codexContext == nil)
     }
 }

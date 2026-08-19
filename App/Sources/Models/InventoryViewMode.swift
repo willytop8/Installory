@@ -125,10 +125,11 @@ extension [Package] {
     /// honored in order; package identity is always the final ascending
     /// tie-break, even when the final visible column is descending.
     func sortedForTable(
-        using descriptors: [PackageTableSortDescriptor]
+        using descriptors: [PackageTableSortDescriptor],
+        pinnedFirst pinnedIDs: Set<String> = []
     ) -> [Package] {
         let descriptors = PackageTableSortDescriptor.validated(descriptors)
-        return sorted { lhs, rhs in
+        let sorted = sorted { lhs, rhs in
             for descriptor in descriptors {
                 switch descriptor.compare(lhs, rhs) {
                 case .orderedAscending:
@@ -141,6 +142,9 @@ extension [Package] {
             }
             return lhs.id < rhs.id
         }
+        guard !pinnedIDs.isEmpty else { return sorted }
+        return sorted.filter { pinnedIDs.contains($0.id) }
+            + sorted.filter { !pinnedIDs.contains($0.id) }
     }
 }
 

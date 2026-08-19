@@ -29,6 +29,7 @@ private struct PersistenceResources: Sendable {
     let scanRunDAO: ScanRunDAO
     let snapshotManager: SnapshotManager
     let provenanceDAO: ProvenanceDAO
+    let packageUserStateDAO: PackageUserStateDAO
 }
 
 private enum PersistenceInitializationResult: Sendable {
@@ -107,6 +108,18 @@ final class AppCoordinator {
     /// decode only the selected payload, matching production memory behavior.
     private var demoSnapshotDataByID: [UUID: Data] = [:]
 
+    // MARK: - Baseline state
+
+    /// An imported snapshot payload captured elsewhere (typically another Mac)
+    /// that the live inventory is compared against.
+    private(set) var baselinePayload: SnapshotPayload?
+
+    /// The change set between the imported baseline and the live inventory.
+    var baselineChangeSet: SnapshotChangeSet? {
+        guard let baselinePayload else { return nil }
+        return Baseline.changes(from: baselinePayload, to: packages)
+    }
+
     // MARK: - Cleanup state
 
     var selectedForCleanup: Set<String> = []
@@ -165,6 +178,7 @@ final class AppCoordinator {
     private var packageDAO: PackageDAO?
     private var scanRunDAO: ScanRunDAO?
     private var provenancePersistence: ProvenancePersistenceClient?
+    private var packageUserStateDAO: PackageUserStateDAO?
     private var dataDirectory: URL?
     @ObservationIgnored private var persistenceInitializationTask: Task<
         PersistenceInitializationResult,
@@ -179,6 +193,9 @@ final class AppCoordinator {
     private(set) var provenanceByPackageId: [String: ProvenanceEvidence] = [:] {
         didSet { inventoryDerivedCache.invalidateProvenance() }
     }
+
+    /// Per-package user annotations (hidden, pinned, note) keyed by package ID.
+    private(set) var packageUserStates: [String: PackageUserState] = [:]
 
     /// Minimum interval between automatic scans triggered by `autoScanIfNeeded`.
     /// Manual `refresh()` ignores this — the user pressing ⌘R always rescans.
@@ -312,21 +329,43 @@ final class AppCoordinator {
 
     // MARK: - Computed: packages
 
-    var filteredPackages: [Package] {
-        filteredPackageSource.sorted(by: sortOrder)
+    /// Package IDs the user has pinned. Used by the List and Table presentations
+    /// to float pinned packages to the top after their own sort is applied.
+    var pinnedIDs: Set<String> {
+        Set(packageUserStates.filter { $0.value.isPinned }.map(\.key))
     }
 
     /// Order-preserving source shared by List and Table presentation. Each mode
     /// applies only its own persisted sort preference after filtering.
     var filteredPackageSource: [Package] {
-        packages.filtered(by: sidebarSelection, query: searchQuery)
+        packages
+            .filter { !isHidden($0.id) }
+            .filtered(by: sidebarSelection, query: searchQuery)
+    }
+
+    // MARK: - Computed: package user annotations
+
+    func userState(for packageID: String) -> PackageUserState? {
+        packageUserStates[packageID]
+    }
+
+    func isHidden(_ packageID: String) -> Bool {
+        packageUserStates[packageID]?.isHidden ?? false
+    }
+
+    func isPinned(_ packageID: String) -> Bool {
+        packageUserStates[packageID]?.isPinned ?? false
+    }
+
+    func note(for packageID: String) -> String? {
+        packageUserStates[packageID]?.note
     }
 
     var supportsInventoryViewMode: Bool {
         switch sidebarSelection {
         case nil, .all, .manager, .readOnly:
             true
-        case .duplicates, .orphans, .diskUsage, .aiInstalled, .snapshot:
+        case .duplicates, .orphans, .diskUsage, .aiInstalled, .skills, .snapshot:
             false
         }
     }
@@ -357,6 +396,21 @@ final class AppCoordinator {
     /// their own package manager. See ``DependencyAnalysis`` for caveats.
     var orphanedPackages: [Package] {
         inventoryDerivedCache.orphanedPackages(for: packages)
+    }
+
+    /// Agent skills — `.agentSkill` packages across every discovered tool root.
+    var agentSkillPackages: [Package] {
+        packages.filter { $0.manager == .agentSkill }
+    }
+
+    /// Review aggregate over the agent-skills inventory.
+    var agentStackAnalysis: AgentStackAnalysis {
+        inventoryDerivedCache.agentStackAnalysis(for: packages)
+    }
+
+    /// Reverse-dependency index over the installed package graph (what depends on what).
+    var reverseDependencyIndex: ReverseDependencyIndex {
+        inventoryDerivedCache.reverseDependencyIndex(for: packages)
     }
 
     /// Packages whose provenance evidence indicates installation during an AI assistant session.
@@ -397,10 +451,14 @@ final class AppCoordinator {
             candidates = packages.filter { ids.contains($0.id) }
         case .orphans:
             candidates = orphanedPackages
+        case .skills:
+            candidates = packages.filter { $0.manager == .agentSkill }
         case .readOnly, .diskUsage, .aiInstalled, .snapshot:
             candidates = []
         }
-        return candidates.filter(\.isRemovalScriptEligible)
+        return candidates
+            .filter { !isHidden($0.id) }
+            .filter(\.isRemovalScriptEligible)
     }
 
     var canEnterCleanupMode: Bool {
@@ -480,6 +538,9 @@ final class AppCoordinator {
         case .aiInstalled:
             remainsVisible = matchesSearch
                 && aiInstalledPackages.contains { $0.id == selectedPackage.id }
+        case .skills:
+            remainsVisible = matchesSearch
+                && packages.contains { $0.id == selectedPackage.id && $0.manager == .agentSkill }
         case .snapshot:
             remainsVisible = false
         }
@@ -549,6 +610,66 @@ final class AppCoordinator {
 
     // MARK: - Actions
 
+    /// Toggles a package's hidden flag. Hidden packages drop out of the
+    /// inventory list and are never proposed for cleanup, but stay tracked so
+    /// the flag can be undone from package detail.
+    func toggleHidden(_ packageID: String) {
+        let existing = packageUserStates[packageID]
+        updateUserState(
+            packageID: packageID,
+            isHidden: !(existing?.isHidden ?? false),
+            isPinned: existing?.isPinned ?? false,
+            note: existing?.note
+        )
+    }
+
+    /// Toggles a package's pinned flag, which pins it to the top of the
+    /// inventory list regardless of sort order.
+    func togglePinned(_ packageID: String) {
+        let existing = packageUserStates[packageID]
+        updateUserState(
+            packageID: packageID,
+            isHidden: existing?.isHidden ?? false,
+            isPinned: !(existing?.isPinned ?? false),
+            note: existing?.note
+        )
+    }
+
+    /// Sets (or clears, when `note` is empty) the free-form note attached to a
+    /// package.
+    func setNote(_ note: String, for packageID: String) {
+        let existing = packageUserStates[packageID]
+        updateUserState(
+            packageID: packageID,
+            isHidden: existing?.isHidden ?? false,
+            isPinned: existing?.isPinned ?? false,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? nil
+                : note
+        )
+    }
+
+    private func updateUserState(
+        packageID: String,
+        isHidden: Bool,
+        isPinned: Bool,
+        note: String?
+    ) {
+        let state = PackageUserState(
+            packageId: packageID,
+            isHidden: isHidden,
+            isPinned: isPinned,
+            note: note,
+            updatedAt: Date()
+        )
+        packageUserStates[packageID] = state
+        if let dao = packageUserStateDAO {
+            Task.detached(priority: .utility) { [state] in
+                try? await dao.upsert(state)
+            }
+        }
+    }
+
     /// Opens and migrates the SQLite cache away from MainActor. The task is
     /// shared by every caller so launch hydration and an early user action can
     /// never race two database initializations.
@@ -573,7 +694,8 @@ final class AppCoordinator {
                         packageDAO: PackageDAO(database: database),
                         scanRunDAO: ScanRunDAO(database: database),
                         snapshotManager: SnapshotManager(database: database),
-                        provenanceDAO: ProvenanceDAO(database: database)
+                        provenanceDAO: ProvenanceDAO(database: database),
+                        packageUserStateDAO: PackageUserStateDAO(database: database)
                     ))
                 } catch {
                     return .failed(error.localizedDescription)
@@ -611,6 +733,7 @@ final class AppCoordinator {
                     dao: resources.provenanceDAO
                 )
             }
+            packageUserStateDAO = resources.packageUserStateDAO
             storageWarning = nil
             return true
         case .failed(let reason):
@@ -697,6 +820,21 @@ final class AppCoordinator {
             }
         }
 
+        if let dao = packageUserStateDAO {
+            do {
+                let loaded = try await Task.detached(priority: .utility) {
+                    try await dao.fetchAll()
+                }.value
+                guard !isDemoMode else { return }
+                packageUserStates = Dictionary(
+                    loaded.map { ($0.packageId, $0) },
+                    uniquingKeysWith: { _, newest in newest }
+                )
+            } catch {
+                failures.append("package annotations")
+            }
+        }
+
         guard !isDemoMode else { return }
         hasHydratedPersistedState = true
         if failures.isEmpty {
@@ -714,8 +852,41 @@ final class AppCoordinator {
             return
         }
         await refreshSnapshots()
-        await scan()
     }
+
+    /// Loads a baseline payload from a user-selected JSON file (sandbox read
+    /// access is granted by the open panel).
+    func importBaseline(from url: URL) async throws {
+        let data = try Data(contentsOf: url)
+        let payload = try JSONDecoder().decode(SnapshotPayload.self, from: data)
+        baselinePayload = payload
+        actionError = nil
+    }
+
+    /// Drops the imported baseline; the live inventory is unchanged.
+    func clearBaseline() {
+        baselinePayload = nil
+    }
+
+    /// Presents an open panel (granting sandbox read access) and imports the
+    /// chosen snapshot JSON as the comparison baseline.
+    func pickBaselineFile() async {
+        let panel = NSOpenPanel()
+        panel.title = "Import Baseline"
+        panel.message = "Choose a snapshot JSON captured on another Mac to compare against this inventory."
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // The open panel grants the sandbox read access for the selected file.
+        defer { url.stopAccessingSecurityScopedResource() }
+        do {
+            try await importBaseline(from: url)
+        } catch {
+            actionError = "Couldn\u{2019}t import baseline. \(error.localizedDescription)"
+        }
+    }
+
 
     func refresh() async {
         // In demo mode a "scan" just re-seeds the sample inventory — there is
@@ -1129,13 +1300,14 @@ final class AppCoordinator {
     // MARK: - Provenance actions
 
     /// Presents an `NSOpenPanel` pre-navigated to the user's home directory so
-    /// the user can grant Installory read access to their shell history and Claude
-    /// Code session logs. The resulting security-scoped bookmark is stored in
+    /// the user can grant Installory read access to their shell history and agent
+    /// session logs. The resulting security-scoped bookmark is stored in
     /// `FolderAccessManager` and persisted to UserDefaults.
     ///
     /// The open panel title and surrounding Settings UI copy explicitly name what
     /// will be read: `~/.zsh_history`, `~/.bash_history`,
-    /// `~/.local/share/fish/fish_history`, and `~/.claude/projects/`.
+    /// `~/.local/share/fish/fish_history`, `~/.claude/projects/`,
+    /// `~/.codex/sessions/`, and `~/.local/share/opencode/opencode.db`.
     func requestProvenanceAccess() async {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         _ = await folderAccess.requestAccess(to: homeDir)
@@ -1265,6 +1437,21 @@ final class AppCoordinator {
             CargoScanner(),
             GemScanner(),
             MasScanner(applicationDirectories: grantedApplicationsDirectories(accessedURLs)),
+            AgentSkillScanner(
+                homeDirectory: homeDirectory,
+                environment: managerEnvironment,
+                grantedURLs: accessedURLs
+            ),
+            AgentCliScanner(
+                homeDirectory: homeDirectory,
+                environment: managerEnvironment,
+                grantedURLs: accessedURLs
+            ),
+            EditorExtensionScanner(
+                homeDirectory: homeDirectory,
+                environment: managerEnvironment,
+                grantedURLs: accessedURLs
+            ),
         ]
         let scanCoordinator = ScanCoordinator(scanners: scanners)
         let managedManagersByScanner = Dictionary(
@@ -1392,7 +1579,12 @@ final class AppCoordinator {
         let evidenceList: [ProvenanceEvidence] = await Task.detached(priority: .utility) {
             ProvenanceCollector(
                 shellCollector: ShellHistoryCollector(homeDirectory: capturedHomeURL),
-                claudeCodeCollector: ClaudeCodeLogCollector(homeDirectory: capturedHomeURL)
+                claudeCodeCollector: ClaudeCodeLogCollector(homeDirectory: capturedHomeURL),
+                codexCollector: CodexLogCollector(homeDirectory: capturedHomeURL),
+                opencodeCollector: OpenCodeLogCollector(
+                    databasePath: capturedHomeURL
+                        .appendingPathComponent(".local/share/opencode/opencode.db")
+                )
             ).collect(packages: capturedPackages)
         }.value
 
@@ -1445,6 +1637,24 @@ final class AppCoordinator {
         case .cargo:           return CargoScanner()
         case .gem:             return GemScanner()
         case .mas:             return MasScanner(applicationDirectories: grantedApplicationsDirectories(grantedURLs))
+        case .agentSkill:
+            return AgentSkillScanner(
+                homeDirectory: homeDirectory,
+                environment: environment,
+                grantedURLs: grantedURLs
+            )
+        case .agentCli:
+            return AgentCliScanner(
+                homeDirectory: homeDirectory,
+                environment: environment,
+                grantedURLs: grantedURLs
+            )
+        case .editorExtension:
+            return EditorExtensionScanner(
+                homeDirectory: homeDirectory,
+                environment: environment,
+                grantedURLs: grantedURLs
+            )
         }
     }
 

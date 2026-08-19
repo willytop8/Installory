@@ -8,6 +8,8 @@ struct PackageDetailView: View {
     @Environment(AppCoordinator.self) private var coordinator
     @State private var showRawRecord = false
     @State private var copiedCommand = false
+    @State private var noteDraft = ""
+    @State private var noteLoaded = false
 
     var body: some View {
         ScrollView {
@@ -15,6 +17,10 @@ struct PackageDetailView: View {
                 headerSection
                 Divider()
                 fieldsSection
+                Divider()
+                userAnnotationsSection
+                Divider()
+                dependentsSection
                 Divider()
                 provenanceSection
                 Divider()
@@ -25,6 +31,12 @@ struct PackageDetailView: View {
             .padding(20)
         }
         .frame(minWidth: 300)
+        .onAppear {
+            if !noteLoaded {
+                noteLoaded = true
+                noteDraft = coordinator.note(for: package.id) ?? ""
+            }
+        }
     }
 
     // MARK: - Sections
@@ -53,7 +65,33 @@ struct PackageDetailView: View {
                 }
             }
             Spacer(minLength: 0)
-            ManagerBadge(manager: package.manager)
+            VStack(alignment: .trailing, spacing: 8) {
+                ManagerBadge(manager: package.manager)
+                HStack(spacing: 8) {
+                    Button {
+                        coordinator.togglePinned(package.id)
+                    } label: {
+                        Image(systemName: coordinator.isPinned(package.id)
+                            ? "pin.fill"
+                            : "pin")
+                    }
+                    .help(coordinator.isPinned(package.id)
+                        ? "Unpin this package"
+                        : "Pin this package to the top of the list")
+
+                    Button {
+                        coordinator.toggleHidden(package.id)
+                    } label: {
+                        Image(systemName: coordinator.isHidden(package.id)
+                            ? "eye.slash.fill"
+                            : "eye.slash")
+                    }
+                    .help(coordinator.isHidden(package.id)
+                        ? "Unhide this package"
+                        : "Hide this package from the inventory list")
+                }
+                .buttonStyle(.borderless)
+            }
         }
     }
 
@@ -102,6 +140,70 @@ struct PackageDetailView: View {
                         .background(Color.secondary.opacity(0.12))
                         .foregroundStyle(.secondary)
                         .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            }
+        }
+    }
+
+    // MARK: - User annotations section
+
+    private var userAnnotationsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Your Notes")
+                    .font(.headline)
+                if coordinator.isPinned(package.id) {
+                    Label("Pinned", systemImage: "pin.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if coordinator.isHidden(package.id) {
+                    Label("Hidden", systemImage: "eye.slash.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            TextField("Add a note about this package\u{2026}", text: $noteDraft, axis: .vertical)
+                .lineLimit(3, reservesSpace: true)
+                .textFieldStyle(.roundedBorder)
+
+            HStack {
+                Text("Notes are stored locally and travel with the package across rescans.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button("Save Note") {
+                    coordinator.setNote(noteDraft, for: package.id)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        }
+    }
+
+    // MARK: - Dependents section
+
+    private var dependentsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("What Depends On It")
+                .font(.headline)
+
+            let directDependents = coordinator.reverseDependencyIndex.dependents(of: package)
+            if directDependents.isEmpty {
+                Text("Nothing in your inventory depends directly on this package.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(directDependents.count) installed package\(directDependents.count == 1 ? "" : "s") depend on it directly.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    ReverseDependencyTree(
+                        rootPackages: directDependents,
+                        index: coordinator.reverseDependencyIndex
+                    )
                 }
             }
         }
@@ -335,4 +437,64 @@ struct PackageDetailView: View {
     )
     .environment(AppCoordinator())
     .frame(width: 400, height: 600)
+}
+
+/// Recursive, expandable tree of reverse dependents.
+///
+/// Renders each root package as a node whose children are the packages that
+/// depend on it, and so on. Cycle-safe: a package already on the current path is
+/// shown once without expanding further.
+private struct ReverseDependencyTree: View {
+    let rootPackages: [Package]
+    let index: ReverseDependencyIndex
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(rootPackages, id: \.id) { pkg in
+                ReverseDependencyNode(package: pkg, index: index, ancestors: [pkg.id])
+            }
+        }
+    }
+}
+
+private struct ReverseDependencyNode: View {
+    let package: Package
+    let index: ReverseDependencyIndex
+    let ancestors: Set<String>
+
+    private var dependents: [Package] {
+        index.dependents(of: package).filter { !ancestors.contains($0.id) }
+    }
+
+    var body: some View {
+        if dependents.isEmpty {
+            nodeRow
+        } else {
+            DisclosureGroup {
+                ForEach(dependents, id: \.id) { dependent in
+                    ReverseDependencyNode(
+                        package: dependent,
+                        index: index,
+                        ancestors: ancestors.union([dependent.id])
+                    )
+                }
+            } label: {
+                nodeRow
+            }
+        }
+    }
+
+    private var nodeRow: some View {
+        HStack(spacing: 6) {
+            Text(package.name)
+                .font(.callout)
+            ManagerBadge(manager: package.manager)
+            if !package.version.isEmpty {
+                Text(package.version)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 1)
+    }
 }

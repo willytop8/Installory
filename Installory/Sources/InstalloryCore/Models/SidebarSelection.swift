@@ -8,6 +8,7 @@ public enum SidebarSelection: Hashable, Sendable {
     case orphans
     case diskUsage
     case aiInstalled
+    case skills
     case snapshot(UUID)
 }
 
@@ -21,6 +22,7 @@ extension SidebarSelection {
         case .orphans: "orphans"
         case .diskUsage: "diskUsage"
         case .aiInstalled: "aiInstalled"
+        case .skills: "skills"
         case .snapshot: ""  // snapshot selections are never persisted
         }
     }
@@ -33,6 +35,7 @@ extension SidebarSelection {
         case "orphans": self = .orphans
         case "diskUsage": self = .diskUsage
         case "aiInstalled": self = .aiInstalled
+        case "skills": self = .skills
         default:
             guard userDefaultsKey.hasPrefix("manager.") else { return nil }
             let raw = String(userDefaultsKey.dropFirst("manager.".count))
@@ -73,6 +76,9 @@ extension [Package] {
             return []
         case .aiInstalled:
             // AIInstalledView reads coordinator.aiInstalledPackages directly; filteredPackages is not consulted.
+            return []
+        case .skills:
+            // SkillsView reads the agent-stack analysis aggregate; filteredPackages is not consulted.
             return []
         case .snapshot(_):
             // Snapshot content is rendered by SnapshotContentView, not this filter.

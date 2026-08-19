@@ -159,6 +159,16 @@ func executableDirectory(for package: Package) -> String? {
     case .brewCask, .mas:
         // App bundles — not resolved via PATH at all.
         return nil
+
+    case .agentSkill:
+        // Agent skills are directories or symlinks under an agent's skills root,
+        // not command-line executables on PATH.
+        return nil
+
+    case .agentCli, .editorExtension:
+        // Agent CLI rows point at config roots (not binaries on PATH), and
+        // editor extensions are directories inside an editor's extensions root.
+        return nil
     }
 }
 
@@ -271,6 +281,10 @@ func looksLikeCommandLineTool(_ package: Package) -> Bool {
         return false  // primarily libraries
     case .brewCask, .mas:
         return false  // already handled above, but exhaustive
+    case .agentSkill:
+        return false  // skills are not PATH executables
+    case .agentCli, .editorExtension:
+        return false  // agent CLI rows are config roots; extensions are not PATH binaries
     }
 }
 

@@ -28,8 +28,7 @@ enum PackageSortOrder: String, CaseIterable, Sendable {
 }
 
 extension [Package] {
-    func sorted(by order: PackageSortOrder) -> [Package] {
-        switch order {
+    func sorted(by order: PackageSortOrder) -> [Package] {        switch order {
         case .recentlyInstalled:
             sorted {
                 let lhsDate = $0.installedAt ?? .distantPast
@@ -81,6 +80,17 @@ extension [Package] {
                 .map(\.package)
         }
     }
+
+    /// Sorts `by` `order`, but lifts any package whose ID is in `pinnedIDs` to
+    /// the front of the result, preserving the chosen order within the pinned
+    /// and unpinned groups. Pinned packages float to the top of the inventory
+    /// list no matter which sort the user picks.
+    func sorted(by order: PackageSortOrder, pinnedFirst pinnedIDs: Set<String>) -> [Package] {
+        guard !pinnedIDs.isEmpty else { return sorted(by: order) }
+        let pinned = filter { pinnedIDs.contains($0.id) }.sorted(by: order)
+        let unpinned = filter { !pinnedIDs.contains($0.id) }.sorted(by: order)
+        return pinned + unpinned
+    }
 }
 
 // MARK: - Generation-keyed inventory derivation
@@ -111,6 +121,8 @@ struct InventoryDerivedComputationCounts: Equatable {
     fileprivate(set) var diskUsageSummary = 0
     fileprivate(set) var aiInstalledPackages = 0
     fileprivate(set) var duplicatePathAnalysis = 0
+    fileprivate(set) var agentStackAnalysis = 0
+    fileprivate(set) var reverseDependencyIndex = 0
 }
 
 /// A single generation seam for whole-inventory derived state.
@@ -138,6 +150,8 @@ final class InventoryDerivedCache {
         pathComponents: [String],
         value: DuplicateAnalysisState
     )?
+    private var cachedAgentStackAnalysis: (generation: Int, value: AgentStackAnalysis)?
+    private var cachedReverseDependencyIndex: (generation: Int, value: ReverseDependencyIndex)?
 
     private(set) var computationCounts = InventoryDerivedComputationCounts()
 
@@ -150,6 +164,8 @@ final class InventoryDerivedCache {
         cachedDiskUsageSummary = nil
         cachedAI = nil
         cachedDuplicateAnalysis = nil
+        cachedAgentStackAnalysis = nil
+        cachedReverseDependencyIndex = nil
     }
 
     func invalidateProvenance() {
@@ -220,6 +236,28 @@ final class InventoryDerivedCache {
         computationCounts.orphanedPackages += 1
         let value = packages.orphanedPackages()
         cachedOrphans = (inventoryGeneration, value)
+        return value
+    }
+
+    func agentStackAnalysis(for packages: [Package]) -> AgentStackAnalysis {
+        if let cachedAgentStackAnalysis,
+           cachedAgentStackAnalysis.generation == inventoryGeneration {
+            return cachedAgentStackAnalysis.value
+        }
+        computationCounts.agentStackAnalysis += 1
+        let value = AgentStackAnalysis(skills: packages)
+        cachedAgentStackAnalysis = (inventoryGeneration, value)
+        return value
+    }
+
+    func reverseDependencyIndex(for packages: [Package]) -> ReverseDependencyIndex {
+        if let cachedReverseDependencyIndex,
+           cachedReverseDependencyIndex.generation == inventoryGeneration {
+            return cachedReverseDependencyIndex.value
+        }
+        computationCounts.reverseDependencyIndex += 1
+        let value = ReverseDependencyIndex(packages: packages)
+        cachedReverseDependencyIndex = (inventoryGeneration, value)
         return value
     }
 

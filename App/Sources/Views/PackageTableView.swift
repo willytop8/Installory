@@ -14,7 +14,10 @@ struct PackageTableView: View {
     @Binding var sortOrder: [PackageTableSortDescriptor]
 
     var body: some View {
-        let sortedPackages = packages.sortedForTable(using: sortOrder)
+        let sortedPackages = packages.sortedForTable(
+            using: sortOrder,
+            pinnedFirst: coordinator.pinnedIDs
+        )
 
         Table(
             of: Package.self,

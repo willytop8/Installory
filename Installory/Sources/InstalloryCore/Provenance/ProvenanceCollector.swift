@@ -1,7 +1,8 @@
 import Foundation
 
-/// Aggregates the three provenance signals — filesystem timestamps, shell history,
-/// and Claude Code session logs — into one ``ProvenanceEvidence`` per package.
+/// Aggregates the provenance signals — filesystem timestamps, shell history,
+/// and agent session logs (Claude Code, Codex, opencode) — into one
+/// ``ProvenanceEvidence`` per package.
 ///
 /// **Matching algorithm (O(n) per package):**
 /// Both collectors' records are bucketed by manager and normalized package name
@@ -9,29 +10,35 @@ import Foundation
 /// interpreter, that scope must match the package qualifier. Unqualified commands
 /// remain conservative fallback evidence for any same-manager, same-name scope.
 ///
-/// Records with `nil` timestamps in either collector are excluded from time-proximity
-/// matching and never contribute to `installCommand` or `claudeCodeContext`.
+/// Records with `nil` timestamps in any collector are excluded from time-proximity
+/// matching and never contribute to `installCommand` or an agent context.
 ///
 /// `nearbyProjects` remains empty because Installory does not perform an extra
 /// repository walk while collecting provenance.
 public struct ProvenanceCollector: Sendable {
     private let shellCollector: ShellHistoryCollector
     private let claudeCodeCollector: ClaudeCodeLogCollector
+    private let codexCollector: CodexLogCollector
+    private let opencodeCollector: OpenCodeLogCollector
     private let detector: InstallCommandDetector
     private let redactor: ProvenanceRedactor
 
     public init(
         shellCollector: ShellHistoryCollector = ShellHistoryCollector(),
-        claudeCodeCollector: ClaudeCodeLogCollector = ClaudeCodeLogCollector()
+        claudeCodeCollector: ClaudeCodeLogCollector = ClaudeCodeLogCollector(),
+        codexCollector: CodexLogCollector = CodexLogCollector(),
+        opencodeCollector: OpenCodeLogCollector = OpenCodeLogCollector()
     ) {
         self.shellCollector = shellCollector
         self.claudeCodeCollector = claudeCodeCollector
+        self.codexCollector = codexCollector
+        self.opencodeCollector = opencodeCollector
         self.detector = InstallCommandDetector()
         self.redactor = ProvenanceRedactor()
     }
 
     /// Builds ``ProvenanceEvidence`` for every package by combining filesystem
-    /// timestamps, shell-history install commands, and Claude Code Bash invocations.
+    /// timestamps, shell-history install commands, and agent Bash invocations.
     ///
     /// This method is synchronous; file I/O occurs inside both sub-collectors.
     /// Dispatch to a background thread when calling from an actor or async context.
@@ -40,6 +47,10 @@ public struct ProvenanceCollector: Sendable {
         let shellRecords = shellCollector.collect()
         guard !Task.isCancelled else { return [] }
         let claudeRecords = claudeCodeCollector.collect()
+        guard !Task.isCancelled else { return [] }
+        let codexRecords = codexCollector.collect()
+        guard !Task.isCancelled else { return [] }
+        let opencodeRecords = opencodeCollector.collect()
         guard !Task.isCancelled else { return [] }
 
         // Bucket shell records by manager and normalized name. Scope hints are
@@ -56,38 +67,11 @@ public struct ProvenanceCollector: Sendable {
             }
         }
 
-        // Claude records expose the original Bash invocation, so recover the same
+        // Agent records expose the original Bash invocation, so recover the same
         // scope hints without changing their persisted/public representation.
-        var claudeByKey: [PackageKey: [ScopedCandidate<InstalledByClaudeCode>]] = [:]
-        var claudeHintsByCommand: [String: [PackageKey: Set<InstallQualifierHint?>]] = [:]
-        for record in claudeRecords where record.context.timestamp != nil {
-            guard !Task.isCancelled else { return [] }
-            let key = PackageKey(manager: record.manager, name: record.packageName)
-            let command = record.context.bashInvocation
-            if claudeHintsByCommand[command] == nil {
-                var hintsByKey: [PackageKey: Set<InstallQualifierHint?>] = [:]
-                for detection in detector.detectInstallations(command) {
-                    let detectionKey = PackageKey(
-                        manager: detection.manager,
-                        name: detection.name
-                    )
-                    hintsByKey[detectionKey, default: []].insert(detection.qualifierHint)
-                }
-                claudeHintsByCommand[command] = hintsByKey
-            }
-            let matchingHints = claudeHintsByCommand[command]?[key] ?? []
-
-            // A collector record remains useful even if its original command can
-            // no longer be classified in detail. Treat that case as unqualified,
-            // never as guessed scope information.
-            let hints: Set<InstallQualifierHint?> = matchingHints.isEmpty ? [nil] : matchingHints
-            for hint in hints {
-                claudeByKey[key, default: []].append(ScopedCandidate(
-                    value: record,
-                    qualifierHint: hint
-                ))
-            }
-        }
+        let claudeByKey = bucketAgentRecords(claudeRecords, detector: detector)
+        let codexByKey = bucketAgentRecords(codexRecords, detector: detector)
+        let opencodeByKey = bucketAgentRecords(opencodeRecords, detector: detector)
 
         // Pre-build bounded co-install summaries with a sorted sliding window.
         // This avoids an O(n²) full-array filter for every package and prevents
@@ -107,6 +91,8 @@ public struct ProvenanceCollector: Sendable {
                 for: package,
                 shellByKey: shellByKey,
                 claudeByKey: claudeByKey,
+                codexByKey: codexByKey,
+                opencodeByKey: opencodeByKey,
                 coInstalled: coInstalledByPackageId[package.id] ?? .empty
             ))
         }
@@ -119,18 +105,36 @@ public struct ProvenanceCollector: Sendable {
         for package: Package,
         shellByKey: [PackageKey: [ScopedCandidate<ProvenanceEvidence.InstallCommandRecord>]],
         claudeByKey: [PackageKey: [ScopedCandidate<InstalledByClaudeCode>]],
+        codexByKey: [PackageKey: [ScopedCandidate<InstalledByCodex>]],
+        opencodeByKey: [PackageKey: [ScopedCandidate<InstalledByOpenCode>]],
         coInstalled: CoInstalledSummary
     ) -> ProvenanceEvidence {
         let fsTime = package.installedAt
         let shellCandidates = candidateGroups(for: package, from: shellByKey)
         let claudeCandidates = candidateGroups(for: package, from: claudeByKey)
+        let codexCandidates = candidateGroups(for: package, from: codexByKey)
+        let opencodeCandidates = candidateGroups(for: package, from: opencodeByKey)
 
-        let claudeMatch = nearestClaude(
+        let claudeMatch = nearestContext(
             fsTime: fsTime,
             candidates: claudeCandidates.qualified
-        ) ?? nearestClaude(
+        ) ?? nearestContext(
             fsTime: fsTime,
             candidates: claudeCandidates.unqualified
+        )
+        let codexMatch = nearestContext(
+            fsTime: fsTime,
+            candidates: codexCandidates.qualified
+        ) ?? nearestContext(
+            fsTime: fsTime,
+            candidates: codexCandidates.unqualified
+        )
+        let opencodeMatch = nearestContext(
+            fsTime: fsTime,
+            candidates: opencodeCandidates.qualified
+        ) ?? nearestContext(
+            fsTime: fsTime,
+            candidates: opencodeCandidates.unqualified
         )
         let shellMatch = nearestShell(
             fsTime: fsTime,
@@ -145,14 +149,16 @@ public struct ProvenanceCollector: Sendable {
             fsInstallTime: fsTime,
             fsInstallTimeSource: fsTime != nil ? installTimeSource(for: package.manager) : nil,
             installCommand: shellMatch,
-            claudeCodeContext: claudeMatch,
+            claudeCodeContext: claudeMatch?.context,
+            codexContext: codexMatch?.context,
+            opencodeContext: opencodeMatch?.context,
             nearbyProjects: [],
             coInstalledWithin1h: coInstalled.sampleIds,
             coInstalledWithin1hTotalCount: coInstalled.totalCount,
             overallConfidence: confidence(
                 fsInstallTime: fsTime,
                 installCommand: shellMatch,
-                claudeCodeContext: claudeMatch
+                hasAgentContext: claudeMatch != nil || codexMatch != nil || opencodeMatch != nil
             ),
             collectedAt: Date()
         ))
@@ -180,23 +186,65 @@ public struct ProvenanceCollector: Sendable {
         return CandidateGroups(qualified: qualified, unqualified: unqualified)
     }
 
-    private func nearestClaude(
+    /// Returns the agent-session record whose timestamp is nearest to the
+    /// package's install time within ±1 hour, or nil when none qualifies.
+    private func nearestContext<Record: AgentInstallRecord>(
         fsTime: Date?,
-        candidates: [InstalledByClaudeCode]
-    ) -> ProvenanceEvidence.ClaudeCodeContext? {
+        candidates: [Record]
+    ) -> Record? {
         guard let fsTs = fsTime?.timeIntervalSince1970 else { return nil }
-        var best: (delta: TimeInterval, context: ProvenanceEvidence.ClaudeCodeContext)?
+        var best: (delta: TimeInterval, record: Record)?
         for record in candidates {
             // Nil-timestamp records were excluded from the dict at build time.
             // The guard is a defensive double-check.
-            guard let ts = record.context.timestamp?.timeIntervalSince1970 else { continue }
+            guard let ts = record.timestamp?.timeIntervalSince1970 else { continue }
             let delta = abs(fsTs - ts)
             guard delta <= 3600 else { continue }
             if best == nil || delta < best!.delta {
-                best = (delta, record.context)
+                best = (delta, record)
             }
         }
-        return best?.context
+        return best?.record
+    }
+
+    /// Buckets agent-session records by manager and normalized package name,
+    /// recovering the same scope hints as shell records from the original Bash
+    /// invocation. Applies to Claude Code, Codex, and opencode records alike.
+    ///
+    /// A collector record remains useful even if its original command can no
+    /// longer be classified in detail. Treat that case as unqualified, never as
+    /// guessed scope information.
+    private func bucketAgentRecords<Record: AgentInstallRecord>(
+        _ records: [Record],
+        detector: InstallCommandDetector
+    ) -> [PackageKey: [ScopedCandidate<Record>]] {
+        var byKey: [PackageKey: [ScopedCandidate<Record>]] = [:]
+        var hintsByCommand: [String: [PackageKey: Set<InstallQualifierHint?>]] = [:]
+        for record in records where record.timestamp != nil {
+            guard !Task.isCancelled else { return [:] }
+            let key = PackageKey(manager: record.manager, name: record.packageName)
+            let command = record.bashInvocation
+            if hintsByCommand[command] == nil {
+                var hintsByKey: [PackageKey: Set<InstallQualifierHint?>] = [:]
+                for detection in detector.detectInstallations(command) {
+                    let detectionKey = PackageKey(
+                        manager: detection.manager,
+                        name: detection.name
+                    )
+                    hintsByKey[detectionKey, default: []].insert(detection.qualifierHint)
+                }
+                hintsByCommand[command] = hintsByKey
+            }
+            let matchingHints = hintsByCommand[command]?[key] ?? []
+            let hints: Set<InstallQualifierHint?> = matchingHints.isEmpty ? [nil] : matchingHints
+            for hint in hints {
+                byKey[key, default: []].append(ScopedCandidate(
+                    value: record,
+                    qualifierHint: hint
+                ))
+            }
+        }
+        return byKey
     }
 
     private func nearestShell(
@@ -267,23 +315,23 @@ public struct ProvenanceCollector: Sendable {
 
     // MARK: - Confidence
 
-    /// Computes the overall confidence from the three signals.
+    /// Computes the overall confidence from the signals.
     ///
-    /// | fsInstallTime | installCommand                | claudeCodeContext | result  |
-    /// |---------------|-------------------------------|-------------------|---------|
-    /// | nil           | any                           | any               | unknown |
-    /// | present       | nil                           | nil               | low     |
-    /// | present       | present, no usable Δ          | nil               | medium  |
-    /// | present       | present, Δ > 5 min            | nil               | medium  |
-    /// | present       | present, Δ ≤ 5 min            | nil               | high    |
-    /// | present       | any                           | present           | high    |
+    /// | fsInstallTime | installCommand                | agent context   | result  |
+    /// |---------------|-------------------------------|-----------------|---------|
+    /// | nil           | any                           | any             | unknown |
+    /// | present       | nil                           | nil             | low     |
+    /// | present       | present, no usable Δ          | nil             | medium  |
+    /// | present       | present, Δ > 5 min            | nil             | medium  |
+    /// | present       | present, Δ ≤ 5 min            | nil             | high    |
+    /// | present       | any                           | present         | high    |
     private func confidence(
         fsInstallTime: Date?,
         installCommand: ProvenanceEvidence.InstallCommandRecord?,
-        claudeCodeContext: ProvenanceEvidence.ClaudeCodeContext?
+        hasAgentContext: Bool
     ) -> Confidence {
         guard let fsTs = fsInstallTime?.timeIntervalSince1970 else { return .unknown }
-        if claudeCodeContext != nil { return .high }
+        if hasAgentContext { return .high }
         guard let command = installCommand else { return .low }
         guard let cmdTs = command.timestamp?.timeIntervalSince1970 else {
             // Shell command matched by (manager, name) but no timestamp — can't confirm timing.
@@ -356,4 +404,30 @@ private struct PackageKey: Hashable {
         self.manager = manager
         self.name = PackageIdentity.normalizedName(name, manager: manager)
     }
+}
+
+// MARK: - Agent-session record abstraction
+
+/// Uniform view over the three agent session record types so the collector can
+/// bucket and match them with a single implementation.
+fileprivate protocol AgentInstallRecord {
+    var packageName: String { get }
+    var manager: PackageManager { get }
+    var bashInvocation: String { get }
+    var timestamp: Date? { get }
+}
+
+extension InstalledByClaudeCode: AgentInstallRecord {
+    var bashInvocation: String { context.bashInvocation }
+    var timestamp: Date? { context.timestamp }
+}
+
+extension InstalledByCodex: AgentInstallRecord {
+    var bashInvocation: String { context.bashInvocation }
+    var timestamp: Date? { context.timestamp }
+}
+
+extension InstalledByOpenCode: AgentInstallRecord {
+    var bashInvocation: String { context.bashInvocation }
+    var timestamp: Date? { context.timestamp }
 }

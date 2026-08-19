@@ -23,6 +23,7 @@ public enum Migrations {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1_initial", migrate: v1Initial)
         migrator.registerMigration("v2_package_artifact_paths", migrate: v2PackageArtifactPaths)
+        migrator.registerMigration("v3_package_user_state", migrate: v3PackageUserState)
         return migrator
     }
 
@@ -88,5 +89,25 @@ public enum Migrations {
 
     private static func v2PackageArtifactPaths(_ db: GRDB.Database) throws {
         try db.execute(sql: "ALTER TABLE packages ADD COLUMN artifact_paths TEXT")
+    }
+
+    /// Per-package user annotations: hide/pin flags and a free-form note.
+    ///
+    /// No foreign key is declared on purpose: user state must survive a
+    /// package disappearing from the inventory (the rows it references are
+    /// reconciled, not preserved), and the note/pin flags have no meaning for
+    /// a package the user has never seen. Orphaned rows are harmless and
+    /// cleaned up opportunistically when a package row is recreated.
+    private static func v3PackageUserState(_ db: GRDB.Database) throws {
+        try db.execute(sql: """
+            CREATE TABLE package_user_state (
+                package_id TEXT PRIMARY KEY,
+                is_hidden  INTEGER NOT NULL DEFAULT 0,
+                is_pinned  INTEGER NOT NULL DEFAULT 0,
+                note       TEXT,
+                updated_at REAL NOT NULL
+            )
+            """)
+        try db.execute(sql: "CREATE INDEX idx_package_user_state_pinned ON package_user_state(is_pinned)")
     }
 }
