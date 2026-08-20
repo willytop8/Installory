@@ -38,6 +38,14 @@ struct CleanupSelectionFooter: View {
             }
             .disabled(coordinator.selectedCleanupPackages.isEmpty)
 
+            Picker("Removal strategy", selection: removalStrategyBinding) {
+                Text("Uninstall").tag(RemovalStrategy.uninstall)
+                Text("Move to Trash").tag(RemovalStrategy.trash)
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .help("Move to Trash keeps file-backed packages recoverable; package-manager installs are always uninstalled properly")
+
             Spacer()
 
             Button("Done") {
@@ -48,6 +56,13 @@ struct CleanupSelectionFooter: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+
+    private var removalStrategyBinding: Binding<RemovalStrategy> {
+        Binding(
+            get: { coordinator.removalStrategy },
+            set: { coordinator.removalStrategy = $0 }
+        )
     }
 
     private var selectForCleanupBar: some View {

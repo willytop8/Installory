@@ -47,7 +47,7 @@ extension SidebarSelection {
         switch self {
         case .all, .manager, .duplicates, .orphans, .skills:
             return true
-        case .readOnly, .diskUsage, .aiInstalled, .snapshot:
+        case .dashboard, .readOnly, .diskUsage, .aiInstalled, .projects, .snapshot:
             return false
         }
     }
@@ -109,7 +109,9 @@ struct RootView: View {
         NavigationSplitView {
             SidebarView()
         } content: {
-            if case .snapshot(let id) = coordinator.sidebarSelection {
+            if case .dashboard = coordinator.sidebarSelection {
+                DashboardView()
+            } else if case .snapshot(let id) = coordinator.sidebarSelection {
                 SnapshotContentView(snapshotID: id)
             } else if case .duplicates = coordinator.sidebarSelection {
                 DuplicatesView()
@@ -121,6 +123,8 @@ struct RootView: View {
                 AIInstalledView()
             } else if case .skills = coordinator.sidebarSelection {
                 SkillsView()
+            } else if case .projects = coordinator.sidebarSelection {
+                ProjectsView()
             } else {
                 PackageListView()
             }
@@ -130,6 +134,12 @@ struct RootView: View {
                     Label("Snapshot View", systemImage: "camera.viewfinder")
                 } description: {
                     Text("Select a package manager section to browse packages in this snapshot.")
+                }
+            } else if case .projects = coordinator.sidebarSelection {
+                ContentUnavailableView {
+                    Label("Project Workspaces", systemImage: "folder")
+                } description: {
+                    Text("Select a project to reveal it in Finder.")
                 }
             } else if let pkg = coordinator.selectedPackage {
                 PackageDetailView(package: pkg)

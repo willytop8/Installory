@@ -77,8 +77,73 @@ struct DiskUsageView: View {
                         }
                 }
             }
+
+            freeUpSpaceSection()
         }
         .listStyle(.inset)
+    }
+
+    private func freeUpSpaceSection() -> some View {
+        let bundle = coordinator.freeUpSpaceBundle
+        return Section {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Label("Safe to free up", systemImage: "sparkles")
+                        .font(.headline)
+                    Spacer(minLength: 12)
+                    Text(byteLabel(bundle.totalReclaimableBytes))
+                        .font(.title3.weight(.semibold))
+                        .accessibilityLabel("Reclaimable, \(byteLabel(bundle.totalReclaimableBytes))")
+                }
+                Text("\(bundle.candidates.count) measured \(packageWord(bundle.candidates.count)) nothing depends on, ranked by age and size. Installory cannot detect usage, so review each before removing.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button {
+                    enterCleanupForFreeUpSpace(bundle)
+                } label: {
+                    Label("Review and free up", systemImage: "checklist")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(bundle.isEmpty)
+            }
+            .padding(.vertical, 4)
+            .selectionDisabled()
+
+            ForEach(bundle.candidates, id: \.package.id) { scored in
+                freeUpSpaceRow(scored)
+                    .tag(scored.package.id)
+                    .contextMenu {
+                        PackageContextMenu(package: scored.package)
+                    }
+            }
+        } header: {
+            Text("Free up space")
+        }
+    }
+
+    private func enterCleanupForFreeUpSpace(_ bundle: FreeUpSpaceBundle) {
+        coordinator.sidebarSelection = .all
+        let eligibleIDs = bundle.candidates
+            .map(\.package.id)
+            .filter { !coordinator.isHidden($0) }
+        coordinator.selectedForCleanup = Set(eligibleIDs)
+        coordinator.isCleanupMode = true
+    }
+
+    private func freeUpSpaceRow(_ scored: CleanupScore) -> some View {
+        HStack(spacing: 8) {
+            Text(scored.package.name)
+                .fontWeight(.semibold)
+                .lineLimit(1)
+                .help(scored.package.name)
+            ManagerBadge(manager: scored.package.manager)
+            Spacer(minLength: 8)
+            Text(byteLabel(scored.package.sizeBytes ?? 0))
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Measured payload \(byteLabel(scored.package.sizeBytes ?? 0))")
+        }
+        .padding(.vertical, 2)
     }
 
     private var selectedPackageID: Binding<Package.ID?> {

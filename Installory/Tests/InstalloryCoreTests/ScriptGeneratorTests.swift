@@ -867,3 +867,129 @@ struct ScriptGeneratorQualifierTests {
         #expect(script.contains("cursor --uninstall-extension python"))
     }
 }
+
+// MARK: - Phase 3: trash mode (reversible removal)
+
+@Suite("ScriptGenerator trash mode")
+struct ScriptGeneratorTrashTests {
+
+    private let generator = ScriptGenerator(denylist: Denylist(entries: []))
+
+    private func makePackage(
+        manager: PackageManager,
+        name: String,
+        qualifier: String? = nil,
+        installPath: String? = nil,
+        artifactPaths: [String]? = nil
+    ) -> Package {
+        Package(
+            id: "\(manager.rawValue):\(qualifier ?? ""):\(name)",
+            manager: manager,
+            qualifier: qualifier,
+            name: name,
+            version: "1.0.0",
+            installPath: installPath.map(URL.init(fileURLWithPath:)),
+            installedAt: nil,
+            installedAtConfidence: .low,
+            sizeBytes: nil,
+            isExplicit: true,
+            isReadOnly: false,
+            dependencies: [],
+            artifactPaths: artifactPaths,
+            lastSeen: Date()
+        )
+    }
+
+    private func activeLines(_ script: String, prefix: String) -> [String] {
+        script.components(separatedBy: "\n").filter { $0.hasPrefix(prefix) }
+    }
+
+    @Test("trash mode adds the header note")
+    func trashModeHeaderNote() {
+        let script = generator.generate(packages: [], strategy: .trash).scriptText
+        #expect(script.contains("Trash mode: file-backed packages are moved to ~/.Trash"))
+    }
+
+    @Test("trash mode moves a real skill directory instead of rm -rf")
+    func trashModeMovesRealSkillDirectory() {
+        let root = "/Users/x/.claude/skills"
+        let pkg = makePackage(
+            manager: .agentSkill,
+            name: "app-design",
+            qualifier: root,
+            installPath: "\(root)/app-design"
+        )
+        let script = generator.generate(packages: [pkg], strategy: .trash).scriptText
+
+        #expect(!script.contains("rm -rf"))
+        let mv = activeLines(script, prefix: "mv ")
+        #expect(mv.count == 1)
+        #expect(mv[0].contains("\(root)/app-design"))
+        #expect(mv[0].contains("$HOME/.Trash/installory-"))
+        #expect(mv[0].hasSuffix("/app-design"))
+    }
+
+    @Test("trash mode moves a broken skill symlink")
+    func trashModeMovesBrokenSkillSymlink() {
+        let root = "/Users/x/.config/opencode/skills"
+        let pkg = makePackage(
+            manager: .agentSkill,
+            name: "stale",
+            qualifier: root,
+            installPath: nil,
+            artifactPaths: ["/Users/x/skills-src/deprecated"]
+        )
+        let script = generator.generate(packages: [pkg], strategy: .trash).scriptText
+
+        #expect(!script.contains("rm "))
+        let mv = activeLines(script, prefix: "mv ")
+        #expect(mv.count == 1)
+        #expect(mv[0].contains("\(root)/stale"))
+    }
+
+    @Test("trash mode moves an editor extension instead of --uninstall-extension")
+    func trashModeMovesEditorExtension() {
+        let pkg = makePackage(
+            manager: .editorExtension,
+            name: "prettier-vscode",
+            qualifier: "/Users/x/.vscode/extensions",
+            installPath: "/Users/x/.vscode/extensions/prettier-vscode-1.2.3"
+        )
+        let script = generator.generate(packages: [pkg], strategy: .trash).scriptText
+
+        #expect(!script.contains("--uninstall-extension"))
+        let mv = activeLines(script, prefix: "mv ")
+        #expect(mv.count == 1)
+        #expect(mv[0].contains("/Users/x/.vscode/extensions/prettier-vscode-1.2.3"))
+        #expect(mv[0].hasSuffix("/prettier-vscode"))
+    }
+
+    @Test("trash mode still uninstalls package-manager packages")
+    func trashModeKeepsUninstallForBrew() {
+        let pkg = makePackage(manager: .brew, name: "jq")
+        let script = generator.generate(packages: [pkg], strategy: .trash).scriptText
+
+        #expect(script.contains("brew uninstall jq"))
+        #expect(!script.contains("$HOME/.Trash/installory-"))
+        #expect(!script.contains("mkdir -p"))
+    }
+
+    @Test("trash mode emits a single mkdir when a trash-eligible package is present")
+    func trashModeMkdirOnlyWhenNeeded() {
+        let skill = makePackage(
+            manager: .agentSkill,
+            name: "app-design",
+            qualifier: "/Users/x/.claude/skills",
+            installPath: "/Users/x/.claude/skills/app-design"
+        )
+        let brew = makePackage(manager: .brew, name: "jq")
+
+        let withSkill = generator.generate(packages: [skill, brew], strategy: .trash).scriptText
+        let mkdirs = activeLines(withSkill, prefix: "mkdir -p ")
+        #expect(mkdirs.count == 1)
+        #expect(mkdirs[0].hasPrefix("mkdir -p $HOME/.Trash/installory-"))
+
+        let withoutSkill = generator.generate(packages: [brew], strategy: .trash).scriptText
+        #expect(activeLines(withoutSkill, prefix: "mkdir -p ").isEmpty)
+    }
+}

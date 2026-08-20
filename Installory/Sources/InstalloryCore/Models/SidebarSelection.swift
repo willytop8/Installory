@@ -1,6 +1,7 @@
 import Foundation
 
 public enum SidebarSelection: Hashable, Sendable {
+    case dashboard
     case all
     case manager(PackageManager)
     case readOnly
@@ -9,12 +10,14 @@ public enum SidebarSelection: Hashable, Sendable {
     case diskUsage
     case aiInstalled
     case skills
+    case projects
     case snapshot(UUID)
 }
 
 extension SidebarSelection {
     public var userDefaultsKey: String {
         switch self {
+        case .dashboard: "dashboard"
         case .all: "all"
         case .manager(let m): "manager.\(m.rawValue)"
         case .readOnly: "readOnly"
@@ -23,12 +26,14 @@ extension SidebarSelection {
         case .diskUsage: "diskUsage"
         case .aiInstalled: "aiInstalled"
         case .skills: "skills"
+        case .projects: "projects"
         case .snapshot: ""  // snapshot selections are never persisted
         }
     }
 
     public init?(userDefaultsKey: String) {
         switch userDefaultsKey {
+        case "dashboard": self = .dashboard
         case "all": self = .all
         case "readOnly": self = .readOnly
         case "duplicates": self = .duplicates
@@ -36,6 +41,7 @@ extension SidebarSelection {
         case "diskUsage": self = .diskUsage
         case "aiInstalled": self = .aiInstalled
         case "skills": self = .skills
+        case "projects": self = .projects
         default:
             guard userDefaultsKey.hasPrefix("manager.") else { return nil }
             let raw = String(userDefaultsKey.dropFirst("manager.".count))
@@ -61,6 +67,9 @@ extension [Package] {
         switch selection {
         case nil, .all:
             break
+        case .dashboard:
+            // DashboardView reads coordinator aggregates directly; filteredPackages is not consulted.
+            return []
         case .manager(let m):
             result = result.filter { $0.manager == m }
         case .readOnly:
@@ -79,6 +88,9 @@ extension [Package] {
             return []
         case .skills:
             // SkillsView reads the agent-stack analysis aggregate; filteredPackages is not consulted.
+            return []
+        case .projects:
+            // ProjectsView reads the workspace aggregate; filteredPackages is not consulted.
             return []
         case .snapshot(_):
             // Snapshot content is rendered by SnapshotContentView, not this filter.

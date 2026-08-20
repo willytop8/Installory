@@ -123,6 +123,8 @@ struct InventoryDerivedComputationCounts: Equatable {
     fileprivate(set) var duplicatePathAnalysis = 0
     fileprivate(set) var agentStackAnalysis = 0
     fileprivate(set) var reverseDependencyIndex = 0
+    fileprivate(set) var removalSafety = 0
+    fileprivate(set) var freeUpSpaceBundle = 0
 }
 
 /// A single generation seam for whole-inventory derived state.
@@ -152,6 +154,8 @@ final class InventoryDerivedCache {
     )?
     private var cachedAgentStackAnalysis: (generation: Int, value: AgentStackAnalysis)?
     private var cachedReverseDependencyIndex: (generation: Int, value: ReverseDependencyIndex)?
+    private var cachedRemovalSafety: (generation: Int, value: [String: RemovalSafetyVerdict])?
+    private var cachedFreeUpSpace: (generation: Int, limit: Int, value: FreeUpSpaceBundle)?
 
     private(set) var computationCounts = InventoryDerivedComputationCounts()
 
@@ -166,6 +170,8 @@ final class InventoryDerivedCache {
         cachedDuplicateAnalysis = nil
         cachedAgentStackAnalysis = nil
         cachedReverseDependencyIndex = nil
+        cachedRemovalSafety = nil
+        cachedFreeUpSpace = nil
     }
 
     func invalidateProvenance() {
@@ -258,6 +264,44 @@ final class InventoryDerivedCache {
         computationCounts.reverseDependencyIndex += 1
         let value = ReverseDependencyIndex(packages: packages)
         cachedReverseDependencyIndex = (inventoryGeneration, value)
+        return value
+    }
+
+    func removalSafety(for packages: [Package]) -> [String: RemovalSafetyVerdict] {
+        if let cachedRemovalSafety, cachedRemovalSafety.generation == inventoryGeneration {
+            return cachedRemovalSafety.value
+        }
+        computationCounts.removalSafety += 1
+        let reverseIndex = reverseDependencyIndex(for: packages)
+        let orphanedIDs = Set(orphanedPackages(for: packages).map(\.id))
+        var value: [String: RemovalSafetyVerdict] = [:]
+        value.reserveCapacity(packages.count)
+        for package in packages {
+            value[package.id] = RemovalSafetyAnalysis.verdict(
+                for: package,
+                reverseDependencyIndex: reverseIndex,
+                orphanedIDs: orphanedIDs
+            )
+        }
+        cachedRemovalSafety = (inventoryGeneration, value)
+        return value
+    }
+
+    func freeUpSpaceBundle(for packages: [Package], limit: Int = 5) -> FreeUpSpaceBundle {
+        if let cachedFreeUpSpace,
+           cachedFreeUpSpace.generation == inventoryGeneration,
+           cachedFreeUpSpace.limit == limit {
+            return cachedFreeUpSpace.value
+        }
+        computationCounts.freeUpSpaceBundle += 1
+        let reverseIndex = reverseDependencyIndex(for: packages)
+        let value = FreeUpSpace.bundle(
+            packages: packages,
+            now: Date(),
+            reverseDependencyIndex: reverseIndex,
+            limit: limit
+        )
+        cachedFreeUpSpace = (inventoryGeneration, limit, value)
         return value
     }
 

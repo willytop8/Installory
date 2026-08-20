@@ -44,6 +44,45 @@ public struct DescriptionStore: Sendable {
         descriptions[normalizedKey(manager: manager, name: name)]
     }
 
+    /// Returns the corpus description when available, otherwise a per-manager
+    /// plain-English fallback so unknown packages never surface a bare
+    /// "no description" state. The fallback describes what the package *is* by
+    /// its manager rather than guessing what it does.
+    public func descriptionOrFallback(for manager: PackageManager, name: String) -> String {
+        description(for: manager, name: name) ?? Self.fallback(for: manager)
+    }
+
+    /// A concise, human-friendly one-liner for each manager, used when the
+    /// corpus has no entry for a specific package.
+    public static func fallback(for manager: PackageManager) -> String {
+        switch manager {
+        case .brew:
+            return "A Homebrew command-line tool."
+        case .brewCask:
+            return "A Homebrew app installed as a cask."
+        case .pip:
+            return "A Python package installed with pip."
+        case .pipx:
+            return "A Python command-line tool installed with pipx."
+        case .uv:
+            return "A Python tool installed with uv."
+        case .npm:
+            return "A Node.js package installed with npm."
+        case .cargo:
+            return "A Rust crate installed with Cargo."
+        case .gem:
+            return "A Ruby gem."
+        case .mas:
+            return "An app installed from the Mac App Store."
+        case .agentSkill:
+            return "An AI agent skill — a folder of instructions and scripts that teaches an agent a new capability."
+        case .agentCli:
+            return "An AI agent command-line tool, such as Claude Code, Codex, opencode, or Cursor."
+        case .editorExtension:
+            return "An editor extension for VS Code or Cursor."
+        }
+    }
+
     // MARK: - Private
 
     private func normalizedKey(manager: PackageManager, name: String) -> String {

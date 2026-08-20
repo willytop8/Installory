@@ -59,9 +59,13 @@ struct PackageDetailView: View {
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text("No description available")
-                        .foregroundStyle(.tertiary)
-                        .font(.callout)
+                    Text(coordinator.descriptionStore.descriptionOrFallback(
+                        for: package.manager,
+                        name: package.name
+                    ))
+                    .foregroundStyle(.tertiary)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 0)
@@ -256,6 +260,8 @@ struct PackageDetailView: View {
             Text("Removal Script")
                 .font(.headline)
 
+            removalSafetyVerdictBanner
+
             if package.isReadOnly {
                 removalMessage(
                     icon: "lock.fill",
@@ -269,6 +275,54 @@ struct PackageDetailView: View {
             } else if let cmd = ScriptGenerator().removalCommand(for: package) {
                 removableContent(cmd)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var removalSafetyVerdictBanner: some View {
+        let verdict = coordinator.removalSafety(for: package)
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: verdictSymbol(verdict.safety))
+                .foregroundStyle(verdictTint(verdict.safety))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verdictLabel(verdict.safety))
+                    .font(.callout.weight(.semibold))
+                if !verdict.reasons.isEmpty {
+                    Text(verdict.reasons.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(verdictTint(verdict.safety).opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func verdictSymbol(_ safety: RemovalSafety) -> String {
+        switch safety {
+        case .safe:       "checkmark.shield"
+        case .caution:    "exclamationmark.shield"
+        case .leaveAlone: "xmark.shield"
+        }
+    }
+
+    private func verdictTint(_ safety: RemovalSafety) -> Color {
+        switch safety {
+        case .safe:       .green
+        case .caution:    .orange
+        case .leaveAlone: .red
+        }
+    }
+
+    private func verdictLabel(_ safety: RemovalSafety) -> String {
+        switch safety {
+        case .safe:       "Safe to remove"
+        case .caution:    "Remove with care"
+        case .leaveAlone: "Leave this installed"
         }
     }
 

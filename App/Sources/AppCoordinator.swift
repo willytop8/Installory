@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 struct CleanupResult: Identifiable {
     let id = UUID()
     let script: GeneratedScript
+    let restoreScript: GeneratedReinstallScript
     let snapshotTaken: Bool
     let snapshotFailed: Bool
 }
@@ -48,6 +49,7 @@ private enum DefaultsKey {
     static let tableSortOrder        = "app.installory.ui.tableSortOrder"
     static let sidebarSelection      = "app.installory.ui.sidebarSelection"
     static let snapshotBeforeRemoval = "app.installory.settings.snapshotBeforeRemoval"
+    static let removalStrategy       = "app.installory.settings.removalStrategy"
     static let scanOnLaunch          = "app.installory.settings.scanOnLaunch"
     static let firstScanTaken        = "app.installory.firstScanSnapshotTaken"
     static let migrationCompleted    = "app.installory.migration.fromBackshelf"
@@ -78,7 +80,7 @@ final class AppCoordinator {
     // MARK: - UI state
 
     var searchQuery: String = ""
-    var sidebarSelection: SidebarSelection? = .all
+    var sidebarSelection: SidebarSelection? = .dashboard
     var sortOrder: PackageSortOrder = .recentlyInstalled
     var inventoryViewMode: InventoryViewMode = .list
     var tableSortOrder: [PackageTableSortDescriptor] = PackageTableSortDescriptor.defaultOrder
@@ -150,6 +152,7 @@ final class AppCoordinator {
     // MARK: - Settings
 
     var snapshotBeforeRemoval: SnapshotPreference = .ask
+    var removalStrategy: RemovalStrategy = .uninstall
     var scanOnLaunch: Bool = true
 
     /// When true, Installory reads shell history and Claude Code session logs
@@ -196,6 +199,10 @@ final class AppCoordinator {
 
     /// Per-package user annotations (hidden, pinned, note) keyed by package ID.
     private(set) var packageUserStates: [String: PackageUserState] = [:]
+
+    /// Development projects discovered under the user's granted project
+    /// directories. In-memory only — recomputed on each scan, never persisted.
+    private(set) var projectWorkspaces: [ProjectWorkspace] = []
 
     /// Minimum interval between automatic scans triggered by `autoScanIfNeeded`.
     /// Manual `refresh()` ignores this — the user pressing ⌘R always rescans.
@@ -365,7 +372,7 @@ final class AppCoordinator {
         switch sidebarSelection {
         case nil, .all, .manager, .readOnly:
             true
-        case .duplicates, .orphans, .diskUsage, .aiInstalled, .skills, .snapshot:
+        case .dashboard, .duplicates, .orphans, .diskUsage, .aiInstalled, .skills, .projects, .snapshot:
             false
         }
     }
@@ -413,6 +420,17 @@ final class AppCoordinator {
         inventoryDerivedCache.reverseDependencyIndex(for: packages)
     }
 
+    /// Per-package removal-safety verdicts, keyed by package ID.
+    var removalSafetyByPackageID: [String: RemovalSafetyVerdict] {
+        inventoryDerivedCache.removalSafety(for: packages)
+    }
+
+    /// The removal-safety verdict for a single package.
+    func removalSafety(for package: Package) -> RemovalSafetyVerdict {
+        removalSafetyByPackageID[package.id]
+            ?? RemovalSafetyVerdict(safety: .caution, reasons: [])
+    }
+
     /// Packages whose provenance evidence indicates installation during an AI assistant session.
     /// Empty when provenance collection is off or no evidence is attributed to an AI session.
     var aiInstalledPackages: [Package] {
@@ -424,6 +442,24 @@ final class AppCoordinator {
 
     var diskUsageSummary: DiskUsageSummary {
         inventoryDerivedCache.diskUsageSummary(for: packages)
+    }
+
+    /// Ranked safe-to-remove candidates plus their combined reclaimable payload.
+    var freeUpSpaceBundle: FreeUpSpaceBundle {
+        inventoryDerivedCache.freeUpSpaceBundle(for: packages)
+    }
+
+    /// Discovered project workspaces, oldest-touched first (unlnown dates last).
+    var sortedProjectWorkspaces: [ProjectWorkspace] {
+        ProjectWorkspaceAnalysis.sortedByStaleness(projectWorkspaces)
+    }
+
+    /// Workspaces whose last modification predates the staleness threshold.
+    var staleProjectWorkspaces: [ProjectWorkspace] {
+        let now = Date()
+        return sortedProjectWorkspaces.filter {
+            ProjectWorkspaceAnalysis.isStale($0, now: now)
+        }
     }
 
     func duplicateAnalysis(pathComponents: [String]) -> DuplicateAnalysisState {
@@ -453,7 +489,7 @@ final class AppCoordinator {
             candidates = orphanedPackages
         case .skills:
             candidates = packages.filter { $0.manager == .agentSkill }
-        case .readOnly, .diskUsage, .aiInstalled, .snapshot:
+        case .dashboard, .readOnly, .diskUsage, .aiInstalled, .projects, .snapshot:
             candidates = []
         }
         return candidates
@@ -541,7 +577,7 @@ final class AppCoordinator {
         case .skills:
             remainsVisible = matchesSearch
                 && packages.contains { $0.id == selectedPackage.id && $0.manager == .agentSkill }
-        case .snapshot:
+        case .dashboard, .projects, .snapshot:
             remainsVisible = false
         }
 
@@ -1001,6 +1037,10 @@ final class AppCoordinator {
             snapshotBeforeRemoval.rawValue,
             forKey: DefaultsKey.snapshotBeforeRemoval
         )
+        UserDefaults.standard.set(
+            removalStrategy.rawValue,
+            forKey: DefaultsKey.removalStrategy
+        )
         UserDefaults.standard.set(scanOnLaunch, forKey: DefaultsKey.scanOnLaunch)
         UserDefaults.standard.set(provenanceCollection, forKey: DefaultsKey.provenanceCollection)
     }
@@ -1253,9 +1293,11 @@ final class AppCoordinator {
         }
 
         let generator = ScriptGenerator()
-        let script = generator.generate(packages: packagesToRemove, snapshot: snapshotCtx)
+        let script = generator.generate(packages: packagesToRemove, snapshot: snapshotCtx, strategy: removalStrategy)
+        let restoreScript = ReinstallScriptGenerator().generate(removing: packagesToRemove)
         cleanupResult = CleanupResult(
             script: script,
+            restoreScript: restoreScript,
             snapshotTaken: snapshotCtx != nil,
             snapshotFailed: snapshotFailed
         )
@@ -1365,6 +1407,10 @@ final class AppCoordinator {
         if let raw = UserDefaults.standard.string(forKey: DefaultsKey.snapshotBeforeRemoval),
            let pref = SnapshotPreference(rawValue: raw) {
             snapshotBeforeRemoval = pref
+        }
+        if let raw = UserDefaults.standard.string(forKey: DefaultsKey.removalStrategy),
+           let strategy = RemovalStrategy(rawValue: raw) {
+            removalStrategy = strategy
         }
         // Bool defaults are `false` in UserDefaults when not yet set.
         // Guard with object(forKey:) for settings whose product default differs
@@ -1544,6 +1590,23 @@ final class AppCoordinator {
                 }.value
             } catch {
                 storageWarning = "Couldn't save scan history to the local cache."
+            }
+        }
+
+        // MARK: Project workspace discovery (granted project directories)
+        //
+        // Runs on a background executor using the same security-scoped URLs the
+        // main scan loop started above (accessedURLs is still in scope here).
+        // Read-only; results are in-memory only and are never persisted.
+        if !accessedURLs.isEmpty {
+            let scanner = ProjectWorkspaceScanner(grantedURLs: accessedURLs)
+            do {
+                let workspaces = try await Task.detached(priority: .utility) {
+                    try await scanner.scan()
+                }.value
+                projectWorkspaces = workspaces
+            } catch {
+                projectWorkspaces = []
             }
         }
 

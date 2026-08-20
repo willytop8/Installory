@@ -274,6 +274,7 @@ private struct PackageRowView: View {
                         .fontWeight(.semibold)
                         .lineLimit(1)
                     ManagerBadge(manager: package.manager)
+                    RemovalSafetyBadge(verdict: coordinator.removalSafety(for: package))
                     if coordinator.isPinned(package.id) {
                         Image(systemName: "pin.fill")
                             .font(.caption)

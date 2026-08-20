@@ -20,6 +20,57 @@ struct CleanupScriptSheetView: View {
             if !result.script.warnedDenylisted.isEmpty {
                 denylistWarning
             }
+            undoSection
+        }
+    }
+
+    /// Offers a way back: the restore script for exactly the packages being
+    /// removed. The durable restore point is the `.preCleanup` snapshot (reported
+    /// above); this script is the immediate "put it back" companion.
+    @ViewBuilder
+    private var undoSection: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("This reinstalls the packages this cleanup script removes. It's the quick way to undo if you change your mind.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ScrollView([.vertical, .horizontal]) {
+                    Text(result.restoreScript.scriptText)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                }
+                .frame(maxHeight: 180)
+                .background(Color.secondary.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                HStack {
+                    Button("Copy Restore Script") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(result.restoreScript.scriptText, forType: .string)
+                    }
+                    Button("Save Restore Script\u{2026}") {
+                        saveRestoreScript()
+                    }
+                }
+            }
+            .padding(.top, 4)
+        } label: {
+            Label("Undo this removal (restore script)", systemImage: "arrow.uturn.backward.circle")
+                .font(.callout)
+        }
+    }
+
+    private func saveRestoreScript() {
+        let panel = NSSavePanel()
+        panel.title = "Save Restore Script"
+        panel.nameFieldStringValue = "installory-restore.sh"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        defer { url.stopAccessingSecurityScopedResource() }
+        Task {
+            try? await ScriptFileWriter.write(result.restoreScript.scriptText, to: url)
         }
     }
 
@@ -96,7 +147,12 @@ struct CleanupScriptSheetView: View {
     )
     let script = ScriptGenerator().generate(packages: [sample])
     return CleanupScriptSheetView(
-        result: CleanupResult(script: script, snapshotTaken: true, snapshotFailed: false)
+        result: CleanupResult(
+            script: script,
+            restoreScript: ReinstallScriptGenerator().generate(removing: [sample]),
+            snapshotTaken: true,
+            snapshotFailed: false
+        )
     )
 }
 
@@ -119,7 +175,12 @@ struct CleanupScriptSheetView: View {
     )
     let script = ScriptGenerator().generate(packages: [sample])
     return CleanupScriptSheetView(
-        result: CleanupResult(script: script, snapshotTaken: false, snapshotFailed: false)
+        result: CleanupResult(
+            script: script,
+            restoreScript: ReinstallScriptGenerator().generate(removing: [sample]),
+            snapshotTaken: false,
+            snapshotFailed: false
+        )
     )
 }
 
@@ -142,6 +203,11 @@ struct CleanupScriptSheetView: View {
     )
     let script = ScriptGenerator().generate(packages: [sample])
     return CleanupScriptSheetView(
-        result: CleanupResult(script: script, snapshotTaken: false, snapshotFailed: true)
+        result: CleanupResult(
+            script: script,
+            restoreScript: ReinstallScriptGenerator().generate(removing: [sample]),
+            snapshotTaken: false,
+            snapshotFailed: true
+        )
     )
 }

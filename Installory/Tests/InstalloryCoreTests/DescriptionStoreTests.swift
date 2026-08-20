@@ -150,4 +150,31 @@ final class DescriptionStoreTests: XCTestCase {
         let url = URL(fileURLWithPath: "/nonexistent/path/descriptions.json")
         XCTAssertThrowsError(try DescriptionStore(contentsOf: url))
     }
+
+    // MARK: - Fallback descriptions
+
+    func testDescriptionOrFallbackReturnsCorpusEntryWhenPresent() {
+        let store = DescriptionStore(raw: ["brew:ffmpeg": "Audio and video converter"])
+        XCTAssertEqual(store.descriptionOrFallback(for: .brew, name: "ffmpeg"), "Audio and video converter")
+    }
+
+    func testDescriptionOrFallbackReturnsManagerFallbackWhenMissing() {
+        let store = DescriptionStore()
+        XCTAssertEqual(
+            store.descriptionOrFallback(for: .agentSkill, name: "some-skill"),
+            "An AI agent skill — a folder of instructions and scripts that teaches an agent a new capability."
+        )
+        XCTAssertEqual(store.descriptionOrFallback(for: .brew, name: "unknown-thing"), "A Homebrew command-line tool.")
+    }
+
+    func testFallbackCoversEveryManagerWithoutEmptyString() {
+        let managers: [PackageManager] = [
+            .brew, .brewCask, .pip, .pipx, .uv, .npm, .cargo, .gem, .mas,
+            .agentSkill, .agentCli, .editorExtension,
+        ]
+        for manager in managers {
+            let text = DescriptionStore.fallback(for: manager)
+            XCTAssertFalse(text.isEmpty, "Missing fallback for \(manager.rawValue)")
+        }
+    }
 }

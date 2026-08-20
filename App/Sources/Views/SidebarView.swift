@@ -8,6 +8,7 @@ struct SidebarView: View {
         @Bindable var coordinator = coordinator
 
         List(selection: $coordinator.sidebarSelection) {
+            homeSection
             packageManagerSection
             scanCoverageSection
             directoryAccessSection
@@ -17,6 +18,21 @@ struct SidebarView: View {
         .navigationTitle("Installory")
         .safeAreaInset(edge: .bottom) {
             bottomBar
+        }
+    }
+
+    // MARK: - Home section
+
+    private var homeSection: some View {
+        Section {
+            NavigationLink(value: SidebarSelection.dashboard) {
+                Label("Home", systemImage: "house")
+            }
+            if !coordinator.projectWorkspaces.isEmpty {
+                NavigationLink(value: SidebarSelection.projects) {
+                    Label("Projects (\(coordinator.projectWorkspaces.count))", systemImage: "folder")
+                }
+            }
         }
     }
 

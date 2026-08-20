@@ -44,6 +44,25 @@ public struct ReinstallScriptGenerator: Sendable {
         return GeneratedReinstallScript(scriptText: out.joined(separator: "\n") + "\n")
     }
 
+    /// Generates a restore script for a set of packages that are about to be
+    /// removed (or were just removed). Adapts live `Package` rows into the
+    /// `MissingPackage` shape used by `generate(missing:)`, so the same fidelity
+    /// rules apply. This is the "how to put it back" companion to a cleanup script.
+    public func generate(removing packages: [Package]) -> GeneratedReinstallScript {
+        let missing = packages.map { package in
+            MissingPackage(
+                manager: package.manager,
+                package: SnapshotPackage(
+                    name: package.name,
+                    version: package.version,
+                    qualifier: package.qualifier,
+                    isExplicit: package.isExplicit
+                )
+            )
+        }
+        return generate(missing: missing)
+    }
+
     // MARK: - Header
 
     private func appendHeader(to out: inout [String]) {
