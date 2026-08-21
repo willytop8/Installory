@@ -1,28 +1,44 @@
 # Installory
 
-**See what is installed on your Mac—and understand how it got there.**
+**See what is installed on your Mac—and clean it up without the fear.**
 
 [Mac App Store](https://apps.apple.com/us/app/installory/id6772879429?mt=12) ·
 [installory.app](https://installory.app/) · Free · MIT · macOS 14+
 
-Installory is a native macOS inventory for Homebrew, pip, pipx, persistent uv
-tools, npm, Cargo, RubyGems, and receipt-bearing Mac App Store apps. It combines
-on-disk package metadata into one explained view without modifying the system or
-contacting a server.
+Installory is a native macOS inventory for Homebrew formulae and casks, pip,
+pipx, persistent uv tools, npm, Cargo, RubyGems, receipt-bearing Mac App Store
+apps, and your AI agent stack — Claude Code and opencode skills, agent CLIs, and
+VS Code & Cursor extensions. It combines on-disk metadata into one explained,
+searchable view without modifying the system or contacting a server.
 
 ![Installory inventory](files/screenshots/main-window.png)
 
 ## Capabilities
 
+- **Home dashboard** of what matters: packages tracked, measured payload, safe
+  to free up, AI installs this week, review candidates, duplicates, and broken
+  skills.
+- **Removal-safety verdicts** (safe / caution / leave-alone) per package, driven
+  by reverse-dependency analysis, orphan detection, read-only and denylist
+  status.
+- **Restore points and Move-to-Trash:** bulk cleanup captures a snapshot first
+  and offers a one-tap restore script; file-backed items can be moved to Trash
+  instead of removed.
+- **Free-up-space bundle** surfacing the highest-value, safe-to-remove packages
+  with their reclaimable bytes.
+- **Project workspaces:** stale local projects detected from granted folders,
+  sized and sorted by last activity — never modified.
 - Unified List and sortable Table views with search by name, scope, or path.
-- Package descriptions, install timing, dependencies, and bounded payload sizes
-  when that metadata is available.
+- Plain-English descriptions for every package, with per-manager fallbacks, plus
+  install timing, dependencies, reverse-dependency tree, and bounded payload
+  sizes when available.
 - Cross-manager duplicate analysis, review candidates, cleanup scoring, and a
   measured-payload Disk Usage view.
-- Optional local provenance from matching shell history and Claude Code session
-  records, enabled explicitly in Settings → Privacy.
-- Snapshots, change timelines, and CSV, Markdown, JSON, and environment-report
-  exports.
+- Optional local provenance from matching shell history and Claude Code, Codex,
+  and opencode session records, enabled explicitly in Settings → Privacy.
+- Hide, pin, and annotate packages to keep your inventory organized.
+- Snapshots, baseline compare with change detection and reinstall scripts, and
+  CSV, Markdown, JSON, and environment-report exports.
 - Exact single or bulk cleanup scripts for the user to review and run manually.
   Bulk cleanup snapshots first; single-package generation follows the selected
   Always, Ask, or Never snapshot preference.
@@ -98,7 +114,7 @@ are deliberate gaps.
 
 ## Release
 
-The current 1.4.0 submission notes and archive checklist are in
+The current 1.5.0 submission notes and archive checklist are in
 [RELEASE.md](RELEASE.md). Historical audits and implementation plans live in Git
 history rather than the working tree.
 

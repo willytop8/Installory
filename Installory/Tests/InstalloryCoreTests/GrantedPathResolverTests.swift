@@ -7,15 +7,15 @@ struct GrantedPathResolverTests {
     func ancestorCoverage() {
         #expect(
             GrantedPathResolver.deepestCoveringPath(
-                for: "/Users/willy/projects/Installory",
-                among: ["/Users/willy/projects/Installory"]
-            ) == "/Users/willy/projects/Installory"
+                for: "/Users/tester/projects/Installory",
+                among: ["/Users/tester/projects/Installory"]
+            ) == "/Users/tester/projects/Installory"
         )
         #expect(
             GrantedPathResolver.deepestCoveringPath(
-                for: "/Users/willy/projects/Installory",
-                among: ["/Users/willy"]
-            ) == "/Users/willy"
+                for: "/Users/tester/projects/Installory",
+                among: ["/Users/tester"]
+            ) == "/Users/tester"
         )
     }
 
@@ -23,24 +23,24 @@ struct GrantedPathResolverTests {
     func rejectsChildAndSiblingPrefix() {
         #expect(
             GrantedPathResolver.deepestCoveringPath(
-                for: "/Users/willy",
-                among: ["/Users/willy/.claude", "/Users/willy2"]
+                for: "/Users/tester",
+                among: ["/Users/tester/.claude", "/Users/tester2"]
             ) == nil
         )
     }
 
     @Test("deepest covering grant wins independent of input order")
     func deepestGrantWinsDeterministically() {
-        let grants = ["/Users", "/", "/Users/willy/projects", "/Users/willy"]
-        let target = "/Users/willy/projects/Installory"
+        let grants = ["/Users", "/", "/Users/tester/projects", "/Users/tester"]
+        let target = "/Users/tester/projects/Installory"
 
         #expect(
             GrantedPathResolver.deepestCoveringPath(for: target, among: grants)
-                == "/Users/willy/projects"
+                == "/Users/tester/projects"
         )
         #expect(
             GrantedPathResolver.deepestCoveringPath(for: target, among: Array(grants.reversed()))
-                == "/Users/willy/projects"
+                == "/Users/tester/projects"
         )
     }
 
@@ -48,14 +48,14 @@ struct GrantedPathResolverTests {
     func standardizesPaths() {
         #expect(
             GrantedPathResolver.deepestCoveringPath(
-                for: "/Users/willy/projects/../projects/Installory/",
-                among: ["/Users/willy/projects/./"]
-            ) == "/Users/willy/projects/./"
+                for: "/Users/tester/projects/../projects/Installory/",
+                among: ["/Users/tester/projects/./"]
+            ) == "/Users/tester/projects/./"
         )
         #expect(
             GrantedPathResolver.referToSameLocation(
-                "/Users/willy/projects/Installory/",
-                "/Users/willy/projects/./Installory"
+                "/Users/tester/projects/Installory/",
+                "/Users/tester/projects/./Installory"
             )
         )
     }

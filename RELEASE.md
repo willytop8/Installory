@@ -1,23 +1,26 @@
-# Installory 1.4.0 release
+# Installory 1.5.0 release
 
-Version `1.4.0` (build `10`) passed local pre-submission QA on 2026-07-15. Core,
-app, description-tool, invariant, Release-build, archive-inspection, and
-hands-on UI gates are green. Later repository changes affect tests, CI, and
-documentation only; they do not change the submitted app binary.
+Version `1.5.0` (build `11`) is the current release candidate. Core, app,
+description-tool, invariant, Release-build, archive-inspection, and hands-on UI
+gates are green.
 
 Do not upload a local unsigned or ad-hoc QA archive. Create a fresh distribution
 archive from the merged, clean `main` branch.
 
 ## What’s New
 
-Installory 1.4 makes your developer-tool inventory easier to explore and safer to review:
+Installory now maps your whole AI-agent setup and helps you declutter without the fear:
 
-• Scan persistent tools installed with uv, alongside Homebrew, pip, pipx, npm, Cargo, RubyGems, and Mac App Store apps.
-• Switch between List and sortable Table views, and search Duplicates, Review Candidates, and AI Installed results by name, scope, or path.
-• See measured package payload by manager and the largest measured packages in Disk Usage.
-• Select multiple items in Duplicates or Review Candidates and generate one reviewable cleanup script.
-• Export your inventory as JSON, in addition to CSV and Markdown.
-• Improved scan reliability, snapshots, package matching, secret redaction, accessibility, and generated-script safety.
+• New Home dashboard: packages tracked, measured payload, safe to free up, AI installs this week, review candidates, duplicates, and broken skills.
+• “Safe to remove” verdicts on every package, driven by reverse-dependency and orphan analysis.
+• Restore points before bulk cleanup, plus a one-tap restore script.
+• Move-to-Trash cleanup for file-backed items, alongside real uninstallers.
+• Free-up-space bundle surfacing the highest-value safe packages and reclaimable bytes.
+• Stale project workspaces detected from granted folders, sized and sorted by last activity.
+• Inventory agent skills, agent CLIs (Claude Code, Codex, opencode, Cursor), and VS Code & Cursor extensions.
+• See which packages you installed and which your AI assistant installed, from Claude Code, Codex, and opencode session records.
+• Reverse-dependency tree, hide/pin/annotate, and baseline compare with change detection and reinstall scripts.
+• Plain-English descriptions for every package, including agent skills, CLIs, and editor extensions.
 
 Installory remains read-only and offline. It never removes software or runs generated commands.
 
@@ -27,17 +30,25 @@ Installory is a fully offline, read-only inventory app. It scans only folders
 explicitly granted by the user through read-only security-scoped bookmarks. It
 never executes generated cleanup or reinstall scripts. The user-selected
 read-write entitlement is used only when the user explicitly chooses an export
-or generated-script destination through a Save panel. Provenance collection is
-disabled by default, requires a separate folder grant, and remains entirely
-local. Reviewers can choose “Explore with Sample Data” during onboarding to
-evaluate the app without granting filesystem access.
+or generated-script destination through a Save panel.
+
+Provenance collection is off by default and requires a separate folder grant.
+When enabled, it reads shell history and local agent-session logs (Claude Code,
+Codex, and opencode) on-device, and every record is redacted before it is
+stored. No data is transmitted; the app contains no networking code.
+
+Project-workspace scanning similarly walks only folders the user has explicitly
+granted read-only access to and never modifies them.
+
+Reviewers can choose “Explore with Sample Data” during onboarding to evaluate
+the app without granting filesystem access.
 
 ## Release checklist
 
 1. Refresh the description corpus from fresh API responses using its
    [runbook](scripts/generate-descriptions/README.md). If it changes, rerun every
    verification gate.
-2. Confirm `project.yml` contains version `1.4.0`, build `10`, bundle identifier
+2. Confirm `project.yml` contains version `1.5.0`, build `11`, bundle identifier
    `app.installory.mac`, and `ITSAppUsesNonExemptEncryption: false`; regenerate
    the Xcode project.
 3. Run the Core and app commands in [README.md](README.md), the description-tool
@@ -51,13 +62,12 @@ evaluate the app without granting filesystem access.
    `descriptions.json` in Organizer.
 6. Run Validate App, then choose Distribute App → App Store Connect → Upload.
    Resolve any signing or App Store Connect validation finding before upload.
-7. In App Store Connect, create or select macOS version 1.4.0, attach build 10,
+7. In App Store Connect, create or select macOS version 1.5.0, attach build 11,
    paste the text above, keep App Privacy at **Data Not Collected**, and answer
    export compliance consistently with the Info property-list declaration.
 8. Submit for review and choose the intended manual or automatic release mode.
 
-Build numbers cannot be reused. Build 10 was uploaded before the test, CI, and
-documentation cleanup; those repository-only changes do not require build 11.
+Build numbers cannot be reused.
 
 ## Known advisory
 
